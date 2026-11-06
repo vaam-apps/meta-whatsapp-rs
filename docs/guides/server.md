@@ -1144,6 +1144,86 @@ analytics switches (template insights, button click tracking). Call
 analytics wait for the calling routes (M5e); a group's analytics are the
 groups' (above).
 
+## Partner APIs
+
+What a Tech Provider or Solution Partner does beyond onboarding (roadmap
+M5j, design D250 to D257; Meta's `solution-providers/partner-led-business-verification`,
+`solution-providers/multi-partner-solutions`,
+`solution-providers/support/adding-waba-to-mps`,
+`reference/user/assigned-whatsapp-business-accounts-api` and
+`pricing/change-billing-currency`). Two kinds of caller:
+
+- **The operator** (an admin key) acts with the deployment's own partner
+  business and system token, the pair the pool of pre-verified numbers
+  uses (`WA_PARTNER_BUSINESS_ID` and `WA_SYSTEM_TOKEN`, or a Solution
+  Partner's); without them every route answers `409 signup_not_configured`.
+- **A tenant** (the scope `partners`, **pending the owner's confirmation
+  before the first release**, which no other scope grants) acts on a WABA
+  of its own, with that WABA's token.
+
+**Legal and irreversible acts.** Seven calls state something about a
+business, cannot be taken back or move a business's assets. Each is taken
+only when the deployment sets `WA_SERVER_LEGAL_ACTS=on` (off by default):
+off, it is `403 feature_not_available` and nothing is asked of Meta; on, it
+is audited, and nothing in the service takes one by itself or as part of
+another route. The evidence, page by page, is D250.
+
+| Act | Why | Who |
+| --- | --- | --- |
+| a business verification submission | a statement of a customer business's legal identity, with its documents; three submissions per customer | operator |
+| accepting a solution | Meta: "solutions cannot be declined once they have been accepted" | operator |
+| rejecting a solution | the reject page: "permanent and cannot be undone" | operator |
+| accepting a deactivation request | the solution becomes `DEACTIVATED` and onboards no client | operator |
+| a solution migration intent | asks a client to move its WABA to another partner; Meta accepts for the client after 90 days | tenant |
+| a billing migration's start | clones the WABA under a new currency or payment method | tenant |
+| a billing migration's resumption | switches the numbers' billing; the old WABA can no longer send | tenant |
+
+Not legal acts, audited all the same: creating a solution (it binds nobody
+until the partner accepts), asking for a deactivation, rejecting a
+deactivation request.
+
+### The operator's routes
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/admin/partners/business-verifications` | submit a customer business (`client_business_id`) with one to three `documents` (`file_name`, `content_base64`): PDF, JPEG or PNG, 5 MiB each, the content of the type the name says, all checked before any request (bodies up to 21 MiB). `201` with `verification_attempts` and `attempts_left`; never repeated after a timeout; the outcome arrives as an `account_update` event |
+| `GET /v1/admin/partners/business-verifications?client_business_id=&cursor=` | the submissions made, with Meta's `rejection_reasons` |
+| `POST`, `GET /v1/admin/partners/solutions` | create (`name`, `partner_app_id`, `owner_permissions`, `partner_permissions`) `201`; list (`role`, `limit`, `cursor`) |
+| `GET /v1/admin/partners/solutions/{id}`, `…/partners` | a solution with its owner, permissions and partners (read it before accepting); its partners |
+| `GET /v1/admin/partners/client-businesses` | the businesses onboarded through the deployment's app |
+| `POST …/solutions/{id}/accept`, `…/reject` | legal acts, `204` |
+| `POST …/solutions/{id}/deactivation-request`, `…/deactivation-request/accept`, `…/deactivation-request/reject` | ask, accept (a legal act), reject; `204` |
+| `GET /v1/admin/partners/users/{user_id}/wabas` | the WABAs assigned to a system user (`id`, `name`) |
+
+**The solution token is never served**: it is a bearer credential for a
+client's assets, so no route, answer, log or audit event carries it
+(hosted Embedded Signup, above, is where the service uses a client's
+business token through a solution, and it stores it in the vault). The
+operator's changes are admin routes: no `Idempotency-Key`, and a retry
+after a `504` should read first (the library never replays them).
+
+### A tenant's WABA
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/wabas/{waba_id}/business-verification` | the WABA's `business_verification_status` as Meta says it, and `verified` |
+| `POST /v1/wabas/{waba_id}/solution-migration-intents` | `{"solution_id"}`: `201` with the intent's `id`; an `Idempotency-Key`; a legal act |
+| `GET …/solution-migration-intents/{intent_id}` | the intent, read with the WABA's token and answered only if it names this WABA (as its `destination_waba` or its `waba`); another's, or one that names none, is `404` |
+| `POST /v1/wabas/{waba_id}/billing-migrations` | `{"currency", "extended_credit_id"?}`: `201`; an `Idempotency-Key`; a legal act. The new WABA needs a payment method before it is resumed (a credit card cannot be attached by the API) |
+| `GET …/billing-migrations/{migration_id}` | the migration's `status` (`READY_TO_COMPLETE` is the cue to resume) and the new WABA |
+| `POST …/billing-migrations/{migration_id}/resume` | complete it; a legal act; not repeated after a timeout |
+
+**A migration is its WABA's, or it does not exist** (D256): the service
+remembers, under the namespace `wa.server.billing_migration`, which tenant
+and WABA started each migration, and reads that record before it asks Meta
+anything, so another WABA's, another tenant's and an unknown id are `404`
+with Meta not asked. A migration started outside the service (in Meta
+Business Suite) is not readable through it.
+
+Not offered: moving a phone number between partners (Meta's page: not
+supported on the new account model), a WABA's own solutions, and the
+solution token.
+
 ## Conversation routing
 
 One scope, `routing` (roadmap M5l, design D220; the name is **pending the

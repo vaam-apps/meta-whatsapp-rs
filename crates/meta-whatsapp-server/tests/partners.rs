@@ -59,12 +59,10 @@ const JPEG: &[u8] = b"\xFF\xD8\xFF\xE0\0\x10JFIF\0";
 
 fn settings(legal_acts: bool) -> Settings {
     Settings {
-        signup: Some(
-            tech_provider().pre_verified_pool(
-                BusinessId::new(POOL_BUSINESS).unwrap(),
-                AccessToken::new(POOL_TOKEN),
-            ),
-        ),
+        signup: Some(tech_provider().pre_verified_pool(
+            BusinessId::new(POOL_BUSINESS).unwrap(),
+            AccessToken::new(POOL_TOKEN),
+        )),
         legal_acts,
         ..common::test_settings()
     }
@@ -127,12 +125,8 @@ fn legal_acts(f: &Fixture) -> Vec<(&'static str, bool, Call)> {
         (
             "submit_business_verification",
             true,
-            admin_call(
-                Method::POST,
-                "/v1/admin/partners/business-verifications",
-                f,
-            )
-            .json(&submission_body()),
+            admin_call(Method::POST, "/v1/admin/partners/business-verifications", f)
+                .json(&submission_body()),
         ),
         (
             "accept_solution",
@@ -217,9 +211,8 @@ async fn the_other_calls_reach_meta_with_the_setting_off() {
     let f = fixture(false).await;
     let solution = |tail: &str| format!("/v1/admin/partners/solutions/{SOLUTION}{tail}");
     f.h.graph.push_json(200, json!({"solution_id": SOLUTION}));
-    let created = f
-        .h
-        .call(
+    let created =
+        f.h.call(
             admin_call(Method::POST, "/v1/admin/partners/solutions", &f).json(&json!({
                 "name": "Social OVD with Lucky Shrub", "partner_app_id": "21202248997039",
                 "owner_permissions": ["MESSAGING"], "partner_permissions": ["MESSAGING"]
@@ -228,9 +221,8 @@ async fn the_other_calls_reach_meta_with_the_setting_off() {
         .await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
     f.h.graph.push_json(200, json!({"success": true}));
-    let asked = f
-        .h
-        .call(admin_call(
+    let asked =
+        f.h.call(admin_call(
             Method::POST,
             &solution("/deactivation-request"),
             &f,
@@ -238,20 +230,20 @@ async fn the_other_calls_reach_meta_with_the_setting_off() {
         .await;
     assert_eq!(asked.status, StatusCode::NO_CONTENT, "{}", asked.text);
     f.h.graph.push_json(200, json!({"success": true}));
-    let rejected = f
-        .h
-        .call(admin_call(
+    let rejected =
+        f.h.call(admin_call(
             Method::POST,
             &solution("/deactivation-request/reject"),
             &f,
         ))
         .await;
     assert_eq!(rejected.status, StatusCode::NO_CONTENT, "{}", rejected.text);
-    f.h.graph
-        .push_json(200, json!({"id": WABA, "business_verification_status": "verified"}));
-    let status = f
-        .h
-        .call(tenant_call(
+    f.h.graph.push_json(
+        200,
+        json!({"id": WABA, "business_verification_status": "verified"}),
+    );
+    let status =
+        f.h.call(tenant_call(
             Method::GET,
             &format!("/v1/wabas/{WABA}/business-verification"),
             &f,
@@ -281,9 +273,8 @@ async fn a_submission_is_metas_form_with_the_partners_token_and_the_list_is_read
                "message": "Your request has been received and will be reviewed shortly.",
                "verification_attempts": 1}),
     );
-    let reply = f
-        .h
-        .call(
+    let reply =
+        f.h.call(
             admin_call(
                 Method::POST,
                 "/v1/admin/partners/business-verifications",
@@ -297,7 +288,10 @@ async fn a_submission_is_metas_form_with_the_partners_token_and_the_list_is_read
         reply.json(),
         json!({"verification_attempts": 1, "attempts_left": 2})
     );
-    assert!(!reply.text.contains("received"), "Meta's text is not answered");
+    assert!(
+        !reply.text.contains("received"),
+        "Meta's text is not answered"
+    );
     let sent = f.h.graph.last_request().unwrap();
     assert_eq!(sent.method, Method::POST);
     assert_eq!(
@@ -387,10 +381,7 @@ async fn a_submission_is_metas_form_with_the_partners_token_and_the_list_is_read
         read.path(),
         format!("/v25.0/{POOL_BUSINESS}/self_certified_whatsapp_business_submissions")
     );
-    assert_eq!(
-        read.query("end_business_id").as_deref(),
-        Some(CUSTOMER)
-    );
+    assert_eq!(read.query("end_business_id").as_deref(), Some(CUSTOMER));
     assert_eq!(read.query("after").as_deref(), Some("QVFIUjCURSOR"));
     assert_eq!(read.bearer(), Some(POOL_TOKEN));
     assert_eq!(f.h.graph.remaining(), 0);
@@ -441,9 +432,8 @@ async fn a_submission_that_cannot_pass_is_refused_before_any_request() {
         ),
         (json!({"documents": [good]}), "body"),
     ] {
-        let reply = f
-            .h
-            .call(
+        let reply =
+            f.h.call(
                 admin_call(
                     Method::POST,
                     "/v1/admin/partners/business-verifications",
@@ -480,7 +470,12 @@ async fn a_submission_that_timed_out_is_not_replayed_and_metas_text_is_not_answe
     };
     f.h.graph.push_error(|| TransportError::Timeout);
     let timed_out = f.h.call(call()).await;
-    assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT, "{}", timed_out.text);
+    assert_eq!(
+        timed_out.status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "{}",
+        timed_out.text
+    );
     assert_eq!(timed_out.json()["error"]["may_have_been_sent"], true);
     assert_eq!(f.h.graph.requests().len(), 1);
     f.h.graph.push_json(
@@ -542,9 +537,8 @@ async fn without_a_partner_business_the_operators_routes_say_so() {
 async fn a_solution_is_created_as_metas_body_and_checked_first() {
     let f = fixture(false).await;
     f.h.graph.push_json(200, json!({"solution_id": SOLUTION}));
-    let reply = f
-        .h
-        .call(
+    let reply =
+        f.h.call(
             admin_call(Method::POST, "/v1/admin/partners/solutions", &f).json(&json!({
                 "name": "Social OVD with Lucky Shrub",
                 "partner_app_id": "21202248997039",
@@ -598,12 +592,9 @@ async fn a_solution_is_created_as_metas_body_and_checked_first() {
             "owner_permissions",
         ),
     ] {
-        let refused = f
-            .h
-            .call(
-                admin_call(Method::POST, "/v1/admin/partners/solutions", &f).json(&body),
-            )
-            .await;
+        let refused =
+            f.h.call(admin_call(Method::POST, "/v1/admin/partners/solutions", &f).json(&body))
+                .await;
         assert_eq!(
             (refused.status, refused.json()["error"]["field"].as_str()),
             (StatusCode::UNPROCESSABLE_ENTITY, Some(field)),
@@ -630,9 +621,8 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
              "status_for_pending_request": "NONE", "id": "17602267745700"}],
             "paging": {"cursors": {"before": "QVFIUkxl", "after": "QVFIUlgy"}, "next": "https://x"}}),
     );
-    let listed = f
-        .h
-        .call(admin_call(
+    let listed =
+        f.h.call(admin_call(
             Method::GET,
             "/v1/admin/partners/solutions?role=OWNER&limit=25&cursor=QVFIUcur",
             &f,
@@ -647,7 +637,10 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
                "owner_app_id": null, "owner_permissions": null, "partners": null})
     );
     let read = f.h.graph.last_request().unwrap();
-    assert_eq!(read.path(), format!("/v25.0/{APP_ID}/whatsapp_business_solutions"));
+    assert_eq!(
+        read.path(),
+        format!("/v25.0/{APP_ID}/whatsapp_business_solutions")
+    );
     assert_eq!(read.query("role").as_deref(), Some("OWNER"));
     assert_eq!(read.query("limit").as_deref(), Some("25"));
     assert_eq!(read.query("after").as_deref(), Some("QVFIUcur"));
@@ -668,9 +661,8 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
                    "paging": {"cursors": {"before": "b", "after": "a"}}},
                "id": SOLUTION}),
     );
-    let solution = f
-        .h
-        .call(admin_call(
+    let solution =
+        f.h.call(admin_call(
             Method::GET,
             &format!("/v1/admin/partners/solutions/{SOLUTION}"),
             &f,
@@ -690,7 +682,9 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
     assert_eq!(read.path(), format!("/v25.0/{SOLUTION}"));
     assert_eq!(
         read.query("fields").as_deref(),
-        Some("id,name,status,status_for_pending_request,owner_app,owner_permissions,partners{partner_permissions,partner_app}")
+        Some(
+            "id,name,status,status_for_pending_request,owner_app,owner_permissions,partners{partner_permissions,partner_app}"
+        )
     );
 
     f.h.graph.push_json(
@@ -700,9 +694,8 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
                          "status": "ACCEPTED", "id": "17602267745704"}],
                "paging": {"cursors": {"before": "b", "after": "a"}}}),
     );
-    let partners = f
-        .h
-        .call(admin_call(
+    let partners =
+        f.h.call(admin_call(
             Method::GET,
             &format!("/v1/admin/partners/solutions/{SOLUTION}/partners?cursor=QVFIUc"),
             &f,
@@ -719,9 +712,8 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
         json!({"data": [{"id": CUSTOMER, "name": "Lucky Shrub"}],
                "paging": {"cursors": {"before": "b", "after": "a"}}}),
     );
-    let clients = f
-        .h
-        .call(admin_call(
+    let clients =
+        f.h.call(admin_call(
             Method::GET,
             "/v1/admin/partners/client-businesses?limit=100",
             &f,
@@ -732,7 +724,10 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
         json!([{"id": CUSTOMER, "name": "Lucky Shrub"}])
     );
     let read = f.h.graph.last_request().unwrap();
-    assert_eq!(read.path(), format!("/v25.0/{APP_ID}/connected_client_businesses"));
+    assert_eq!(
+        read.path(),
+        format!("/v25.0/{APP_ID}/connected_client_businesses")
+    );
     assert_eq!(read.query("limit").as_deref(), Some("100"));
     assert_eq!(f.h.graph.remaining(), 0);
 
@@ -745,7 +740,12 @@ async fn the_solutions_and_client_businesses_are_read_as_the_guides_do() {
         ("/v1/admin/partners/client-businesses?cursor=", "cursor"),
     ] {
         let reply = f.h.call(admin_call(Method::GET, path, &f)).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{path}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{path}: {}",
+            reply.text
+        );
         assert_eq!(reply.json()["error"]["field"], field, "{path}");
     }
     assert_eq!(f.h.graph.requests().len(), 4);
@@ -762,14 +762,8 @@ async fn a_solutions_state_changes_are_metas_edges_and_are_not_replayed() {
         ("accept", "accept"),
         ("reject", "reject"),
         ("deactivation-request", "send_deactivation_request"),
-        (
-            "deactivation-request/accept",
-            "accept_deactivation_request",
-        ),
-        (
-            "deactivation-request/reject",
-            "reject_deactivation_request",
-        ),
+        ("deactivation-request/accept", "accept_deactivation_request"),
+        ("deactivation-request/reject", "reject_deactivation_request"),
     ] {
         // The guide's `{"success": true}`, or a solution (the reference).
         f.h.graph.push_json(
@@ -780,15 +774,19 @@ async fn a_solutions_state_changes_are_metas_edges_and_are_not_replayed() {
                 json!({"success": true})
             },
         );
-        let reply = f
-            .h
-            .call(admin_call(
+        let reply =
+            f.h.call(admin_call(
                 Method::POST,
                 &format!("/v1/admin/partners/solutions/{SOLUTION}/{route}"),
                 &f,
             ))
             .await;
-        assert_eq!(reply.status, StatusCode::NO_CONTENT, "{route}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::NO_CONTENT,
+            "{route}: {}",
+            reply.text
+        );
         assert!(reply.text.is_empty());
         let sent = f.h.graph.last_request().unwrap();
         assert_eq!(sent.method, Method::POST, "{route}");
@@ -801,9 +799,8 @@ async fn a_solutions_state_changes_are_metas_edges_and_are_not_replayed() {
 
     // Not repeated after a timeout.
     f.h.graph.push_error(|| TransportError::Timeout);
-    let reply = f
-        .h
-        .call(admin_call(
+    let reply =
+        f.h.call(admin_call(
             Method::POST,
             &format!("/v1/admin/partners/solutions/{SOLUTION}/accept"),
             &f,
@@ -819,15 +816,18 @@ async fn a_solutions_state_changes_are_metas_edges_and_are_not_replayed() {
             "Solution cannot be accepted: solution is not in INITIATED status",
         ),
     );
-    let refused = f
-        .h
-        .call(admin_call(
+    let refused =
+        f.h.call(admin_call(
             Method::POST,
             &format!("/v1/admin/partners/solutions/{SOLUTION}/accept"),
             &f,
         ))
         .await;
-    assert!(!refused.text.contains("INITIATED status"), "{}", refused.text);
+    assert!(
+        !refused.text.contains("INITIATED status"),
+        "{}",
+        refused.text
+    );
     assert_eq!(f.h.graph.remaining(), 0);
 }
 
@@ -840,7 +840,8 @@ fn the_solution_token_is_not_served() {
         assert!(
             !operation.template.contains("access_token")
                 && !operation.template.contains("access-token")
-                && !(operation.template.contains("/partners/") && operation.template.contains("token")),
+                && !(operation.template.contains("/partners/")
+                    && operation.template.contains("token")),
             "{}",
             operation.label()
         );
@@ -862,9 +863,8 @@ async fn a_users_assigned_wabas_are_read_with_the_documented_query() {
         json!({"data": [{"id": "106526625562206", "name": "Lucky Shrub"}, {"id": WABA}],
                "paging": {"cursors": {"before": "QVFI", "after": "QVFJ"}, "next": "https://x"}}),
     );
-    let reply = f
-        .h
-        .call(admin_call(
+    let reply =
+        f.h.call(admin_call(
             Method::GET,
             "/v1/admin/partners/users/1972555232742222/wabas?limit=100&cursor=QVFIc",
             &f,
@@ -886,9 +886,8 @@ async fn a_users_assigned_wabas_are_read_with_the_documented_query() {
     assert_eq!(read.query("limit").as_deref(), Some("100"));
     assert_eq!(read.query("after").as_deref(), Some("QVFIc"));
     assert_eq!(read.bearer(), Some(POOL_TOKEN));
-    let bad = f
-        .h
-        .call(admin_call(
+    let bad =
+        f.h.call(admin_call(
             Method::GET,
             "/v1/admin/partners/users/not-an-id/wabas",
             &f,
@@ -914,16 +913,18 @@ async fn a_wabas_business_verification_is_read_with_its_own_token() {
             200,
             json!({"id": WABA, "business_verification_status": status}),
         );
-        let reply = f
-            .h
-            .call(tenant_call(
+        let reply =
+            f.h.call(tenant_call(
                 Method::GET,
                 &format!("/v1/wabas/{WABA}/business-verification"),
                 &f,
             ))
             .await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
-        assert_eq!(reply.json(), json!({"status": status, "verified": verified}));
+        assert_eq!(
+            reply.json(),
+            json!({"status": status, "verified": verified})
+        );
         let read = f.h.graph.last_request().unwrap();
         assert_eq!(read.method, Method::GET);
         assert_eq!(read.path(), format!("/v25.0/{WABA}"));
@@ -935,9 +936,8 @@ async fn a_wabas_business_verification_is_read_with_its_own_token() {
     }
     // Meta said nothing: not verified.
     f.h.graph.push_json(200, json!({"id": WABA}));
-    let reply = f
-        .h
-        .call(tenant_call(
+    let reply =
+        f.h.call(tenant_call(
             Method::GET,
             &format!("/v1/wabas/{WABA}/business-verification"),
             &f,
@@ -948,21 +948,17 @@ async fn a_wabas_business_verification_is_read_with_its_own_token() {
 
     let before = f.h.graph.requests().len();
     let numbers = f.h.tenant_key(TENANT, &[Scope::Numbers]).await;
-    let denied = f
-        .h
-        .call(
-            Call::get(format!("/v1/wabas/{WABA}/business-verification")).key(&numbers),
-        )
-        .await;
+    let denied =
+        f.h.call(Call::get(format!("/v1/wabas/{WABA}/business-verification")).key(&numbers))
+            .await;
     assert_eq!(
         (denied.status, denied.code().as_str()),
         (StatusCode::FORBIDDEN, "forbidden"),
         "{}",
         denied.text
     );
-    let foreign = f
-        .h
-        .call(tenant_call(
+    let foreign =
+        f.h.call(tenant_call(
             Method::GET,
             &format!("/v1/wabas/{OTHER_WABA}/business-verification"),
             &f,
@@ -1008,7 +1004,12 @@ async fn a_solution_migration_intent_is_metas_body_with_the_tenants_token() {
 
     f.h.graph.push_error(|| TransportError::Timeout);
     let timed_out = f.h.call(create("intent-2")).await;
-    assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT, "{}", timed_out.text);
+    assert_eq!(
+        timed_out.status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "{}",
+        timed_out.text
+    );
     let replayed = f.h.call(create("intent-2")).await;
     assert_eq!(replayed.text, timed_out.text);
     assert_eq!(f.h.graph.requests().len(), 2, "the timeout was not retried");
@@ -1017,12 +1018,14 @@ async fn a_solution_migration_intent_is_metas_body_with_the_tenants_token() {
     for (body, field) in [
         (json!({"solution_id": "not-an-id"}), "solution_id"),
         (json!({}), "body"),
-        (json!({"solution_id": DESTINATION_SOLUTION, "extra": 1}), "body"),
+        (
+            json!({"solution_id": DESTINATION_SOLUTION, "extra": 1}),
+            "body",
+        ),
     ] {
-        let refused = f
-            .h
-            .call(tenant_call(Method::POST, &path, &f).json(&body))
-            .await;
+        let refused =
+            f.h.call(tenant_call(Method::POST, &path, &f).json(&body))
+                .await;
         assert_eq!(refused.json()["error"]["field"], field, "{}", refused.text);
     }
     assert_eq!(f.h.graph.requests().len(), 2);
@@ -1078,8 +1081,10 @@ async fn a_migration_intent_is_answered_only_when_it_names_the_wabas_own() {
     );
     assert!(!foreign.text.contains("SECRET-OTHER-WABA-NAME"));
     // One that names no WABA proves nothing: not found.
-    f.h.graph
-        .push_json(200, json!({"status": "INITIATED", "id": "1972385232742999"}));
+    f.h.graph.push_json(
+        200,
+        json!({"status": "INITIATED", "id": "1972385232742999"}),
+    );
     let silent = f.h.call(tenant_call(Method::GET, &path, &f)).await;
     assert_eq!(silent.status, StatusCode::NOT_FOUND, "{}", silent.text);
     // The source side counts too.
@@ -1093,9 +1098,8 @@ async fn a_migration_intent_is_answered_only_when_it_names_the_wabas_own() {
     assert_eq!(source.json()["waba_id"], WABA);
     // An id that is no id: not found, Meta not asked.
     let before = f.h.graph.requests().len();
-    let bad = f
-        .h
-        .call(tenant_call(
+    let bad =
+        f.h.call(tenant_call(
             Method::GET,
             &format!("/v1/wabas/{WABA}/solution-migration-intents/not-an-id"),
             &f,
@@ -1122,9 +1126,8 @@ async fn a_billing_migration_is_the_wabas_own_to_read_and_to_resume() {
         200,
         json!({"migration_id": MIGRATION, "migration_status": "INITIATED"}),
     );
-    let started = f
-        .h
-        .call(
+    let started =
+        f.h.call(
             tenant_call(Method::POST, &path, &f)
                 .header("idempotency-key", "migration-1")
                 .json(&json!({"currency": "INR", "extended_credit_id": "987654321098765"})),
@@ -1176,9 +1179,12 @@ async fn a_billing_migration_is_the_wabas_own_to_read_and_to_resume() {
         json!({"status": "COMPLETED", "id": MIGRATION,
                "destination_waba": {"id": "998877665544332", "currency": "INR"}}),
     );
-    let resumed = f
-        .h
-        .call(tenant_call(Method::POST, &format!("{migration}/resume"), &f))
+    let resumed =
+        f.h.call(tenant_call(
+            Method::POST,
+            &format!("{migration}/resume"),
+            &f,
+        ))
         .await;
     assert_eq!(resumed.status, StatusCode::OK, "{}", resumed.text);
     assert_eq!(resumed.json()["status"], "COMPLETED");
@@ -1212,8 +1218,10 @@ async fn a_billing_migration_is_the_wabas_own_to_read_and_to_resume() {
         ),
         (
             "another tenant, read",
-            Call::get(format!("/v1/wabas/{OTHER_WABA}/billing-migrations/{MIGRATION}"))
-                .key(&other_tenant),
+            Call::get(format!(
+                "/v1/wabas/{OTHER_WABA}/billing-migrations/{MIGRATION}"
+            ))
+            .key(&other_tenant),
         ),
         (
             "another tenant, resumed",
@@ -1266,10 +1274,9 @@ async fn a_billing_migration_is_checked_first_and_not_replayed() {
         ),
         (json!({}), "body"),
     ] {
-        let refused = f
-            .h
-            .call(tenant_call(Method::POST, &path, &f).json(&body))
-            .await;
+        let refused =
+            f.h.call(tenant_call(Method::POST, &path, &f).json(&body))
+                .await;
         assert_eq!(
             (refused.status, refused.json()["error"]["field"].as_str()),
             (StatusCode::UNPROCESSABLE_ENTITY, Some(field)),
@@ -1279,11 +1286,15 @@ async fn a_billing_migration_is_checked_first_and_not_replayed() {
     }
     assert!(f.h.graph.requests().is_empty());
     f.h.graph.push_error(|| TransportError::Timeout);
-    let timed_out = f
-        .h
-        .call(tenant_call(Method::POST, &path, &f).json(&json!({"currency": "INR"})))
-        .await;
-    assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT, "{}", timed_out.text);
+    let timed_out =
+        f.h.call(tenant_call(Method::POST, &path, &f).json(&json!({"currency": "INR"})))
+            .await;
+    assert_eq!(
+        timed_out.status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "{}",
+        timed_out.text
+    );
     assert_eq!(f.h.graph.requests().len(), 1);
 
     // A resumption that timed out is not retried either.
@@ -1294,15 +1305,19 @@ async fn a_billing_migration_is_checked_first_and_not_replayed() {
     f.h.call(tenant_call(Method::POST, &path, &f).json(&json!({"currency": "MXN"})))
         .await;
     f.h.graph.push_error(|| TransportError::Timeout);
-    let resume = f
-        .h
-        .call(tenant_call(
+    let resume =
+        f.h.call(tenant_call(
             Method::POST,
             &format!("{path}/{MIGRATION}/resume"),
             &f,
         ))
         .await;
-    assert_eq!(resume.status, StatusCode::GATEWAY_TIMEOUT, "{}", resume.text);
+    assert_eq!(
+        resume.status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "{}",
+        resume.text
+    );
     assert_eq!(f.h.graph.requests().len(), 3);
     assert_eq!(f.h.graph.remaining(), 0);
 }

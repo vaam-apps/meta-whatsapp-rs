@@ -4421,7 +4421,6 @@ async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
     secrets
 }
 
-
 /// Roadmap M5j: every route of the partner APIs, with the legal acts on
 /// (the capture's settings): the business verification documents (their
 /// content and their names), the pool's system token and Meta's texts,
@@ -4651,7 +4650,12 @@ fn check_partner_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
             assert!(
                 matches!(
                     name.as_str(),
-                    "message" | "action" | "key_id" | "tenant" | "waba_id" | "subject_id"
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "subject_id"
                         | "outcome"
                 ),
                 "{name} in {fields}"
@@ -4664,7 +4668,8 @@ fn check_partner_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
         .map(|e| &e["fields"])
         .filter(|fields| {
             fields["action"].as_str().is_some_and(|action| {
-                action.starts_with("partner_solution_") || action.starts_with("business_verification_")
+                action.starts_with("partner_solution_")
+                    || action.starts_with("business_verification_")
             })
         })
         .collect();

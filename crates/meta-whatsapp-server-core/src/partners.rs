@@ -1,4 +1,4 @@
-//! Partner APIs (docs/design/server.md, section 4.9; roadmap M5j), as
+//! Partner APIs (docs/design/server.md, section 4.2; roadmap M5j), as
 //! services an API adapter calls, over the library's partner modules.
 //!
 //! **Who calls what.** Two kinds of caller, two services:
@@ -55,9 +55,7 @@ use meta_whatsapp_rs::client::partners::solutions::{
     CreateSolution, ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
     SolutionInfo, SolutionRole,
 };
-use meta_whatsapp_rs::client::waba::{
-    ListAssignedWabas, PaymentMethodMigrationIntent, WabaTask,
-};
+use meta_whatsapp_rs::client::waba::{ListAssignedWabas, PaymentMethodMigrationIntent, WabaTask};
 use meta_whatsapp_rs::core::ids::{
     AppId, BusinessId, CreditLineId, MigrationIntentId, SolutionId, SystemUserId, WabaId,
 };
@@ -764,8 +762,8 @@ impl Partners<'_> {
         if name.chars().count() < 2 || name.chars().count() > SOLUTION_NAME_MAX_CHARS {
             return Err(ServiceError::invalid("name"));
         }
-        let partner = AppId::new(new.partner_app_id)
-            .map_err(|_| ServiceError::invalid("partner_app_id"))?;
+        let partner =
+            AppId::new(new.partner_app_id).map_err(|_| ServiceError::invalid("partner_app_id"))?;
         let owner = tasks("owner_permissions", &new.owner_permissions)?;
         let partner_permissions = tasks("partner_permissions", &new.partner_permissions)?;
         let solution = CreateSolution::new(name, partner, owner, partner_permissions);
@@ -780,7 +778,13 @@ impl Partners<'_> {
         {
             Ok(created) => {
                 let id = created.solution_id.as_str().to_owned();
-                audit_admin(SOLUTION_CREATED, self.admin, Some(&id), None, Outcome::Answered);
+                audit_admin(
+                    SOLUTION_CREATED,
+                    self.admin,
+                    Some(&id),
+                    None,
+                    Outcome::Answered,
+                );
                 Ok(id)
             }
             Err(error) => {
@@ -804,12 +808,8 @@ impl Partners<'_> {
         query: SolutionQuery,
     ) -> Result<Paged<SolutionView>, ServiceError> {
         let session = self.open(authz, PartnerAction::ListSolutions)?;
-        let mut list = ListAppSolutions::new().fields([
-            "id",
-            "name",
-            "status",
-            "status_for_pending_request",
-        ]);
+        let mut list =
+            ListAppSolutions::new().fields(["id", "name", "status", "status_for_pending_request"]);
         if let Some(role) = query.role {
             list = list.role(match role.as_str() {
                 "OWNER" => SolutionRole::Owner,
@@ -838,7 +838,11 @@ impl Partners<'_> {
     /// # Errors
     ///
     /// `409 signup_not_configured`; `422` on `id`; Meta's refusal.
-    pub async fn solution(&self, authz: &Authorizer, id: &str) -> Result<SolutionView, ServiceError> {
+    pub async fn solution(
+        &self,
+        authz: &Authorizer,
+        id: &str,
+    ) -> Result<SolutionView, ServiceError> {
         let session = self.open(authz, PartnerAction::GetSolution)?;
         let id = solution_id(id)?;
         session
@@ -1037,7 +1041,13 @@ impl Partners<'_> {
     ) -> Result<(), ServiceError> {
         match result {
             Ok(()) => {
-                audit_admin(audit, self.admin, Some(id.as_str()), None, Outcome::Answered);
+                audit_admin(
+                    audit,
+                    self.admin,
+                    Some(id.as_str()),
+                    None,
+                    Outcome::Answered,
+                );
                 Ok(())
             }
             Err(error) => {
@@ -1184,7 +1194,8 @@ impl<'a> WabaPartners<'a> {
         solution: &str,
     ) -> Result<String, ServiceError> {
         gate_operation(Operation::CreateSolutionMigrationIntent, self.legal_acts)?;
-        let solution = SolutionId::new(solution).map_err(|_| ServiceError::invalid("solution_id"))?;
+        let solution =
+            SolutionId::new(solution).map_err(|_| ServiceError::invalid("solution_id"))?;
         match self
             .waba
             .client()
@@ -1237,7 +1248,10 @@ impl<'a> WabaPartners<'a> {
             .waba
             .client()
             .migration_intents()
-            .get(&id, &["id", "status", "solution", "destination_waba", "waba"])
+            .get(
+                &id,
+                &["id", "status", "solution", "destination_waba", "waba"],
+            )
             .await
         {
             Ok(intent) => intent,
@@ -1260,16 +1274,16 @@ impl<'a> WabaPartners<'a> {
         Ok(MigrationIntentView {
             id: intent.id.as_str().to_owned(),
             status: intent.status.as_ref().map(|s| s.as_str().to_owned()),
-            solution_id: intent
-                .solution
-                .as_ref()
-                .map(|s| s.id.as_str().to_owned()),
+            solution_id: intent.solution.as_ref().map(|s| s.id.as_str().to_owned()),
             solution_name: intent.solution.and_then(|s| s.name),
             destination_waba_id: intent
                 .destination_waba
                 .and_then(|w| w.id)
                 .map(|id| id.as_str().to_owned()),
-            waba_id: intent.waba.and_then(|w| w.id).map(|id| id.as_str().to_owned()),
+            waba_id: intent
+                .waba
+                .and_then(|w| w.id)
+                .map(|id| id.as_str().to_owned()),
         })
     }
 
@@ -1292,14 +1306,12 @@ impl<'a> WabaPartners<'a> {
         gate_operation(Operation::CreateBillingMigration, self.legal_acts)?;
         let mut intent = PaymentMethodMigrationIntent::new(currency);
         if let Some(credit) = extended_credit_id {
-            intent = intent.extended_credit_id(
-                {
+            intent = intent.extended_credit_id({
                 if !plain_id(credit) {
                     return Err(ServiceError::invalid("extended_credit_id"));
                 }
                 CreditLineId::new(credit)
-            },
-            );
+            });
         }
         intent
             .validate()
@@ -1380,7 +1392,13 @@ impl<'a> WabaPartners<'a> {
     /// asked); Meta's refusal.
     pub async fn billing_migration(&self, id: &str) -> Result<BillingMigrationView, ServiceError> {
         let id = self.own_migration(id).await?;
-        match self.waba.client().payment_method_migration(id).status().await {
+        match self
+            .waba
+            .client()
+            .payment_method_migration(id)
+            .status()
+            .await
+        {
             Ok(state) => Ok(migration_view(state)),
             Err(error) => Err(self.failed(&error).await),
         }
@@ -1436,9 +1454,8 @@ impl<'a> WabaPartners<'a> {
 }
 
 fn migration_view(state: meta_whatsapp_rs::client::waba::MigrationState) -> BillingMigrationView {
-    let (destination_waba_id, destination_currency) = state
-        .destination_waba
-        .map_or((None, None), |waba| {
+    let (destination_waba_id, destination_currency) =
+        state.destination_waba.map_or((None, None), |waba| {
             (Some(waba.id.as_str().to_owned()), waba.currency)
         });
     BillingMigrationView {
@@ -1481,10 +1498,20 @@ mod tests {
         }
     }
 
+    /// The stored name is pinned: it is in stored data (roadmap M5j; pending
+    /// the owner's confirmation before the first release).
+    #[test]
+    fn the_billing_namespace_is_pinned() {
+        assert_eq!(BILLING_NAMESPACE, "wa.server.billing_migration");
+    }
+
     /// A migration's id in a path is bounded and plain.
     #[test]
     fn a_migration_key_is_plain_and_bounded() {
-        assert_eq!(migration_key("mig_01HZYK3ABCDEF4567890"), Some("mig_01HZYK3ABCDEF4567890"));
+        assert_eq!(
+            migration_key("mig_01HZYK3ABCDEF4567890"),
+            Some("mig_01HZYK3ABCDEF4567890")
+        );
         for bad in ["", "a b", "a/b", "../x", &"m".repeat(129)] {
             assert_eq!(migration_key(bad), None, "{bad}");
         }

@@ -1679,7 +1679,12 @@ async fn the_partner_routes_follow_the_authorization_order() {
             );
         }
         let reply = h.call(call(operation, &admin, None)).await;
-        assert_ne!(reply.status, StatusCode::UNAUTHORIZED, "{}", operation.label());
+        assert_ne!(
+            reply.status,
+            StatusCode::UNAUTHORIZED,
+            "{}",
+            operation.label()
+        );
         assert!(
             matches!(
                 reply.code().as_str(),

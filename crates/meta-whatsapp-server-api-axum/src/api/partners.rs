@@ -1,4 +1,4 @@
-//! Partner APIs (docs/design/server.md, section 4.9; roadmap M5j): what a
+//! Partner APIs (docs/design/server.md, section 4.2; roadmap M5j): what a
 //! Tech Provider or Solution Partner does beyond onboarding, and what a
 //! tenant does to its own WABA with a partner.
 //!
@@ -621,7 +621,10 @@ pub(crate) async fn create_partner_solution(
             },
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(CreatedSolutionBody { solution_id })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedSolutionBody { solution_id }),
+    ))
 }
 
 /// `GET /v1/admin/partners/solutions`: one page of the deployment's
@@ -755,9 +758,11 @@ pub(crate) async fn list_client_businesses(
         .observed_by(state.metrics())
         .client_businesses(state.authz(), query.limit, query.cursor)
         .await?;
-    let (data, next_cursor) = page(businesses, |business: ClientBusinessView| ClientBusinessBody {
-        id: business.id,
-        name: business.name,
+    let (data, next_cursor) = page(businesses, |business: ClientBusinessView| {
+        ClientBusinessBody {
+            id: business.id,
+            name: business.name,
+        }
     });
     Ok(Json(ClientBusinessList { data, next_cursor }))
 }
@@ -1021,7 +1026,9 @@ async fn create_intent(
     service: &meta_whatsapp_server_core::partners::WabaPartners<'_>,
     solution_id: &str,
 ) -> Result<Success, ApiError> {
-    let id = service.create_solution_migration_intent(solution_id).await?;
+    let id = service
+        .create_solution_migration_intent(solution_id)
+        .await?;
     Success::json(StatusCode::CREATED, &CreatedIntentBody { id })
 }
 
