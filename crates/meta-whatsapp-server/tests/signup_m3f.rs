@@ -686,6 +686,63 @@ async fn a_claim_that_stopped_after_the_store_is_resumed_not_claimed_again() {
     assert_eq!(resumed.status, StatusCode::OK, "{}", resumed.text);
 }
 
+/// A claim whose WABA moves to another tenant right after its token was
+/// stored (the vault's write is the last step before the connection is
+/// confirmed) is `503 storage_unavailable`: the new holder keeps the WABA and
+/// its own token, and the arrival is put back (no attempt was kept to
+/// resume). Decisive: the put-back when the confirmation fails (removing it
+/// loses the arrival for good).
+#[tokio::test]
+async fn a_claim_whose_waba_moves_after_the_store_is_put_back() {
+    use common::moving::{AfterPut, move_waba};
+    use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+    use meta_whatsapp_server::store::MemoryStore;
+    use std::sync::Arc;
+
+    let kv = Arc::new(AfterPut::new(Arc::new(MemoryKvStore::new())));
+    let h = Harness::on_with(
+        Arc::new(MemoryStore::new()),
+        kv.clone(),
+        settings(hosted_deployment()),
+    );
+    let _ = tenants(&h).await;
+    let admin = h.admin_key().await;
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    let (store, vault) = (h.store.clone(), h.vault.clone());
+    kv.after_storing(
+        WABA,
+        Box::pin(async move {
+            move_waba(
+                store.as_ref(),
+                &vault,
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PHONE).unwrap(),
+                B,
+                Some("TOKEN-OF-B"),
+            )
+            .await;
+        }),
+    );
+    script_hosted(&h);
+    let moved = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
+    assert!(!kv.armed(), "the move happened");
+    assert_eq!(
+        (moved.status, moved.code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+        "{}",
+        moved.text
+    );
+    assert_eq!(holder(&h, WABA).await.as_deref(), Some(B));
+    let kept = h
+        .vault
+        .get(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap()
+        .expect("the new holder's token");
+    assert_eq!(kept.token.expose_secret(), "TOKEN-OF-B");
+    assert!(arrival(&h, WABA).await.is_some(), "the arrival put back");
+}
+
 // ─── Pre-verified numbers ────────────────────────────────────────────────
 
 fn pooled() -> Harness {

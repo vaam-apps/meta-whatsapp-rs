@@ -83,8 +83,8 @@ impl Moving {
     }
 }
 
-/// A `KvStore` that runs a hook once, right after a `put` of a chosen key
-/// has written (the vault's store of a WABA's record: `waba/{id}` in
+/// A `KvStore` that runs a hook once, right after a `put` (or a
+/// `put_if_absent` that wrote) of a chosen key has written (the vault's store of a WABA's record: `waba/{id}` in
 /// [`TOKEN_NAMESPACE`]). Everything else is `inner`'s.
 pub struct AfterPut {
     inner: Arc<dyn KvStore>,
@@ -116,6 +116,23 @@ impl AfterPut {
     pub fn armed(&self) -> bool {
         self.hook.lock().unwrap().is_some()
     }
+
+    /// Run the hook, once, if it waits for `key`.
+    async fn fire(&self, key: &StoreKey) {
+        let hook = {
+            let mut armed = self.hook.lock().unwrap();
+            match armed.take() {
+                Some((at, hook)) if &at == key => Some(hook),
+                other => {
+                    *armed = other;
+                    None
+                }
+            }
+        };
+        if let Some(hook) = hook {
+            hook.await;
+        }
+    }
 }
 
 #[async_trait]
@@ -130,19 +147,7 @@ impl KvStore for AfterPut {
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
         let written = self.inner.put(key, value, expiry).await;
-        let hook = {
-            let mut armed = self.hook.lock().unwrap();
-            match armed.take() {
-                Some((at, hook)) if &at == key => Some(hook),
-                other => {
-                    *armed = other;
-                    None
-                }
-            }
-        };
-        if let Some(hook) = hook {
-            hook.await;
-        }
+        self.fire(key).await;
         written
     }
     async fn put_if_absent(
@@ -151,7 +156,14 @@ impl KvStore for AfterPut {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        self.inner.put_if_absent(key, value, expiry).await
+        // A new entry written (the onboarding's first store of a WABA's
+        // token is one) fires the hook as a `put` does; one refused
+        // (`None`) wrote nothing.
+        let written = self.inner.put_if_absent(key, value, expiry).await;
+        if matches!(written, Ok(Some(_))) {
+            self.fire(key).await;
+        }
+        written
     }
     async fn compare_and_swap(
         &self,
