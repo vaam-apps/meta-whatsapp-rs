@@ -997,6 +997,7 @@ a message *to* a group is a send (`POST /v1/numbers/{pn}/messages` with a
 | `POST /v1/numbers/{pn}/groups` | ask Meta to create a group (`subject`, `description?`, `join_approval_mode?`: `approval_required` or `auto_approve`); **`202` with Meta's `request_id`**; takes an `Idempotency-Key` |
 | `GET /v1/numbers/{pn}/groups` | the number's active groups (`?limit=` 1 to 1,024, `after`, `before`): `{data: [{id, subject, created_at}], next_after, previous_before}` |
 | `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/groups/{group_id}` | read (`?fields=`: the six scalar fields by default), change the `subject` and/or `description` (`204`), delete the group (`204`; the participants and the business are removed: there is no call to leave a group) |
+| `PUT /v1/numbers/{pn}/groups/{group_id}/picture` | replace the group's picture: `multipart/form-data` with one field, `file`, a square JPEG (`204`); see below |
 | `GET`, `POST /v1/numbers/{pn}/groups/{group_id}/invite-link` | the invite link; replace it (every previous link stops working) |
 | `GET /v1/numbers/{pn}/groups/{group_id}/participants` | the participants (`wa_id`, `user_id`, `parent_user_id`, `username`) and their count |
 | `POST /v1/numbers/{pn}/groups/{group_id}/participants/remove` | remove 1 to 8 participants, each by exactly one of `phone` (E.164 with its `+`), `wa_id` (digits, as the list shows it) or `user_id` (a BSUID); `{partial}` is `true` when Meta says some were not removed |
@@ -1022,17 +1023,40 @@ listed), a group you just asked for is `404` too; wait for the event, or
 list. A number that moves to another tenant keeps its groups' records
 under the old tenant: list its groups to make them the new one's.
 
+**The picture** (roadmap M5f2; Meta's `groups/reference`, "Update group
+settings") is a form of one field, `file`: a JPEG of at most 5 MiB, square,
+at least 192 by 192 pixels. The service judges the bytes, never the
+part's name or declared type: the file must start as a JPEG and its frame
+header (the only part of the image it reads; it decodes nothing) must say
+width equals height and at least 192. Otherwise it is `422 invalid_request`
+on `file`; a file over 5 MiB is `413 media_too_large`, the body read no
+further than that bound and the form's framing (as an upload's); any other
+field, a second `file` or a body that is not a form is `422` on `body` or
+`file`. None of these asks Meta anything. The route is held to the media
+uploads' transfer slots (`WA_SERVER_MEDIA_CONCURRENCY`, a tenant's half at
+most): the slot is taken after the group is found and before the body is
+read, and a tenant with its share busy gets `429 too_many_requests`. The
+group is found first (above): a picture for a group the number does not
+hold is `404` before the vault is read, the slot taken or the body read.
+It takes no `Idempotency-Key`: setting the same picture twice leaves the
+same state. `204` means Meta was asked and accepted the request; whether it
+applied the picture arrives in a `group_settings_update` event. A file that
+passes the service's checks can still be refused by Meta (a corrupt image,
+say): that is Meta's code and the service's kind for it, never Meta's text.
+The 5 MiB bound is the library's; Meta's page says "5MB", so a file
+between 5,000,000 and 5 MiB bytes is Meta's to refuse (its code, the
+service's kind), not the service's.
+
 What the service does not do, each a route away: pin and unpin a message,
-the group's picture (a multipart upload), add participants (Meta: they
-join through the invite link), delete the invite link, leave (Meta
-documents no call; `docs/parity.md` row 78).
+add participants (Meta: they join through the invite link), delete the
+invite link, leave (Meta documents no call; `docs/parity.md` row 78).
 
 **What reaches a log.** A participant's phone number, BSUID or username and
 a join request's id are in the answer that returns them and nowhere else:
 an error carries Meta's code and the service's kind, **never Meta's text**
 (it may quote them), and the changes' `audit` events hold counts and
 outcomes only (`group_creation_requested`, `group_settings_updated`,
-`group_deleted`, `group_invite_link_reset`, `group_participants_removed`,
+`group_picture_set`, `group_deleted`, `group_invite_link_reset`, `group_participants_removed`,
 `group_join_requests_approved`, `group_join_requests_rejected`, with the
 tenant, the WABA, the number's id, the key's id, `users`, `done`,
 `failed` and `outcome`, `unknown` when the call may have gone through

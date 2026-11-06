@@ -28,6 +28,25 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   No new setting, scope, route, error code or stored name; the OpenAPI
   document is unchanged.
 
+### Added (roadmap M5f2)
+
+- **Group pictures, in the service** (roadmap M5f2, parity row 76 now done
+  in the service; choices D260-D264, decided by the coordinator on 2026-11-06
+  under the owner's delegation, swappable; from Meta's `groups/reference` page ("Update group
+  settings"), read on 2026-11-06). `PUT
+  /v1/numbers/{pn}/groups/{group_id}/picture` (operation
+  `set_group_picture`, scope `groups`; the name pending the owner's
+  confirmation): a form of one field, `file`, a JPEG of at most 5 MiB that
+  is square and at least 192 by 192 pixels, answered `204`. The group is
+  found among the number's first (`404` before the vault is read, a slot
+  taken or the body read); the body then takes a slot of the media
+  uploads' pool, is read no further than 5 MiB, and is judged by its bytes
+  (the JPEG signature and the frame header's size, no image decoded and no
+  new dependency): anything else is `422` on `file` or `413
+  media_too_large`, with no request to Meta. No `Idempotency-Key`; audited
+  as `group_picture_set` without any trait of the file. The OpenAPI
+  document is additive only.
+
 ### Added (roadmap M5c5)
 
 - **The Messaging Account a send bills, in the service** (roadmap M5c5,
