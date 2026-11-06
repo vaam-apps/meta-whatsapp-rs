@@ -288,7 +288,7 @@ pub fn number_setting_audit(
     );
 }
 
-/// A tenant's marketing change (roadmap M5h; docs/design/server.md, D230):
+/// A tenant's marketing change (roadmap M5h; docs/design/server.md, D232):
 /// a template duplicated at another max price or its max price set or
 /// cleared, the Cloud API marketing switch, a welcome message sequence
 /// created, changed or deleted. Logged like [`tenant_audit`] (target
