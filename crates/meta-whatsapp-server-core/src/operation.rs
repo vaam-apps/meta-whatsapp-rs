@@ -145,6 +145,9 @@ pub enum Operation {
     /// `resume_signup`: an attempt's steps after the stored token run
     /// again (roadmap M3a).
     ResumeSignup,
+    /// `complete_hosted_signup`: a remembered `PARTNER_ADDED` claimed for
+    /// the tenant, then onboarded (roadmap M3f).
+    CompleteHostedSignup,
     /// `erase_customer`: a customer erased on a number, from the inbox and
     /// the outbox, journaled and audited (roadmap M2f).
     EraseCustomer,
@@ -274,7 +277,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 110] = [
+    pub const ALL: [Self; 111] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -324,6 +327,7 @@ impl Operation {
         Self::CompleteSignup,
         Self::ListSignupAttempts,
         Self::ResumeSignup,
+        Self::CompleteHostedSignup,
         Self::EraseCustomer,
         Self::CreateWebhookEndpoint,
         Self::ListWebhookEndpoints,
@@ -440,6 +444,7 @@ impl Operation {
             Self::CompleteSignup => "complete_signup",
             Self::ListSignupAttempts => "list_signup_attempts",
             Self::ResumeSignup => "resume_signup",
+            Self::CompleteHostedSignup => "complete_hosted_signup",
             Self::EraseCustomer => "erase_customer",
             Self::CreateWebhookEndpoint => "create_webhook_endpoint",
             Self::ListWebhookEndpoints => "list_webhook_endpoints",
@@ -579,7 +584,8 @@ impl Operation {
             Self::StartSignup
             | Self::CompleteSignup
             | Self::ListSignupAttempts
-            | Self::ResumeSignup => Scope::Signup,
+            | Self::ResumeSignup
+            | Self::CompleteHostedSignup => Scope::Signup,
             Self::EraseCustomer => Scope::Erasure,
             Self::GetCommerceSettings
             | Self::UpdateCommerceSettings

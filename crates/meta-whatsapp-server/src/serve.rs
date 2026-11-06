@@ -57,7 +57,7 @@ use tokio::task::JoinHandle;
 
 #[cfg(feature = "store-postgres")]
 use crate::config::DatabaseUrl;
-use crate::config::{Config, MigrateMode, OnboardingMode, Storage, WebhookConfig};
+use crate::config::{Config, MigrateMode, OnboardingMode, SignupOptions, Storage, WebhookConfig};
 use crate::events::{HOUSEKEEPING_INTERVAL, Inbound};
 use crate::listen;
 use crate::metrics::Metrics;
@@ -385,6 +385,26 @@ pub fn signup_deployment(
     onboarding: OnboardingMode,
     confirmation: AccountUpdateConfirmation,
 ) -> Option<SignupDeployment> {
+    signup_deployment_with(
+        app_id,
+        app_secret,
+        config_id,
+        onboarding,
+        confirmation,
+        &SignupOptions::default(),
+    )
+}
+
+/// [`signup_deployment`] with the options of roadmap M3f: every granted
+/// WABA bound, hosted signup, the pool of pre-verified numbers.
+pub fn signup_deployment_with(
+    app_id: Option<AppId>,
+    app_secret: Option<&AppSecret>,
+    config_id: Option<String>,
+    onboarding: OnboardingMode,
+    confirmation: AccountUpdateConfirmation,
+    options: &SignupOptions,
+) -> Option<SignupDeployment> {
     let (Some(app_id), Some(app_secret), Some(config_id)) = (app_id, app_secret, config_id) else {
         tracing::info!(
             "Embedded Signup is not set up (WA_APP_ID and WA_ES_CONFIG_ID): its routes answer \
@@ -394,7 +414,16 @@ pub fn signup_deployment(
     };
     let deployment =
         SignupDeployment::new(AppCredentials::new(app_id, app_secret.clone()), config_id)
-            .confirm_account_updates(confirmation);
+            .confirm_account_updates(confirmation)
+            .every_granted_waba(options.every_granted_waba);
+    let deployment = match &options.hosted_system_token {
+        Some(token) => deployment.hosted_signup(token.clone()),
+        None => deployment,
+    };
+    let deployment = match &options.pre_verified_pool {
+        Some((business, token)) => deployment.pre_verified_pool(business.clone(), token.clone()),
+        None => deployment,
+    };
     Some(match onboarding {
         OnboardingMode::TechProvider => deployment,
         OnboardingMode::SolutionPartner(partner) => deployment.solution_partner(
@@ -463,6 +492,7 @@ async fn run<S: Future<Output = ()>>(
         es_config_id,
         onboarding,
         account_update_confirmation,
+        signup_options,
         webhooks,
         ..
     } = config;
@@ -471,12 +501,13 @@ async fn run<S: Future<Output = ()>>(
     settings.app_id.clone_from(&app_id);
     settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
     settings.erasure = erasure_deployment(erasure_key, memory)?;
-    settings.signup = signup_deployment(
+    settings.signup = signup_deployment_with(
         app_id,
         app_secrets.first(),
         es_config_id,
         onboarding,
         account_update_confirmation,
+        &signup_options,
     );
     settings.webhooks_out = webhooks_out(webhooks)?;
     settings.flows = flows_deployment(flows_private_key, &app_secrets);

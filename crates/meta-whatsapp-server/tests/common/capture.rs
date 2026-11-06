@@ -349,6 +349,9 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // PIN, the code or the state is logged.
     secrets.section("signup");
     secrets.extend(signup(h, &admin).await);
+    // Hosted signup, several WABAs and pre-verified numbers (roadmap M3f).
+    secrets.section("signup_m3f");
+    secrets.extend(signup_m3f(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -2922,6 +2925,25 @@ fn check_audit(logs: &str) {
         onboarded[0]
     );
     assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
+    // Roadmap M3f: the completions of `signup_m3f`, each audited once with
+    // its tenant, the WABA and the key's id, and no token in them.
+    for (action, tenant, waba) in [
+        (
+            "hosted_signup_completed",
+            "merchant-78",
+            super::signup::WABA_2,
+        ),
+        ("signup_completed", "merchant-79", "524126980791431"),
+    ] {
+        let found: Vec<&&serde_json::Value> = changes
+            .iter()
+            .filter(|fields| fields["action"] == action)
+            .collect();
+        assert_eq!(found.len(), 1, "{action}'s audit event");
+        assert_eq!(found[0]["tenant"], tenant, "{}", found[0]);
+        assert_eq!(found[0]["waba_id"], waba, "{}", found[0]);
+        assert!(found[0]["key_id"].is_string(), "{}", found[0]);
+    }
     check_erasure_audit(&events, &changes);
     check_group_audit(&changes);
     check_display_name_audit(&changes);
@@ -2929,6 +2951,8 @@ fn check_audit(logs: &str) {
         .into_iter()
         .filter(|fields| {
             fields["action"] != "signup_resumed"
+                && fields["action"] != "hosted_signup_completed"
+                && fields["action"] != "signup_completed"
                 && fields["action"] != "customer_erased"
                 && fields["action"] != "display_name_change_requested"
                 && !fields["action"]
@@ -3341,4 +3365,203 @@ pub fn check(logs: &str, secrets: &Secrets) {
     for line in with_message {
         assert!(line.contains("\"level\":\"DEBUG\""), "{line}");
     }
+}
+
+/// Hosted signup, several WABAs in one signup and pre-verified numbers
+/// (roadmap M3f): neither the deployment's system token, the pool's, the
+/// business tokens, the `appsecret_proof`, the PIN nor a pre-verified
+/// number's one-time code is logged, on success or on Meta's refusal.
+async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
+    use super::signup::{
+        BUSINESS, HOSTED_PROOF, HOSTED_TOKEN, PHONE_3, POOL_TOKEN, PRE_VERIFIED, PRE_VERIFIED_CODE,
+        WABA_2, partner_added, script_waba, success,
+    };
+    const HOSTED_BUSINESS_TOKEN: &str = "EAAH-hosted-business-token-SENTINEL-for-the-log-test";
+    const MULTI_TOKEN: &str = "EAAH-multi-business-token-SENTINEL-for-the-log-test";
+    const MULTI_CODE: &str = "AQB-multi-code-SENTINEL-for-the-log-test";
+    const HOSTED_PIN: &str = "264817";
+    const MULTI_PIN: &str = "739051";
+    const WABA_3: &str = "524126980791431";
+    const WABA_4: &str = "524126980791432";
+    const PHONE_4: &str = "106540352242931";
+    const PHONE_5: &str = "106540352242932";
+
+    let mut keys = Vec::new();
+    for tenant in ["merchant-78", "merchant-79"] {
+        h.tenant(tenant).await;
+        let minted = h
+            .call(
+                Call::new(Method::POST, format!("/v1/admin/tenants/{tenant}/keys"))
+                    .key(admin)
+                    .json(&json!({"scopes": ["signup"]})),
+            )
+            .await
+            .json();
+        keys.push(minted["key"].as_str().unwrap().to_owned());
+    }
+
+    // Hosted: the arrival, a claim Meta refuses at the fetch, then a claim
+    // that goes through.
+    let arrived = h.webhook(&partner_added(WABA_2, BUSINESS)).await;
+    assert_eq!(arrived.status.as_u16(), 200, "{}", arrived.text);
+    let claim = |pin: &str| {
+        Call::new(Method::POST, "/v1/signup/hosted")
+            .key(&keys[0])
+            .json(&json!({"waba_id": WABA_2, "owner_business_id": BUSINESS, "pin": pin}))
+    };
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) bad proof {HOSTED_PROOF}"),
+            "type": "OAuthException", "code": 100, "fbtrace_id": "A"}}),
+    );
+    let refused = h.call(claim(HOSTED_PIN)).await;
+    assert_eq!(refused.code(), "onboarding_failed", "{}", refused.text);
+    h.graph
+        .push_json(200, json!({"access_token": HOSTED_BUSINESS_TOKEN}));
+    h.graph
+        .push_json(200, super::signup::debug_granting(&[WABA_2]));
+    script_waba(&h.graph, WABA_2, &[PHONE_3]);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let claimed = h.call(claim(HOSTED_PIN)).await;
+    assert_eq!(claimed.status.as_u16(), 200, "{}", claimed.text);
+
+    // Several WABAs: two granted, the second one's subscription refused.
+    let started = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/sessions")
+                .key(&keys[1])
+                .json(&json!({})),
+        )
+        .await;
+    let state = started.json()["state"].as_str().unwrap().to_owned();
+    h.graph.push_json(200, json!({"access_token": MULTI_TOKEN}));
+    h.graph
+        .push_json(200, super::signup::debug_granting(&[WABA_3, WABA_4]));
+    script_waba(&h.graph, WABA_3, &[PHONE_4]);
+    h.graph.push_json(200, success());
+    h.graph.push_json(200, success());
+    script_waba(&h.graph, WABA_4, &[PHONE_5]);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) {MULTI_TOKEN}"),
+            "type": "OAuthException", "code": 100, "fbtrace_id": "A"}}),
+    );
+    let many = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/complete")
+                .key(&keys[1])
+                .json(&json!({
+                    "state": state, "code": MULTI_CODE, "pin": MULTI_PIN,
+                    "event": {"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH",
+                        "data": {"waba_id": WABA_3, "phone_number_id": PHONE_4,
+                                 "waba_ids": [WABA_3, WABA_4]}}
+                })),
+        )
+        .await;
+    assert_eq!(many.status.as_u16(), 200, "{}", many.text);
+
+    // Pre-verified numbers: every call, and Meta refusing a code (its
+    // text quoting it).
+    let route = "/v1/admin/pre-verified-numbers";
+    h.graph.push_json(200, json!({"id": PRE_VERIFIED}));
+    let added = h
+        .call(
+            Call::new(Method::POST, route)
+                .key(admin)
+                .json(&json!({"phone_number": "+1 555 078 3881"})),
+        )
+        .await;
+    assert_eq!(added.status.as_u16(), 201, "{}", added.text);
+    h.graph.push_json(200, success());
+    h.call(
+        Call::new(Method::POST, format!("{route}/{PRE_VERIFIED}/code"))
+            .key(admin)
+            .json(&json!({"method": "SMS", "language": "en_US"})),
+    )
+    .await;
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) wrong code {PRE_VERIFIED_CODE}"),
+            "type": "OAuthException", "code": 100, "fbtrace_id": "A"}}),
+    );
+    h.call(
+        Call::new(Method::POST, format!("{route}/{PRE_VERIFIED}/verify"))
+            .key(admin)
+            .json(&json!({"code": PRE_VERIFIED_CODE})),
+    )
+    .await;
+    h.graph.push_json(200, success());
+    let verified = h
+        .call(
+            Call::new(Method::POST, format!("{route}/{PRE_VERIFIED}/verify"))
+                .key(admin)
+                .json(&json!({"code": PRE_VERIFIED_CODE})),
+        )
+        .await;
+    assert_eq!(verified.status.as_u16(), 204, "{}", verified.text);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": PRE_VERIFIED, "phone_number": "+15550783881"}]}),
+    );
+    h.call(Call::get(route).key(admin)).await;
+    h.graph.push_json(
+        200,
+        json!({"id": PRE_VERIFIED, "phone_number": "+15550783881"}),
+    );
+    h.call(Call::get(format!("{route}/{PRE_VERIFIED}")).key(admin))
+        .await;
+    // A reservation for a tenant, its launch, the release, the deletion.
+    let reserved = h
+        .call(
+            Call::new(Method::PUT, format!("{route}/{PRE_VERIFIED}/reservation"))
+                .key(admin)
+                .json(&json!({"tenant_id": "merchant-78"})),
+        )
+        .await;
+    assert_eq!(reserved.status.as_u16(), 204, "{}", reserved.text);
+    let offered = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/sessions")
+                .key(&keys[0])
+                .json(&json!({"pre_verified_phone_ids": [PRE_VERIFIED]})),
+        )
+        .await;
+    assert_eq!(offered.status.as_u16(), 200, "{}", offered.text);
+    h.call(
+        Call::new(
+            Method::DELETE,
+            format!("{route}/{PRE_VERIFIED}/reservation"),
+        )
+        .key(admin),
+    )
+    .await;
+    h.graph.push_json(200, success());
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("{route}/{PRE_VERIFIED}")).key(admin))
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+
+    let mut secrets = vec![
+        HOSTED_TOKEN.to_owned(),
+        POOL_TOKEN.to_owned(),
+        HOSTED_BUSINESS_TOKEN.to_owned(),
+        MULTI_TOKEN.to_owned(),
+        MULTI_CODE.to_owned(),
+        HOSTED_PROOF.to_owned(),
+        keys[0].clone(),
+        keys[1].clone(),
+        state,
+        "+15550783881".to_owned(),
+    ];
+    // Six-digit secrets are matched as whole tokens and in the shapes a
+    // line would print them in (see `signup`).
+    for pin in [HOSTED_PIN, MULTI_PIN, PRE_VERIFIED_CODE] {
+        secrets.push(pin.to_owned());
+        secrets.push(format!("\"{pin}\""));
+        secrets.push(format!("pin={pin}"));
+        secrets.push(format!("code={pin}"));
+        secrets.push(format!("pin\":{pin}"));
+    }
+    secrets
 }

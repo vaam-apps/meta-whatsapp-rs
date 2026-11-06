@@ -142,6 +142,7 @@ impl RouteClass {
             | Operation::StartSignup
             | Operation::CompleteSignup
             | Operation::ResumeSignup
+            | Operation::CompleteHostedSignup
             | Operation::EraseCustomer
             | Operation::CreateWebhookEndpoint
             | Operation::UpdateWebhookEndpoint
@@ -555,6 +556,7 @@ mod tests {
             ("complete_signup", RouteClass::Send),
             ("list_signup_attempts", RouteClass::Read),
             ("resume_signup", RouteClass::Send),
+            ("complete_hosted_signup", RouteClass::Send),
             ("erase_customer", RouteClass::Send),
             ("create_webhook_endpoint", RouteClass::Send),
             ("list_webhook_endpoints", RouteClass::Read),

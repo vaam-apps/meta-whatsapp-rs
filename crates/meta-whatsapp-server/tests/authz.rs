@@ -1381,3 +1381,104 @@ async fn only_metas_refusal_of_the_object_is_not_found() {
         }
     }
 }
+
+/// Roadmap M3f: the hosted signup and the pool's routes follow the
+/// authorization order, and M1.3's table (which walks the committed
+/// document) holds them: `every_keyed_operation_needs_a_key_of_its_kind_before_the_body`
+/// covers each of them by construction (step 1, the key's kind, before
+/// the body). Here the steps after it, which need the deployment's
+/// settings on: a tenant key without `signup` is `403` before anything
+/// else (step 3); the hosted claim of another tenant's WABA is `409`
+/// before the arrival is touched or Meta asked (step 4's cousin, D4) and
+/// never reads the vault; the pool's routes are the admin key's, a
+/// tenant's (platform keys included) `403`, Meta never asked.
+/// Decisive: the scope check removed (the first assertion), D4 after the
+/// claim (the second), the admin guard removed (the third).
+#[tokio::test]
+async fn the_hosted_and_pool_routes_follow_the_authorization_order() {
+    use common::signup::{BUSINESS, HOSTED_TOKEN, POOL_BUSINESS, POOL_TOKEN, partner_added};
+    use meta_whatsapp_rs::core::ids::BusinessId;
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    let h = Harness::with_settings(common::signup::settings(
+        common::signup::tech_provider()
+            .hosted_signup(AccessToken::new(HOSTED_TOKEN))
+            .pre_verified_pool(
+                BusinessId::new(POOL_BUSINESS).unwrap(),
+                AccessToken::new(POOL_TOKEN),
+            ),
+    ));
+    h.tenant(A).await;
+    h.tenant(B).await;
+    h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
+    let hosted_body = json!({"waba_id": WABA_A, "owner_business_id": BUSINESS});
+    h.webhook(&partner_added(WABA_A, BUSINESS)).await;
+    let reads = h.kv.vault_reads();
+
+    // Step 3: B's key without the scope.
+    let no_scope = h.tenant_key(B, &[Scope::Send]).await;
+    let reply = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/hosted")
+                .key(&no_scope)
+                .json(&hosted_body),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::FORBIDDEN, "forbidden"),
+        "{}",
+        reply.text
+    );
+
+    // D4: B names A's WABA.
+    let signup = h.tenant_key(B, &[Scope::Signup]).await;
+    let reply = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/hosted")
+                .key(&signup)
+                .json(&hosted_body),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "waba_owned_by_another_tenant"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.kv.vault_reads(), reads, "the vault was never read");
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+
+    // The pool: the operator's only.
+    let platform = h.platform_key(AllowedTenants::All, &ALL_SCOPES).await;
+    for key in [&signup, &platform] {
+        for (method, path, body) in [
+            (Method::GET, "/v1/admin/pre-verified-numbers", json!({})),
+            (
+                Method::POST,
+                "/v1/admin/pre-verified-numbers",
+                json!({"phone_number": "+15550783881"}),
+            ),
+            (
+                Method::PUT,
+                "/v1/admin/pre-verified-numbers/1972385232742999/reservation",
+                json!({"tenant_id": B}),
+            ),
+        ] {
+            let reply = h
+                .call(
+                    Call::new(method.clone(), path)
+                        .key(key)
+                        .tenant(B)
+                        .json(&body),
+                )
+                .await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::FORBIDDEN, "forbidden"),
+                "{method} {path}: {}",
+                reply.text
+            );
+        }
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+}
