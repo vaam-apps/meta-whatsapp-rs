@@ -143,3 +143,24 @@ export async function holdsGroup(api: WhatsApp, pn: string, groupId: string): Pr
   }
   throw new WhatsAppError(error.error);
 }
+
+// Replace a group's picture (multipart, the one field `file`). A JPEG of at
+// most 5 MiB, square and at least 192 by 192 pixels: anything else is
+// refused (`invalid_request` on `file`, `media_too_large`) with no request
+// to Meta. Plain fetch: the form builds its own boundary. A `204` means
+// Meta was asked; its `group_settings_update` event says whether the
+// picture was applied.
+export async function setGroupPicture(baseUrl: string, key: string, pn: string, groupId: string, jpeg: Blob): Promise<void> {
+  const form = new FormData();
+  form.append("file", jpeg, "group.jpg");
+  const path = `/v1/numbers/${encodeURIComponent(pn)}/groups/${encodeURIComponent(groupId)}/picture`;
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${key}` },
+    body: form,
+  });
+  if (!response.ok) {
+    const failed: { error: ErrorObject } = await response.json();
+    throw new WhatsAppError(failed.error);
+  }
+}

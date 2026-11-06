@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-server-groups
-description: "Managing a business number's WhatsApp groups through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - asking for a group (202 and a request id, the group's id arriving in a webhook event), listing and reading groups, changing the subject and description, deleting, invite links (read, reset), participants (list, remove by phone, wa_id or BSUID), join requests (list, approve, reject), group analytics, the scope groups, why a group the number does not hold is not_found before anything reaches Meta, and what the logs never hold. Load when a CMS or a Medusa store creates or moderates WhatsApp groups for a merchant's number through the service."
+description: "Managing a business number's WhatsApp groups through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - asking for a group (202 and a request id, the group's id arriving in a webhook event), listing and reading groups, changing the subject and description, replacing the group's picture (a square JPEG), deleting, invite links (read, reset), participants (list, remove by phone, wa_id or BSUID), join requests (list, approve, reject), group analytics, the scope groups, why a group the number does not hold is not_found before anything reaches Meta, and what the logs never hold. Load when a CMS or a Medusa store creates or moderates WhatsApp groups for a merchant's number through the service."
 ---
 
 # meta-whatsapp-rs-server-groups
 
-> **Verified against meta-whatsapp-rs 69c142402b7adb076c5c42c42f22b8c925a9fd3a (2026-11-05).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 7a43c78d92c3397551617c54bc9a272d993b92c9 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/groups.ts](examples/groups.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#groups).
 
@@ -27,6 +27,7 @@ All under `/v1/numbers/{pn}/groups`, with the number's WABA token:
 | `POST /v1/numbers/{pn}/groups` | ask for a group (`CreateGroupRequest`: `subject`, `description`, `join_approval_mode`); `202` with `request_id`; takes an `Idempotency-Key` |
 | `GET /v1/numbers/{pn}/groups` | the number's groups (`limit`, `after`, `before`): `next_after` for the next page |
 | `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/groups/{group_id}` | read (`fields`), change `subject` and `description` (`204`), delete (`204`) |
+| `PUT /v1/numbers/{pn}/groups/{group_id}/picture` | replace the picture: a form of one `file`, a square JPEG (`204`) |
 | `GET`, `POST /v1/numbers/{pn}/groups/{group_id}/invite-link` | the invite link; replace it |
 | `GET /v1/numbers/{pn}/groups/{group_id}/participants` | who is in the group, and how many |
 | `POST /v1/numbers/{pn}/groups/{group_id}/participants/remove` | remove 1 to 8 participants |
@@ -78,6 +79,23 @@ A group Meta no longer has is `not_found` too, with no Meta code. A
 number that moved to another tenant keeps its groups' records under the
 old tenant: list its groups to make them the new one's.
 
+## The picture
+
+A form of one field, `file`: a JPEG of at most 5 MiB, square and at least
+192 by 192 pixels. The service judges the bytes, not the name or the part's
+type, and reads only the file's header for the size in pixels; a file that
+is not that is `422` on `file`, one over 5 MiB is `413 media_too_large`
+(the body is read no further than the limit), and Meta is asked of neither.
+The route shares the media uploads' slots: a tenant with its share busy gets
+`429`. It takes no `Idempotency-Key`: setting the same picture twice is the
+same state. `204` means Meta was asked; whether it applied the picture
+arrives in a group settings update event.
+
+```ts
+  const form = new FormData();
+  form.append("file", jpeg, "group.jpg");
+```
+
 ## Invite links, participants, join requests
 
 The invite link (`GroupInviteLink`'s `invite_link`) is a credential: whoever
@@ -111,7 +129,7 @@ Do the same on your side: log the request, not the people.
 
 ## What meta-whatsapp-rs does not do
 
-The group's picture, pinning a message (a send), adding participants
+Pinning a message (a send), adding participants
 (Meta: they join through the invite link), deleting the invite link and
 leaving a group (Meta documents no call; delete the group instead, which
 removes every participant and the business). Meta's refusals of a group
