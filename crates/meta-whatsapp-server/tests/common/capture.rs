@@ -347,6 +347,11 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // people blocked, a code's message and a number filter are not logged.
     secrets.section("commerce");
     secrets.extend(commerce_qr_analytics(h, &admin).await);
+    // The Marketing Messages API, max price, welcome message sequences and
+    // the max price agreement (roadmap M5h): a recipient, a parameter, a
+    // welcome message and the signer are not logged.
+    secrets.section("marketing");
+    secrets.extend(marketing(h, &admin).await);
     secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -3067,6 +3072,395 @@ fn check_settings_audit(changes: &[&serde_json::Value]) {
     }
 }
 
+/// A marketing send's recipient and parameter, a welcome message, a
+/// sequence's name and the agreement's signer and token (roadmap M5h):
+/// personal data and secrets, in no log line.
+const MARKETING_PHONE: &str = "+16315559090";
+const MARKETING_PARAMETER: &str = "MARKETING-PARAMETER-FOR-THE-LOGS";
+const WELCOME_TEXT: &str = "WELCOME-TEXT-FOR-THE-LOGS";
+const WELCOME_AUTOFILL: &str = "WELCOME-AUTOFILL-FOR-THE-LOGS";
+const WELCOME_NAME: &str = "WELCOME-NAME-FOR-THE-LOGS";
+const SIGNER_NAME: &str = "Signer Name For The Logs";
+const SIGNER_EMAIL: &str = "signer.for.the.logs@signer-domain.example";
+const BUSINESS_TOKEN: &str = "EAAB-business-token-for-the-logs";
+
+/// The audit actions of the tenant's marketing changes (roadmap M5h), in
+/// the order the scenario `marketing` takes them.
+const MARKETING_ACTIONS: [&str; 7] = [
+    "cloud_api_marketing_set",
+    "marketing_template_duplicated",
+    "template_max_price_set",
+    "template_max_price_cleared",
+    "welcome_sequence_created",
+    "welcome_sequence_updated",
+    "welcome_sequence_deleted",
+];
+
+/// The Marketing Messages API, max price and welcome message sequences
+/// (roadmap M5h), each exercised with the legal acts on, and the
+/// operator's signing of the max price agreement (answered, refused
+/// quoting the signer, cut by a timeout). Returns what must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    const TEMPLATE: &str = "1407680676729941";
+    const SEQUENCE: &str = "186473890";
+    const BUSINESS: &str = "529216684107530";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["marketing"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let call = |method: Method, path: String| Call::new(method, path).key(&key);
+    let ok = |reply: &super::Reply, status: u16| {
+        assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+    };
+    let owned_template = || {
+        h.graph
+            .push_json(200, json!({"name": "seasonal_sale_promo", "id": TEMPLATE}));
+        h.graph.push_json(
+            200,
+            json!({"data": [{"id": TEMPLATE, "name": "seasonal_sale_promo"}]}),
+        );
+    };
+    let owned_sequence = || {
+        h.graph.push_json(
+            200,
+            json!([{"sequence_id": SEQUENCE, "name": WELCOME_NAME,
+                    "welcome_message_sequence": {"text": WELCOME_TEXT,
+                        "autofill_message": {"content": WELCOME_AUTOFILL}},
+                    "is_used_in_ad": false}]),
+        );
+    };
+    // A send, answered; then refused, Meta's text quoting the recipient and
+    // the parameter.
+    let send = json!({
+        "to": {"phone": MARKETING_PHONE},
+        "template": {"name": "seasonal_sale_promo", "language": {"code": "en_US"},
+            "components": [{"type": "body", "parameters": [{"type": "text", "text": MARKETING_PARAMETER}]}]},
+        "product_policy": "STRICT",
+        "message_activity_sharing": true,
+        "bid_spec": {"per_message_bid_multiplier": 1.5}
+    });
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "contacts": [{"input": MARKETING_PHONE, "wa_id": "16315559090"}],
+               "messages": [{"id": "wamid.HBgLMTYzMTU1NTkwOTAVAgARGBI5QTNDQTVCM0Q0Q0Q2RTY3RTcA"}]}),
+    );
+    let sent = h
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&send))
+        .await;
+    ok(&sent, 202);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#131055) Message failed to send: {MARKETING_PARAMETER}"),
+                         "type": "OAuthException", "code": 131_055,
+                         "error_data": {"messaging_product": "whatsapp",
+                                        "details": format!("{MARKETING_PHONE} {MARKETING_PARAMETER}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused = h
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&send))
+        .await;
+    assert!(refused.status.is_client_error(), "{}", refused.text);
+    // Onboarding and the Cloud API switch.
+    h.graph.push_json(
+        200,
+        json!({"marketing_messages_onboarding_status": "ELIGIBLE", "id": WABA}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"owner_business_info": {"name": "Lucky Shrub", "id": BUSINESS,
+               "marketing_messages_onboarding_status": {"status": "REQUEST_SENT", "time": "2025-08-13"}}}),
+    );
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/marketing/onboarding"),
+        ))
+        .await,
+        200,
+    );
+    h.graph.push_json(200, json!({"id": WABA}));
+    ok(
+        &h.call(
+            call(
+                Method::PUT,
+                format!("/v1/wabas/{WABA}/marketing/cloud-api-marketing"),
+            )
+            .json(&json!({"disabled": true})),
+        )
+        .await,
+        204,
+    );
+    h.graph.push_json(
+        200,
+        json!({"disable_marketing_messages_on_cloud_api": true, "id": WABA}),
+    );
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/marketing/cloud-api-marketing"),
+        ))
+        .await,
+        200,
+    );
+    // Max price: a duplicate, a price set and cleared, a reach estimate.
+    owned_template();
+    h.graph.push_json(
+        200,
+        json!({"id": "1733678867511493", "status": "APPROVED", "category": "MARKETING",
+               "source_template_id": TEMPLATE}),
+    );
+    ok(
+        &h.call(
+            call(
+                Method::POST,
+                format!("/v1/wabas/{WABA}/marketing/template-duplicates"),
+            )
+            .json(&json!({"source_template_id": TEMPLATE, "name": "seasonal_sale_promo_cheaper",
+                          "optimization_spec": {"bid_amount": 5000}})),
+        )
+        .await,
+        201,
+    );
+    owned_template();
+    h.graph.push_json(
+        200,
+        json!({"optimization_spec": {"bid_strategy": "LOWEST_COST_WITH_BID_CAP", "bid_amount": 87000,
+               "bid_country_multiplier_overrides": [{"key": "IN", "value": 1.2}]}, "id": TEMPLATE}),
+    );
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/marketing/templates/{TEMPLATE}/max-price"),
+        ))
+        .await,
+        200,
+    );
+    owned_template();
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(
+            call(
+                Method::PUT,
+                format!("/v1/wabas/{WABA}/marketing/templates/{TEMPLATE}/max-price"),
+            )
+            .json(&json!({"bid_amount": 5000, "bid_country_multiplier_overrides": {"IN": 1.2}})),
+        )
+        .await,
+        204,
+    );
+    owned_template();
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(call(
+            Method::DELETE,
+            format!("/v1/wabas/{WABA}/marketing/templates/{TEMPLATE}/max-price"),
+        ))
+        .await,
+        204,
+    );
+    h.graph.push_json(
+        200,
+        json!({"waba_currency": "USD", "estimates": [{"bid_amount": 400, "users": 1000,
+               "deliveries_lower_bound": 500, "deliveries_upper_bound": 570,
+               "cost_lower_bound": 389.74, "cost_upper_bound": 390.74}]}),
+    );
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/marketing/reach-estimates?countries=IN&date_interval=L7D"),
+        ))
+        .await,
+        200,
+    );
+    // Welcome message sequences: created, refused (Meta's text quoting the
+    // message), read, listed, changed and deleted.
+    let welcome = json!({"name": WELCOME_NAME,
+        "welcome_message_sequence": {"text": WELCOME_TEXT,
+            "autofill_message": {"content": WELCOME_AUTOFILL},
+            "ice_breakers": [{"title": "Quick reply 1"}]}});
+    h.graph.push_json(200, json!({"sequence_id": SEQUENCE}));
+    ok(
+        &h.call(
+            call(Method::POST, format!("/v1/wabas/{WABA}/welcome-sequences")).json(&welcome),
+        )
+        .await,
+        201,
+    );
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#4027001) Invalid input {WELCOME_TEXT}"),
+                         "type": "OAuthException", "code": 4_027_001,
+                         "error_data": {"details": format!("{WELCOME_AUTOFILL} {WELCOME_NAME}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused = h
+        .call(call(Method::POST, format!("/v1/wabas/{WABA}/welcome-sequences")).json(&welcome))
+        .await;
+    assert!(refused.status.is_server_error(), "{}", refused.text);
+    owned_sequence();
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/welcome-sequences/{SEQUENCE}"),
+        ))
+        .await,
+        200,
+    );
+    owned_sequence();
+    ok(
+        &h.call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/welcome-sequences"),
+        ))
+        .await,
+        200,
+    );
+    owned_sequence();
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(
+            call(
+                Method::PATCH,
+                format!("/v1/wabas/{WABA}/welcome-sequences/{SEQUENCE}"),
+            )
+            .json(&json!({"name": WELCOME_NAME})),
+        )
+        .await,
+        204,
+    );
+    owned_sequence();
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(call(
+            Method::DELETE,
+            format!("/v1/wabas/{WABA}/welcome-sequences/{SEQUENCE}"),
+        ))
+        .await,
+        204,
+    );
+    // The operator signs the max price agreement: answered, refused (Meta's
+    // text quoting the signer), then cut by a timeout.
+    let sign = |token: &str| {
+        Call::new(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+        )
+        .key(admin)
+        .json(&json!({"signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL, "token": token}))
+    };
+    h.graph.push_json(
+        200,
+        json!({"status": "pending", "signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL,
+               "message": format!("Agreement email sent to {SIGNER_EMAIL}")}),
+    );
+    ok(&h.call(sign(BUSINESS_TOKEN)).await, 200);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) Invalid email {SIGNER_EMAIL}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": format!("{SIGNER_NAME} {SIGNER_EMAIL}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused = h.call(sign(BUSINESS_TOKEN)).await;
+    assert!(refused.status.is_client_error(), "{}", refused.text);
+    h.graph.push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    ok(&h.call(sign(BUSINESS_TOKEN)).await, 504);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        MARKETING_PHONE.to_owned(),
+        MARKETING_PARAMETER.to_owned(),
+        WELCOME_TEXT.to_owned(),
+        WELCOME_AUTOFILL.to_owned(),
+        WELCOME_NAME.to_owned(),
+        SIGNER_NAME.to_owned(),
+        SIGNER_EMAIL.to_owned(),
+        BUSINESS_TOKEN.to_owned(),
+    ]
+}
+
+/// The audit events of `marketing` (roadmap M5h): the tenant's changes by
+/// ids and flags, in order, every one answered, none naming a text; the
+/// operator's agreement under the admin key's id and the business, answered
+/// then, cut by a timeout, `unknown`, with no signer.
+fn check_marketing_audit(events: &[serde_json::Value], changes: &[&serde_json::Value]) {
+    let ours: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|action| MARKETING_ACTIONS.contains(&action))
+        })
+        .collect();
+    let seen: Vec<&str> = ours
+        .iter()
+        .map(|fields| fields["action"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(seen, MARKETING_ACTIONS, "the marketing changes' audit events");
+    for fields in &ours {
+        assert_eq!(fields["outcome"], "answered", "{fields}");
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "template_id"
+                        | "new_template_id"
+                        | "sequence_id"
+                        | "bid_amount"
+                        | "disabled"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
+    assert_eq!(ours[0]["disabled"], true, "{}", ours[0]);
+    assert_eq!(ours[1]["new_template_id"], "1733678867511493", "{}", ours[1]);
+    assert_eq!(ours[1]["bid_amount"], 5000, "{}", ours[1]);
+    let agreements: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["action"] == "max_price_agreement_signed")
+        .map(|e| &e["fields"])
+        .collect();
+    let outcomes: Vec<&str> = agreements
+        .iter()
+        .map(|fields| fields["outcome"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(outcomes, ["answered", "unknown"], "the agreement's events");
+    for fields in agreements {
+        assert_eq!(fields["message"], "admin change", "{fields}");
+        assert!(fields["admin_key_id"].is_string(), "{fields}");
+        assert_eq!(fields["business_id"], "529216684107530", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message" | "action" | "admin_key_id" | "business_id" | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
+}
+
 /// An OTP recipient: in no log line.
 pub const OTP_PHONE: &str = "+16315554444";
 
@@ -3368,6 +3762,7 @@ fn check_audit(logs: &str) {
     check_group_audit(&changes);
     check_display_name_audit(&changes);
     check_settings_audit(&changes);
+    check_marketing_audit(&events, &changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
         .filter(|fields| {
@@ -3378,6 +3773,9 @@ fn check_audit(logs: &str) {
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| SETTINGS_ACTIONS.contains(&action))
+                && !fields["action"]
+                    .as_str()
+                    .is_some_and(|action| MARKETING_ACTIONS.contains(&action))
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| action.starts_with("group_"))

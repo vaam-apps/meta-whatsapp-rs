@@ -24,7 +24,7 @@
 //! module keeps the routes, the request and answer types with their
 //! OpenAPI schema.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use meta_whatsapp_rs::client::marketing::{WelcomeMessage, WelcomeSequenceUpdate};
 use meta_whatsapp_rs::core::secret::AccessToken;
