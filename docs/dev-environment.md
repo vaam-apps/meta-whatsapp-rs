@@ -194,7 +194,7 @@ roadmap L19, L19b and L19c) run `adapters::media::FfmpegConverter` against a rea
 `libwebp_anim` the sticker tests use (Ubuntu's package has both). Neither the dev container nor the service's image
 carries one, on purpose (its licence is the deployer's choice): without
 one the tests print why and skip. CI installs `ffmpeg` on its runner
-(`.github/workflows/ci.yml`, before `just ci`) and sets
+(`.github/workflows/ci.yml`, in the job that runs `just test`) and sets
 `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns that skip into a
 failure, so CI is where they count. To run them locally, install `ffmpeg`
 on the host (Debian and Ubuntu: `apt-get install ffmpeg`), or name one

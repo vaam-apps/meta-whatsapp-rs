@@ -31,7 +31,9 @@ Either open the repo in the dev container (see
 just ci        # lint, check, test, skills-check, skills-ts, doc, features, deny, test-live
 ```
 
-CI runs exactly this. A change is verified when `just ci` exits 0 on its
+CI runs this list's recipes as parallel jobs (`.github/workflows/ci.yml`;
+`crates/meta-whatsapp-rs/tests/ci_workflow.rs` fails if one is left out), and
+its `just ci` job is the required check, failing unless every job passed. A change is verified when `just ci` exits 0 on its
 final head — not when a subset passes, and not when a reconstruction of the
 commands passes. `just test` *skips* the live Postgres/Redis/MongoDB tests; only
 `just test-live` (which sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`) proves them.
