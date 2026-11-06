@@ -177,7 +177,8 @@ pub enum ErrorKind {
     Permission,
 
     // ── Throttling ────────────────────────────────────────────────────────
-    /// `4` (app), `80007` (WABA), `130429` (throughput), and the Business
+    /// `4` (app), `80007` (WABA), `130429` (throughput), `613` (calling's
+    /// page: the call-permission read hit its limit), and the Business
     /// Use Case limits `80008` (WhatsApp Business Management API), `80009`
     /// (Catalog Management) and `80014` (Catalog Batch,
     /// [`GraphApiError::BUSINESS_USE_CASE_LIMITS`]): back off and retry.
@@ -201,7 +202,9 @@ pub enum ErrorKind {
     // ── Request shape ─────────────────────────────────────────────────────
     /// `100`, `131008`, `131009`, `131021`, `135000`, `33`, and the In-App
     /// Signup request errors `2494166`–`2494179`: missing, misspelled or
-    /// invalid parameter. The Groups API's `131202` (duplicate participants
+    /// invalid parameter. The Calling API's `100` (an invalid parameter or
+    /// SDP) and `131009` (a request without `messaging_account_id`, or a
+    /// `voice_call` button of an unsupported sender). The Groups API's `131202` (duplicate participants
     /// in the input), `131209` (a profile picture that is not square) and
     /// `131210` (one of 192px or less).
     InvalidParameter,
@@ -235,7 +238,11 @@ pub enum ErrorKind {
     /// marketing templates allowed on this API (MM API for WhatsApp).
     MarketingNotAllowed,
     /// `131026`: undeliverable (not on WhatsApp, old client, ToS pending…).
-    /// `131020`: a message to a group of a single member.
+    /// `131020`: a message to a group of a single member. `138001`: the
+    /// receiver cannot receive calls (not a WhatsApp number, terms not
+    /// accepted, an unsupported client). `131030`: the recipient is not in
+    /// the allowed list of a public test number (calling's page; sends meet
+    /// it too).
     Undeliverable,
     /// `130403`: this business blocked the user. Unblock first.
     BlockedByBusiness,
@@ -308,7 +315,8 @@ pub enum ErrorKind {
     /// member of it.
     NotFound,
     /// `2494165`: the API is not enabled for this account (e.g. In-App
-    /// Signup on this WABA). Also a media converter this deployment lacks
+    /// Signup on this WABA). `138013`: business-initiated calling is not
+    /// available for the number. Also a media converter this deployment lacks
     /// (`ConversionError::BinaryMissing`, `EncoderMissing`): not Meta's
     /// answer, as [`Error::graph`](crate::Error::graph) being `None` tells.
     /// `131215`: the number is not eligible for the Groups API.
@@ -349,8 +357,49 @@ pub enum ErrorKind {
     /// start the pagination again from the beginning.
     InvalidCursor,
 
+    // ── Calling (`calling/troubleshooting`) ───────────────────────────────
+    /// `138000` (Calling is not enabled on the number), `138015` (it cannot
+    /// be enabled: the messaging limit is under 2000) and `138018` (its
+    /// technical prerequisites are not met: no SIP configuration, or no app
+    /// subscribed to the `calls` webhook field). Change the number's call
+    /// settings, then ask again; retrying alone does not help.
+    CallingNotEnabled,
+    /// `138014`: Calling on the number is temporarily disabled for low
+    /// quality. Meta lifts it; retry after, not before.
+    CallingTemporarilyDisabled,
+    /// `138006`: no approved call permission from the recipient. Ask for it
+    /// (a call-permission request) and wait for the person to accept.
+    CallPermissionMissing,
+    /// `138017`: a call-permission request is not needed, the person already
+    /// gave this number a permanent permission.
+    CallPermissionAlreadyGranted,
+    /// `138003`: a call is already ongoing with the receiver. Ask again when
+    /// it ends.
+    CallAlreadyOngoing,
+    /// `138002` (the concurrent calls limit of the number), `138005` (the
+    /// limit on calls the number may initiate), `138009` (call-permission
+    /// requests to one person, reset by a connected call) and `138012` (the
+    /// business-initiated calls allowed in 24 hours; Meta's `error_data`
+    /// gives when the next is allowed). Not [`ErrorKind::RateLimited`]: a
+    /// call is never resent automatically, and none of these is retryable.
+    CallLimitReached,
+    /// `138004` (an error while connecting the call), `138007` (the call
+    /// timed out: the answer SDP was not applied in time), `138019` (the
+    /// WhatsApp client failed to set the call up) and `138020` (it failed
+    /// to reach the relay). The call may have connected: never resent
+    /// automatically, and not retryable; check the call before placing
+    /// another.
+    CallConnectionFailed,
+    /// `138021` (the client ended the call: no media received for a long
+    /// time), `138022` (none transmitted) and `138023` (accepted, ended
+    /// with no media signals, so Meta could not tell whether it connected).
+    /// Meta's call-terminate webhook carries them. Check the media path;
+    /// never retried automatically.
+    CallMediaTimeout,
+
     // ── Billing ───────────────────────────────────────────────────────────
-    /// `131042`, `134011`: payment method or payments ToS problem.
+    /// `131042`, `134011`: payment method or payments ToS problem. `131044`:
+    /// no valid payment method for a user-initiated call.
     Payment,
 
     // ── Meta side ─────────────────────────────────────────────────────────
@@ -430,6 +479,14 @@ impl ErrorKind {
         Self::GroupParticipantNotFound,
         Self::JoinRequestNotFound,
         Self::InvalidCursor,
+        Self::CallingNotEnabled,
+        Self::CallingTemporarilyDisabled,
+        Self::CallPermissionMissing,
+        Self::CallPermissionAlreadyGranted,
+        Self::CallAlreadyOngoing,
+        Self::CallLimitReached,
+        Self::CallConnectionFailed,
+        Self::CallMediaTimeout,
         Self::Payment,
         Self::ServiceUnavailable,
         Self::Unknown,
@@ -492,6 +549,14 @@ impl ErrorKind {
             Self::GroupParticipantNotFound => "group_participant_not_found",
             Self::JoinRequestNotFound => "join_request_not_found",
             Self::InvalidCursor => "invalid_cursor",
+            Self::CallingNotEnabled => "calling_not_enabled",
+            Self::CallingTemporarilyDisabled => "calling_temporarily_disabled",
+            Self::CallPermissionMissing => "call_permission_missing",
+            Self::CallPermissionAlreadyGranted => "call_permission_already_granted",
+            Self::CallAlreadyOngoing => "call_already_ongoing",
+            Self::CallLimitReached => "call_limit_reached",
+            Self::CallConnectionFailed => "call_connection_failed",
+            Self::CallMediaTimeout => "call_media_timeout",
             Self::Payment => "payment",
             Self::ServiceUnavailable => "service_unavailable",
             Self::Unknown => "unknown",
@@ -505,7 +570,8 @@ impl ErrorKind {
             3 | 10 | 200..=299 | 131005 => Self::Permission,
             // 80008, 80009, 80014: `GraphApiError::BUSINESS_USE_CASE_LIMITS`
             // (graph-api/overview/rate-limiting § Error Codes).
-            4 | 80007 | 80008 | 80009 | 80014 | 130429 => Self::RateLimited,
+            // 613 (calling/troubleshooting): the call-permission read's limit.
+            4 | 80007 | 80008 | 80009 | 80014 | 130429 | 613 => Self::RateLimited,
             131048 => Self::SpamRateLimited,
             131056 => Self::PairRateLimited,
             131064 => Self::ClassificationLimitReached,
@@ -536,8 +602,10 @@ impl ErrorKind {
             131050 => Self::MarketingOptedOut,
             131055 | 131063 | 134100 => Self::MarketingNotAllowed,
             // 131020 (groups/error-codes): messages cannot go to a group
-            // of a single member.
-            131020 | 131026 => Self::Undeliverable,
+            // of a single member. 138001 and 131030 (calling/troubleshooting):
+            // the receiver cannot be called; the recipient is not in a
+            // public test number's allowed list.
+            131020 | 131026 | 131030 | 138001 => Self::Undeliverable,
             130403 => Self::BlockedByBusiness,
             130472 => Self::ExperimentHoldout,
             131062 => Self::RecipientNotSupported,
@@ -568,7 +636,9 @@ impl ErrorKind {
             131041 | 2494164 => Self::NotFound,
             // 131215 (groups/error-codes): the number is not eligible for
             // the Groups API.
-            2494165 | 131215 => Self::FeatureNotAvailable,
+            // 138013 (calling/troubleshooting): business-initiated calling
+            // is not available for the number.
+            2494165 | 131215 | 138013 => Self::FeatureNotAvailable,
             131059 => Self::InvalidCursor,
             131201 => Self::GroupPartiallyApplied,
             131203 => Self::RecipientTermsNotAccepted,
@@ -578,7 +648,17 @@ impl ErrorKind {
             131212 => Self::GroupParticipantNotFound,
             131213 => Self::JoinRequestNotFound,
             131214 => Self::GroupCreationDisabled,
-            131042 | 134011 => Self::Payment,
+            138000 | 138015 | 138018 => Self::CallingNotEnabled,
+            138014 => Self::CallingTemporarilyDisabled,
+            138006 => Self::CallPermissionMissing,
+            138017 => Self::CallPermissionAlreadyGranted,
+            138003 => Self::CallAlreadyOngoing,
+            138002 | 138005 | 138009 | 138012 => Self::CallLimitReached,
+            138004 | 138007 | 138019 | 138020 => Self::CallConnectionFailed,
+            138021..=138023 => Self::CallMediaTimeout,
+            // 131044 (calling/troubleshooting): no valid payment method for
+            // a user-initiated call.
+            131042 | 131044 | 134011 => Self::Payment,
             1 | 2 | 131000 | 131016 | 131057 | 133004 | 2494100 => Self::ServiceUnavailable,
             _ => Self::Unknown,
         }
@@ -792,6 +872,102 @@ mod tests {
         }
     }
 
+    /// Every code of `calling/troubleshooting`'s Calling error codes table
+    /// (fetched 2026-11-06) with its kind. Decisive: delete a `from_code`
+    /// arm and its row fails; so does a call kind that becomes retryable or
+    /// resendable. The page lists `138000`-`138007`, `138009`,
+    /// `138012`-`138015` and `138017`-`138023` (not `138008`, `138010`,
+    /// `138011`, `138016`), and the shared codes `100`, `613`, `131009`,
+    /// `131030`, `131044` and `131055`.
+    #[test]
+    fn the_calling_error_codes_classify_as_their_pages_say() {
+        use ErrorKind as K;
+        // (code, kind, the page's HTTP status)
+        let table = [
+            (100, K::InvalidParameter, 400),
+            (613, K::RateLimited, 429),
+            (131_009, K::InvalidParameter, 400),
+            (131_030, K::Undeliverable, 400),
+            (131_044, K::Payment, 400),
+            // 131055 is MarketingNotAllowed since the messages page; the
+            // calling page's meaning (Graph calls refused for a SIP number)
+            // is not told apart by code. Pinned so a change is deliberate.
+            (131_055, K::MarketingNotAllowed, 400),
+            (138_000, K::CallingNotEnabled, 401),
+            (138_001, K::Undeliverable, 400),
+            (138_002, K::CallLimitReached, 429),
+            (138_003, K::CallAlreadyOngoing, 400),
+            (138_004, K::CallConnectionFailed, 500),
+            (138_005, K::CallLimitReached, 429),
+            (138_006, K::CallPermissionMissing, 401),
+            (138_007, K::CallConnectionFailed, 500),
+            (138_009, K::CallLimitReached, 400),
+            (138_012, K::CallLimitReached, 400),
+            (138_013, K::FeatureNotAvailable, 400),
+            (138_014, K::CallingTemporarilyDisabled, 400),
+            (138_015, K::CallingNotEnabled, 400),
+            (138_017, K::CallPermissionAlreadyGranted, 400),
+            (138_018, K::CallingNotEnabled, 400),
+            (138_019, K::CallConnectionFailed, 400),
+            (138_020, K::CallConnectionFailed, 400),
+            (138_021, K::CallMediaTimeout, 400),
+            (138_022, K::CallMediaTimeout, 400),
+            (138_023, K::CallMediaTimeout, 400),
+        ];
+        let call_kinds = [
+            K::CallingNotEnabled,
+            K::CallingTemporarilyDisabled,
+            K::CallPermissionMissing,
+            K::CallPermissionAlreadyGranted,
+            K::CallAlreadyOngoing,
+            K::CallLimitReached,
+            K::CallConnectionFailed,
+            K::CallMediaTimeout,
+        ];
+        for (code, kind, status) in table {
+            assert_eq!(ErrorKind::from_code(code), kind, "code {code}");
+            let mut graph = GraphApiError::new(code, "x");
+            graph.http_status = Some(status);
+            let error = crate::Error::from(graph);
+            if call_kinds.contains(&kind) {
+                // A call is never replayed, and Meta's answer does not
+                // prove a call did not connect: not retryable (a GET is
+                // not looped on it) nor resendable.
+                assert!(!kind.is_retryable(), "{code}");
+                assert!(!kind.is_rejected_before_processing(), "{code}");
+                assert!(!error.is_retryable(), "{code}");
+                assert!(!error.may_resend(), "{code}");
+            }
+        }
+        // A 5xx call failure may have connected; a 4xx refusal did not.
+        for (code, sent) in [(138_004, true), (138_007, true), (138_006, false)] {
+            let status = table.iter().find(|r| r.0 == code).unwrap().2;
+            let mut graph = GraphApiError::new(code, "x");
+            graph.http_status = Some(status);
+            assert_eq!(
+                crate::Error::from(graph).may_have_been_sent(),
+                sent,
+                "{code}"
+            );
+        }
+        // Each new kind is the answer to exactly its codes.
+        for kind in call_kinds {
+            let codes: Vec<i64> = (0..140_000)
+                .filter(|c| ErrorKind::from_code(*c) == kind)
+                .collect();
+            let expected: Vec<i64> = table
+                .iter()
+                .filter(|(_, k, _)| *k == kind)
+                .map(|(c, _, _)| *c)
+                .collect();
+            assert_eq!(codes, expected, "{kind:?}");
+        }
+        // The codes of the range the page does not list stay unclassified.
+        for code in [138_008, 138_010, 138_011, 138_016, 138_024] {
+            assert_eq!(ErrorKind::from_code(code), K::Unknown, "code {code}");
+        }
+    }
+
     #[test]
     fn classification_table_spot_checks() {
         use ErrorKind as K;
@@ -929,6 +1105,20 @@ mod tests {
         ),
         (ErrorKind::JoinRequestNotFound, "join_request_not_found"),
         (ErrorKind::InvalidCursor, "invalid_cursor"),
+        (ErrorKind::CallingNotEnabled, "calling_not_enabled"),
+        (
+            ErrorKind::CallingTemporarilyDisabled,
+            "calling_temporarily_disabled",
+        ),
+        (ErrorKind::CallPermissionMissing, "call_permission_missing"),
+        (
+            ErrorKind::CallPermissionAlreadyGranted,
+            "call_permission_already_granted",
+        ),
+        (ErrorKind::CallAlreadyOngoing, "call_already_ongoing"),
+        (ErrorKind::CallLimitReached, "call_limit_reached"),
+        (ErrorKind::CallConnectionFailed, "call_connection_failed"),
+        (ErrorKind::CallMediaTimeout, "call_media_timeout"),
         (ErrorKind::Payment, "payment"),
         (ErrorKind::ServiceUnavailable, "service_unavailable"),
         (ErrorKind::Unknown, "unknown"),

@@ -4804,7 +4804,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     example) nor for "a participant already in the group"; `131200`,
     `131205`, `131206` and the rest of the range stay `unknown`.
 
-- [ ] **L28. Calling error codes** (`meta-whatsapp-core`, `ErrorKind`;
+- [x] **L28. Calling error codes** (`meta-whatsapp-core`, `ErrorKind`;
   found reviewing M5e): `calling/troubleshooting` lists the codes the
   calling API fails with (`138000` to `138023`, among them `138006`, the
   business has no call permission from the user, which a placed call meets
@@ -4821,6 +4821,29 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     still passes; a calling route's refusal answers the kind and none of
     Meta's text (it may quote an SDP line); the calling routes' guide and
     skill name the new codes in place of "`502 unknown` with Meta's code".
+  - **Done:** `calling/troubleshooting` (read 2026-11-06: `138000`-`138007`,
+    `138009`, `138012`-`138015`, `138017`-`138023`, and the shared `100`,
+    `613`, `131009`, `131030`, `131044`, `131055`) is classified in
+    `ErrorKind::from_code` (design D240-D243, the coordinator's decision of
+    2026-11-06 under the owner's delegation, swappable): existing kinds for `138001`, `131030` (`undeliverable`),
+    `138013` (`feature_not_available`), `131044` (`payment`), `613`
+    (`rate_limited`) and `100`, `131009` (`invalid_parameter`, as before);
+    eight new ones (`calling_not_enabled`, `calling_temporarily_disabled`,
+    `call_permission_missing`, `call_permission_already_granted`,
+    `call_already_ongoing`, `call_limit_reached`, `call_connection_failed`,
+    `call_media_timeout`), each a code of the service (409, 403, 429 or
+    502; §5.2, the OpenAPI document), **pending the owner's confirmation
+    before the first release**. None of the eight is retryable or
+    resendable (D242). Decisive:
+    `the_calling_error_codes_classify_as_their_pages_say` (core) and
+    `meta_calling_error_codes_answer_their_kinds_code_and_none_of_its_text`
+    (service); the calling guide and skill name the new codes. **Left:**
+    `131055` on the page (a Graph call to a SIP number) stays the messages
+    page's `marketing_not_allowed`: a code cannot tell the two apart;
+    `138008`, `138010`, `138011`, `138016` are not on the page and stay
+    `unknown`; the SIP status codes of the page's SIP section are not
+    Graph codes and are not classified; `613` as `rate_limited` makes a
+    non-idempotent POST replayable on it (D241).
 
 ## 4. Service milestones
 
@@ -6824,15 +6847,14 @@ or WABA fails the family's own cross-tenant test).
     **no legal act** (no calling page makes the caller accept terms), and
     **no consent decision** in code (the announcement and its consent are
     Meta's and the integrator's).
-  - **Not done here:** see M5e2; Meta's calling error codes (138xxx) are
-    not classified by the library (`502 unknown` with Meta's code; L28); no
+  - **Not done here:** see M5e2; Meta's calling error codes (138xxx) were
+    not classified by the library when this landed (L28 did it); no
     call of these routes was run against Meta live.
 - [ ] **M5e2. What M5e did not route**: reading a SIP
   server's password (a route behind a scope and an audit event of its
   own, `include_sip_credentials` sent only there), uploading a voicemail
   announcement with Meta's `use_case=call_voicemail_announcement` (the
   library's `Media::upload` and the media routes do not send it),
-  classifying Meta's calling error codes (L28, the library's error tree),
   checking that Meta serves a call's recording and transcript media to
   `?phone_number_id={pn}` (or a route that downloads them another way),
   and the permission request message (a send). Each keeps M5e's rule: a

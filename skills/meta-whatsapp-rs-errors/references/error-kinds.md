@@ -35,7 +35,7 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | --- | --- | --- | --- | --- |
 | `Authentication` | 0, 190 | no | no | Token expired/revoked: re-onboard the merchant (Embedded Signup) or rotate your system user token |
 | `Permission` | 3, 10, 200–299, 131005 | no | no | Permission not granted or removed; check the token's scopes/assets |
-| `RateLimited` | 4, 80007, 130429; 80008, 80009, 80014 (Business Use Case limits: WhatsApp Business Management API, Catalog Management, Catalog Batch) | yes | yes; no for 80008, 80009, 80014 | Back off; the client already retried. For 80008/80009/80014 the wait is minutes (the estimated time to regain access in Meta's `X-Business-Use-Case-Usage` header, which the library does not read): stop calling until then |
+| `RateLimited` | 4, 80007, 130429, 613 (calling: the call-permission read); 80008, 80009, 80014 (Business Use Case limits: WhatsApp Business Management API, Catalog Management, Catalog Batch) | yes | yes; no for 80008, 80009, 80014 | Back off; the client already retried. For 80008/80009/80014 the wait is minutes (the estimated time to regain access in Meta's `X-Business-Use-Case-Usage` header, which the library does not read): stop calling until then |
 | `SpamRateLimited` | 131048 | **no** | no | Sending restricted for the number (quality): Meta's advice is to check its quality status in WhatsApp Manager |
 | `PairRateLimited` | 131056 | yes | yes | Too many messages to the same user; slow down for that user |
 | `ClassificationLimitReached` | 131064 | no | no | Template classification violations; fix categories |
@@ -48,7 +48,7 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `EcosystemEngagementLimit` | 131049 | **no** | no | Per-user marketing limit; do not retry for at least 24 h |
 | `MarketingOptedOut` | 131050 | no | no | User stopped marketing: record the opt-out, never retry |
 | `MarketingNotAllowed` | 131055, 131063, 134100 | no | no | Not a marketing template on the MM API, or marketing disabled on this API |
-| `Undeliverable` | 131020, 131026 | no | no | Not on WhatsApp, old client, ToS pending…; 131020 a message to a group of one member |
+| `Undeliverable` | 131020, 131026, 131030, 138001 | no | no | Not on WhatsApp, old client, ToS pending…; 131020 a message to a group of one member; 131030 a public test number's recipient list; 138001 the receiver cannot be called |
 | `BlockedByBusiness` | 130403 | no | no | You blocked this user; unblock first |
 | `ExperimentHoldout` | 130472 | no | no | Held back by a Meta experiment |
 | `RecipientNotSupported` | 131062 | no | no | This message cannot go to a BSUID; address by phone number |
@@ -71,7 +71,7 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `SyncNotAllowed` | 2593107–2593109 | no | no | Coexistence sync already done, too late, or declined |
 | `DuplicateOnboarding` | 1752041 | no | no | A partner already requested onboarding |
 | `NotFound` | 131041, 2494164 | no | no | e.g. unknown In-App Signup; 131041 a group that does not exist, or the number is not in it |
-| `FeatureNotAvailable` | 131215, 2494165 | no | no | e.g. In-App Signup not enabled on the WABA; 131215 the number is not eligible for the Groups API |
+| `FeatureNotAvailable` | 131215, 138013, 2494165 | no | no | e.g. In-App Signup not enabled on the WABA; 131215 the number is not eligible for the Groups API; 138013 business-initiated calling is not available for the number |
 | `InvalidCursor` | 131059 | no | no | A groups cursor expired or is corrupted: paginate from the start |
 | `GroupPartiallyApplied` | 131201 | no | no | Not every participant was processed (Meta's `206` is a success with `partial`); read the group, never replay blindly |
 | `RecipientTermsNotAccepted` | 131203 | no | no | The person has not accepted WhatsApp's new terms; they must first |
@@ -81,7 +81,15 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `GroupParticipantNotFound` | 131212 | no | no | A participant the request names is not in the group |
 | `JoinRequestNotFound` | 131213 | no | no | A join request the request names does not exist |
 | `GroupCreationDisabled` | 131214 | no | no | Group creation temporarily disabled after excessive marketing messages |
-| `Payment` | 131042, 134011 | no | no | Payment method / payments ToS |
+| `CallingNotEnabled` | 138000, 138015, 138018 | no | no | Calling is not enabled (or cannot be: messaging limit under 2000, or SIP / the `calls` webhook field not set up) on the number: change its call settings |
+| `CallingTemporarilyDisabled` | 138014 | no | no | Calling disabled for low quality; wait until Meta lifts it |
+| `CallPermissionMissing` | 138006 | no | no | No approved call permission from the recipient: send a call-permission request and wait for the person to accept |
+| `CallPermissionAlreadyGranted` | 138017 | no | no | The person gave a permanent permission: no request is needed |
+| `CallAlreadyOngoing` | 138003 | no | no | A call with this person is ongoing: try again when it ends |
+| `CallLimitReached` | 138002, 138005, 138009, 138012 | no | no | A calling limit (concurrent calls, calls, permission requests, business-initiated calls in 24 hours); a call is never resent automatically; `error_data` of 138012 gives when the next is allowed |
+| `CallConnectionFailed` | 138004, 138007, 138019, 138020 | no | no | The call may have connected: check it before placing another |
+| `CallMediaTimeout` | 138021, 138022, 138023 | no | no | No media flowed (the call-terminate webhook carries these): check the media path |
+| `Payment` | 131042, 131044, 134011 | no | no | Payment method / payments ToS; 131044 no valid payment method for a user-initiated call |
 | `ServiceUnavailable` | 1, 2, 131000, 131016, 131057, 133004, 2494100 | yes | **no**, but 131057 on a 4xx | Meta-side; a send that got this may have gone out, except 131057 (the account in maintenance during a throughput upgrade: every request refused) |
 | `Unknown` | anything else | no¹ | no | Read `err.graph()` |
 
