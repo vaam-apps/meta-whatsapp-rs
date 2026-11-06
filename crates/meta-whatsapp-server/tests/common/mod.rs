@@ -935,7 +935,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 18] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 19] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1016,6 +1016,7 @@ impl Sample {
                 "sequence_id" => SAMPLE_SEQUENCE_ID,
                 "business_id" => SAMPLE_BUSINESS_ID,
                 "code" => SAMPLE_QR_CODE,
+                "call_id" => SAMPLE_CALL_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -1085,6 +1086,12 @@ pub fn sample_compliance_info() -> Value {
 
 /// A QR code's id (`qr-codes`, "Create QR code").
 pub const SAMPLE_QR_CODE: &str = "4O4YGZEG3RIVE1";
+
+/// A call's id (`calling/user-initiated-calls`, the connect webhook).
+pub const SAMPLE_CALL_ID: &str = "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh";
+
+/// An SDP the sample calls send: a short WebRTC description (RFC 8866).
+pub const SAMPLE_SDP: &str = "v=0\r\no=- 7602563789789945080 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=ice-pwd:SAMPLEICEPWDFORTHETESTS0\r\n";
 
 /// A payment configuration's name (`payments/payments-in/onboarding-apis`).
 pub const SAMPLE_PAYMENT_CONFIGURATION: &str = "test-payment-configuration";
@@ -1179,6 +1186,12 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
         // Roadmap M5h: a reach estimate names countries and a history.
         ("GET", "/v1/wabas/{waba_id}/marketing/reach-estimates") => {
             Some("countries=IN,US&date_interval=L7D".to_owned())
+        }
+        // Roadmap M5e: a user, by phone number (the `+` is encoded), and
+        // the calls' ranges as the other analytics'.
+        ("GET", "/v1/numbers/{pn}/call-permissions") => Some("phone=%2B16505551234".to_owned()),
+        ("GET", "/v1/wabas/{waba_id}/analytics/calls") => {
+            Some(format!("{}&granularity=DAILY", range()))
         }
         _ => None,
     }
@@ -1370,6 +1383,19 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "signer_email": "jane.doe@example.com",
             "token": "EAAA-sample-business-token"
         }),
+        // Roadmap M5e: the calling settings (`calling/call-settings`), a
+        // call to a user, and the answers to a user's call.
+        ("PATCH", "/v1/numbers/{pn}/call-settings") => {
+            serde_json::json!({"callback_permission_status": "ENABLED"})
+        }
+        ("POST", "/v1/numbers/{pn}/calls") => {
+            serde_json::json!({"to": {"phone": SAMPLE_TO}, "sdp_offer": SAMPLE_SDP})
+        }
+        (
+            "POST",
+            "/v1/numbers/{pn}/calls/{call_id}/pre-accept"
+            | "/v1/numbers/{pn}/calls/{call_id}/accept",
+        ) => serde_json::json!({"sdp_answer": SAMPLE_SDP}),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })
