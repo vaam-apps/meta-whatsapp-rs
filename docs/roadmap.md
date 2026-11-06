@@ -6205,12 +6205,80 @@ design's (§9).
     the second tenant's token is told and the first's, expired, is not;
     plus `the_key_is_pinned` and `the_events_data_is_ids_and_the_expiry_only`.
     Treating `Fresh` as due, and a `None` dedup key, each fail them.
-- [ ] **M3f. Hosted signup, several WABAs, pre-verified numbers** (rows
+- [x] **M3f. Hosted signup, several WABAs, pre-verified numbers** (rows
   121–123).
   - **After:** M3a, L11a, L11b, L11c.
   - **Decisive:** M1.3's table covers the new routes; with the
     multi-WABA option on, a signup granting two WABAs binds both to the
     tenant, and with it off, one.
+  - **Landed:** no new scope and no new tenant operation (the hosted
+    claim is an admin route, D202 as the sabotage review changed it),
+    eleven routes in all (the OpenAPI document grew by six paths,
+    additively), and four
+    settings, all off until set: `WA_SIGNUP_EVERY_GRANTED_WABA`,
+    `WA_HOSTED_SIGNUP`, `WA_SYSTEM_TOKEN` and `WA_PARTNER_BUSINESS_ID`
+    (`config::SignupOptions`; a Solution Partner's system token serves
+    when `WA_SYSTEM_TOKEN` is unset).
+    **Several WABAs** (D200): `Signup::complete` pre-checks D4 on every
+    WABA the event names (`waba_id`, `waba_ids`) before the attempt is
+    redeemed, so one another tenant holds is `409
+    waba_owned_by_another_tenant` with nothing redeemed, bound, stored or
+    asked of Meta; with the option on it then runs the library's
+    `onboard_wabas_with_approval`, each WABA approved (bound, D4
+    atomically) on its own and answered in `wabas` (`connected`, `held`,
+    `refused`, `failed` with `resumable`, kept as an attempt for
+    `POST /v1/signup/resume`); the call fails only when no WABA connected.
+    With it off the primary WABA is bound and `not_bound_waba_ids` says
+    which were not. **Hosted signup** (D201, D202): the webhook
+    pipeline's `AccountUpdates` remembers a signed `PARTNER_ADDED` (not
+    for a WABA a tenant or the vault holds), the operator's
+    `POST /v1/admin/signup/hosted` claims it for the tenant it names
+    (compare-and-swap, one claimant wins), D4 before the claim, then the
+    library's `onboard_hosted_with_approval`; an arrival whose
+    onboarding stopped before `store_token` is put back. **Pre-verified
+    numbers** (D203 to D205): the admin routes over the library's seven
+    calls but sharing and partners, and a per-tenant reservation the
+    launch (`pre_verified_phone_ids`) checks. The decisive tests, in
+    `tests/signup_m3f.rs`:
+    `with_the_option_on_a_signup_granting_two_wabas_binds_both`,
+    `with_the_option_off_it_binds_the_primary_waba_and_says_so`,
+    `a_granted_waba_another_tenant_holds_refuses_the_signup_with_nothing_bound`
+    (with `an_unnamed_grant_another_tenant_holds_is_left_alone` and
+    `a_second_wabas_failure_leaves_the_first_and_is_resumable`),
+    `a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded`
+    (the token request's form body and its `appsecret_proof` exactly; a
+    tenant key refused), `a_claim_needs_an_arrival_and_respects_ownership`,
+    `an_unsigned_or_forged_partner_added_is_never_remembered`,
+    `an_arrival_is_remembered_for_seven_days_and_only_when_hosted_signup_is_on`,
+    `of_two_claims_of_one_arrival_one_wins`,
+    `a_claim_that_stopped_after_the_store_is_resumed_not_claimed_again`,
+    `the_pool_is_managed_with_the_pools_token_by_the_operator`,
+    `a_launch_offers_only_the_ids_reserved_for_the_tenant`, their
+    Postgres twin `live_postgres_m3f_several_wabas_the_refusal_and_a_hosted_claim`;
+    M1.3's table walks the committed document, so it holds the new routes
+    by construction (`every_keyed_operation_needs_a_key_of_its_kind_before_the_body`),
+    with `the_hosted_and_pool_routes_follow_the_authorization_order` in
+    `tests/authz.rs`; `tests/errors.rs` (`the_m3f_routes_use_only_the_designs_codes`,
+    and its sentinel test over every operation), and M1.7's capture
+    (`secrets.section("signup_m3f")`: the system and pool tokens, the
+    business tokens, the proof, the PINs and a pre-verified code, with the
+    audit events of both completions). **No legal act** is taken: no
+    hosted or pre-verified endpoint accepts terms; deleting a pool number,
+    reserving one and funding a revoked business remain explicit, audited
+    operator actions, and so is a hosted claim (the ids it names are no
+    secrets, so no tenant claims). Left: sharing a number with a partner
+    and reading who has it (the library has them); a tenant's own claim of
+    a hosted arrival (it needs an operator-assigned record, D202); a per-signup choice of the several-WABA option; the
+    hosted flow of several WABAs (Meta sends one `PARTNER_ADDED` per WABA,
+    each claimed on its own). Decided 2026-11-06 (D200 to D205, D202
+    changed); pending the owner's confirmation before the first release:
+    the four settings, the namespaces `wa.es.hosted` and
+    `wa.es.preverified`, the route and the audit actions (`hosted_signup_arrived`,
+    `hosted_signup_completed`, `pre_verified_number_added`,
+    `pre_verified_code_requested`, `pre_verified_code_verified`,
+    `pre_verified_number_deleted`, `pre_verified_number_reserved`,
+    `pre_verified_number_released`) are pending the owner's confirmation
+    before the first release.
 
 ### M4. Packaging
 

@@ -772,3 +772,42 @@ async fn sent_and_retryable_are_the_librarys() {
     // A status the design keeps for a service condition.
     assert_eq!(code_info("timeout").unwrap().0, StatusCode::GATEWAY_TIMEOUT);
 }
+
+/// Roadmap M3f: the hosted claim, the several-WABA completion and the pool
+/// answer only codes the design's table (section 5.2) lists, with the
+/// statuses the OpenAPI document declares for them: no code of their own.
+/// Decisive: a route answering a code the design does not list, or a
+/// document declaring a status the table gives another code.
+#[test]
+fn the_m3f_routes_use_only_the_designs_codes() {
+    let design = design();
+    let used = [
+        ("not_found", 404),
+        ("waba_owned_by_another_tenant", 409),
+        ("signup_not_configured", 409),
+        ("invalid_request", 422),
+        ("onboarding_failed", 502),
+        ("forbidden", 403),
+    ];
+    for (code, status) in used {
+        assert_eq!(design.get(code), Some(&status), "{code}");
+    }
+    let spec: Value = serde_json::from_str(include_str!("../openapi/v1.json")).unwrap();
+    for (path, method) in [
+        ("/v1/admin/signup/hosted", "post"),
+        ("/v1/admin/pre-verified-numbers", "post"),
+        ("/v1/admin/pre-verified-numbers/{id}/verify", "post"),
+        ("/v1/admin/pre-verified-numbers/{id}/reservation", "put"),
+    ] {
+        let responses = spec["paths"][path][method]["responses"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{method} {path} has no responses"));
+        for status in responses.keys().filter(|s| s.as_str() != "default") {
+            let status: u16 = status.parse().unwrap();
+            assert!(
+                status < 300 || design.values().any(|s| *s == status),
+                "{method} {path} declares {status}, which no code of the table has"
+            );
+        }
+    }
+}

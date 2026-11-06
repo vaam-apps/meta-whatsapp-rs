@@ -42,6 +42,10 @@
 //! | `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | 5, 5 | the same, for sending OTP codes (roadmap M3c; per recipient, the library's cooldown and issue limit apply too) |
 //! | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | 20, 20 | the same, for checking OTP codes (the service's default: the design names no limit) |
 //! | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant (`PARTNER_APP_UNINSTALLED` of this app, `ACCOUNT_DELETED`) or revokes their credit line (`PARTNER_REMOVED`) is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or no longer granted the WABA) or acted on by its signature alone (`signature`) (roadmap M3a) |
+//! | `WA_SIGNUP_EVERY_GRANTED_WABA` | `off` | `on`: a signup that grants several WABAs binds every one to its tenant (each under the ownership rules, a WABA another tenant holds refused); `off`: only the primary WABA (the one the event claims, else the first it names) is bound, and the answer lists the others as `not_bound_waba_ids` (roadmap M3f, decision D200); pending the owner's confirmation before the first release |
+//! | `WA_HOSTED_SIGNUP` | `off` | `on`: `PARTNER_ADDED` webhooks are remembered and the operator claims one for a tenant with `POST /v1/admin/signup/hosted`; needs `WA_SYSTEM_TOKEN` (or Solution Partner mode, whose system token it falls back to) (roadmap M3f, decision D201); pending the owner's confirmation before the first release |
+//! | `WA_SYSTEM_TOKEN` (secret) | the Solution Partner's `WA_PARTNER_SYSTEM_TOKEN` | the deployment's system user token: fetches a hosted signup's business token and manages the pre-verified pool (`business_management`); pending the owner's confirmation before the first release |
+//! | `WA_PARTNER_BUSINESS_ID` | unset: the pool's routes off | the deployment's own business portfolio, whose pool of pre-verified numbers `/v1/admin/pre-verified-numbers` manages (roadmap M3f, decision D204); needs `WA_SYSTEM_TOKEN` or Solution Partner mode; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 //! | `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | 5, `72h` | a number's registrations and deregistrations, per number and fixed window, shared by every replica (roadmap M3d; Meta allows 10 of each in a moving 72 hours and locks the number on the 11th) |
 //! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
@@ -89,7 +93,7 @@ use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::client::flows::endpoint::FlowEndpointKey;
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
-use meta_whatsapp_rs::core::ids::AppId;
+use meta_whatsapp_rs::core::ids::{AppId, BusinessId};
 use meta_whatsapp_rs::core::media::MediaConverter;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
@@ -256,6 +260,20 @@ pub struct PartnerSettings {
     pub currency: WabaCurrency,
 }
 
+/// What a signup does beyond the code flow (roadmap M3f). `Debug` shows
+/// no token.
+#[derive(Debug, Clone, Default)]
+pub struct SignupOptions {
+    /// `WA_SIGNUP_EVERY_GRANTED_WABA`.
+    pub every_granted_waba: bool,
+    /// `WA_HOSTED_SIGNUP=on`: the system token that fetches the business
+    /// token.
+    pub hosted_system_token: Option<AccessToken>,
+    /// `WA_PARTNER_BUSINESS_ID` and the system token that manages its pool
+    /// of pre-verified numbers.
+    pub pre_verified_pool: Option<(BusinessId, AccessToken)>,
+}
+
 /// Whether `serve` migrates at start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrateMode {
@@ -316,6 +334,9 @@ pub struct Config {
     /// or revokes their credit line is confirmed with Graph first (`graph`,
     /// the default) or acted on by its signature alone (`signature`).
     pub account_update_confirmation: AccountUpdateConfirmation,
+    /// `WA_SIGNUP_EVERY_GRANTED_WABA`, `WA_HOSTED_SIGNUP`,
+    /// `WA_SYSTEM_TOKEN` and `WA_PARTNER_BUSINESS_ID` (roadmap M3f).
+    pub signup_options: SignupOptions,
     /// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`.
     pub graph_endpoint: GraphEndpoint,
     /// `WA_SERVER_MIGRATE`.
@@ -603,6 +624,7 @@ impl Config {
             otp_default_tenant,
             erasure_key,
             flows_private_key,
+            signup_options: signup_options(&r, &onboarding)?,
             onboarding,
             account_update_confirmation,
             graph_endpoint,
@@ -1339,6 +1361,66 @@ fn vault_keys(r: &Reader<'_>, postgres: bool) -> Result<(VaultKeys, bool), Confi
         }
     }
     Ok((keys, throwaway))
+}
+
+/// `on` or `off` (unset: `off`).
+fn switch(r: &Reader<'_>, name: &'static str) -> Result<bool, ConfigError> {
+    match r.plain(name)?.as_deref() {
+        None | Some("off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(_) => Err(ConfigError::Invalid {
+            name,
+            reason: "expected on or off",
+        }),
+    }
+}
+
+/// `WA_SIGNUP_EVERY_GRANTED_WABA`, `WA_HOSTED_SIGNUP`, `WA_SYSTEM_TOKEN`
+/// and `WA_PARTNER_BUSINESS_ID` (roadmap M3f): the system token is
+/// `WA_SYSTEM_TOKEN`, else a Solution Partner's own.
+fn signup_options(
+    r: &Reader<'_>,
+    onboarding: &OnboardingMode,
+) -> Result<SignupOptions, ConfigError> {
+    let every_granted_waba = switch(r, "WA_SIGNUP_EVERY_GRANTED_WABA")?;
+    let hosted = switch(r, "WA_HOSTED_SIGNUP")?;
+    let system_token = match r.secret("WA_SYSTEM_TOKEN")? {
+        Some(token) if token.trim().is_empty() => {
+            return Err(ConfigError::Blank("WA_SYSTEM_TOKEN"));
+        }
+        Some(token) => Some(AccessToken::new(token)),
+        None => match onboarding {
+            OnboardingMode::SolutionPartner(partner) => Some(partner.system_token.clone()),
+            OnboardingMode::TechProvider => None,
+        },
+    };
+    let hosted_system_token = if hosted {
+        Some(system_token.clone().ok_or(ConfigError::Invalid {
+            name: "WA_HOSTED_SIGNUP",
+            reason: "needs WA_SYSTEM_TOKEN (or Solution Partner mode)",
+        })?)
+    } else {
+        None
+    };
+    let pre_verified_pool = match r.plain("WA_PARTNER_BUSINESS_ID")? {
+        None => None,
+        Some(id) => {
+            let business = BusinessId::new(id.trim()).map_err(|_| ConfigError::Invalid {
+                name: "WA_PARTNER_BUSINESS_ID",
+                reason: "expected a business portfolio id (digits)",
+            })?;
+            let token = system_token.ok_or(ConfigError::Invalid {
+                name: "WA_PARTNER_BUSINESS_ID",
+                reason: "needs WA_SYSTEM_TOKEN (or Solution Partner mode)",
+            })?;
+            Some((business, token))
+        }
+    };
+    Ok(SignupOptions {
+        every_granted_waba,
+        hosted_system_token,
+        pre_verified_pool,
+    })
 }
 
 /// `WA_ONBOARDING_MODE` and, in Solution Partner mode, its four settings.

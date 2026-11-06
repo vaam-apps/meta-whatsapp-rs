@@ -270,6 +270,29 @@ stored data, the owner's).
 
 ### Added
 
+- **Service: hosted signup, several WABAs in one signup and pre-verified
+  numbers** (roadmap M3f, parity rows 121 to 123 done in the service;
+  choices D200 to D205, decided 2026-11-06; from Meta's
+  `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers`
+  pages, read on 2026-11-06). `POST /v1/admin/signup/hosted` (admin key)
+  claims a `PARTNER_ADDED` the service remembered (`WA_HOSTED_SIGNUP`) for
+  the tenant the operator names and runs the library's hosted onboarding
+  (an operator's action, not a tenant's: the ids a claim names are no
+  secrets, so a tenant route would let one tenant take another's
+  merchant, D202); `POST /v1/signup/complete` binds every
+  granted WABA with `WA_SIGNUP_EVERY_GRANTED_WABA=on` (each under the
+  ownership rules: a WABA another tenant holds is `409
+  waba_owned_by_another_tenant`, never taken) and, off, binds the primary
+  WABA and lists the others in `not_bound_waba_ids`; the pool of
+  pre-verified numbers has admin routes (`/v1/admin/pre-verified-numbers`)
+  and a per-tenant reservation its launch (`pre_verified_phone_ids`)
+  checks. New settings `WA_SIGNUP_EVERY_GRANTED_WABA`, `WA_HOSTED_SIGNUP`,
+  `WA_SYSTEM_TOKEN`, `WA_PARTNER_BUSINESS_ID`, stored names `wa.es.hosted`
+  and `wa.es.preverified`, the hosted claim's route and the audit actions,
+  all pending the owner's confirmation before the first release.
+  The OpenAPI document grew by six paths and two optional answer fields,
+  additively. No legal act is taken.
+
 - **Service: commerce, QR codes, analytics and the block list** (roadmap
   M5g, parity rows 71, 102, 103, 106 and 107). Four key scopes (`commerce`,
   `qr_codes`, `analytics`, `contacts`; names pending the owner's
