@@ -195,6 +195,7 @@ impl RouteClass {
             | Operation::ReleaseThread
             | Operation::CreateGroup
             | Operation::UpdateGroup
+            | Operation::SetGroupPicture
             | Operation::DeleteGroup
             | Operation::ResetGroupInviteLink
             | Operation::RemoveGroupParticipants
@@ -652,6 +653,7 @@ mod tests {
             ("list_groups", RouteClass::Read),
             ("get_group", RouteClass::Read),
             ("update_group", RouteClass::Send),
+            ("set_group_picture", RouteClass::Send),
             ("delete_group", RouteClass::Send),
             ("get_group_invite_link", RouteClass::Read),
             ("reset_group_invite_link", RouteClass::Send),

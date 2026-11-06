@@ -1,6 +1,6 @@
 # Parity: Zaileys, Meta's Cloud API and meta-whatsapp-rs
 
-Verified against `main` at b6fc893 (PR #20) on 2026-09-26; row 140 again with the Messaging Account a service send names (roadmap M5c5), against its code and tests and Meta's `account-model-evolution/messaging` page of 2026-11-06; rows 74, 75, 107, 134 and 135 again with the calling routes (roadmap M5e), against their code and tests and Meta's `calling`, `calling/call-settings`, `calling/user-initiated-calls`, `calling/business-initiated-calls`, `calling/user-call-permissions`, `calling/call-recording`, `calling/call-transcription`, `calling-api` reference and `analytics` pages of 2026-11-06; rows 76, 77, 79 and 81 again with the group routes (roadmap M5f), against their code and tests and Meta's `groups/reference`, `groups/webhooks` and `analytics` pages of 2026-11-05; rows 17,
+Verified against `main` at b6fc893 (PR #20) on 2026-09-26; row 140 again with the Messaging Account a service send names (roadmap M5c5), against its code and tests and Meta's `account-model-evolution/messaging` page of 2026-11-06; rows 74, 75, 107, 134 and 135 again with the calling routes (roadmap M5e), against their code and tests and Meta's `calling`, `calling/call-settings`, `calling/user-initiated-calls`, `calling/business-initiated-calls`, `calling/user-call-permissions`, `calling/call-recording`, `calling/call-transcription`, `calling-api` reference and `analytics` pages of 2026-11-06; rows 76, 77, 79 and 81 again with the group routes (roadmap M5f), against their code and tests and Meta's `groups/reference`, `groups/webhooks` and `analytics` pages of 2026-11-05; the service's cell of row 76 again with the group picture (roadmap M5f2), against its code and tests and Meta's `groups/reference` page ("Update group settings") of 2026-11-06; rows 17,
 19 and 84–88 again when the bot framework (roadmap B1) landed, against
 its code; the service's cells of rows 5, 6, 9, 33, 84, 91, 112 and 113
 again when its core was extracted (roadmap S1), against the core's
@@ -92,13 +92,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**98 of the 132 counted rows are done on both sides.** Parity is not
+**99 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 128 | 3 | 0 | 1 |
-| Service | 99 | 18 | 14 | 1 |
+| Service | 100 | 17 | 14 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -106,9 +106,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 3 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 32 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 31 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M3 3, M4 2, M5 26, P 1 (payments: P2b).
+  two): M3 3, M4 2, M5 25, P 1 (payments: P2b).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -370,7 +370,7 @@ The owner's definition (2026-09-26):
 
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 76 | Groups | Create, read, list, update, set the picture, delete | Yes | No | `groups`; `reference/whatsapp-business-phone-number/groups-management-api.md`, `reference/groups/groups-query-api.md` | `client::groups::Groups::create`, `list`; `client::groups::Group::info`, `update`, `set_picture`, `delete` | `POST` and `GET /v1/numbers/{pn}/groups`, `GET`, `PATCH`, `DELETE …/groups/{group_id}` (`server_core::groups::Groups::create`, `list`, `get`, `update`, `delete`; scope `groups`): a creation is asynchronous (`202` and Meta's `request_id`, the group's id arriving in a `group_lifecycle_update` event) and takes an `Idempotency-Key`; a group is the number's or it is `404` before the token is opened, by the service's records of the number's groups (`server_core::groups::GroupRecords`, design D150); the picture is not offered yet (M5f2); sends to a group work, row 35 | done / partial (M5f2) |
+| 76 | Groups | Create, read, list, update, set the picture, delete | Yes | No | `groups`; `reference/whatsapp-business-phone-number/groups-management-api.md`, `reference/groups/groups-query-api.md` | `client::groups::Groups::create`, `list`; `client::groups::Group::info`, `update`, `set_picture`, `delete` | `POST` and `GET /v1/numbers/{pn}/groups`, `GET`, `PATCH`, `DELETE …/groups/{group_id}` (`server_core::groups::Groups::create`, `list`, `get`, `update`, `delete`; scope `groups`): a creation is asynchronous (`202` and Meta's `request_id`, the group's id arriving in a `group_lifecycle_update` event) and takes an `Idempotency-Key`; a group is the number's or it is `404` before the token is opened, by the service's records of the number's groups (`server_core::groups::GroupRecords`, design D150); the picture: `PUT …/groups/{group_id}/picture` (`server_core::groups::Groups::set_picture`; roadmap M5f2): a multipart `file`, judged by its bytes (a JPEG whose frame header says square and at least 192 pixels, `server_core::groups::Picture`) and at most 5 MiB, refused with no request otherwise, under the media uploads' transfer slots and body bound, asked of the number's own group only, audited without the file (design D260–D264); sends to a group work, row 35 | done / done |
 | 77 | Groups | Add and remove members | Yes | No | `reference/groups/groups-participants-api.md` | `Group::add_participants`, `remove_participants` (adding kept with a warning, OPEN_QUESTIONS #23) | `POST /v1/numbers/{pn}/groups/{group_id}/participants/remove` (`server_core::groups::Groups::remove_participants`; scope `groups`; 1 to 8 participants, each by `phone`, `wa_id` or `user_id`; `GET …/participants` lists them); adding is not offered: Meta says participants join through the invite link (design D156) | done / done |
 | 78 | Groups | Promote and demote admins, leave a group | Yes | No | no promote, demote or leave call in the groups reference or guides (`groups/reference`); a participant leaving arrives as a webhook | — | — | n/a — unofficial protocol |
 | 79 | Groups | Invite links, join requests | Yes | No | `reference/groups/groups-invite-link-api.md`, `reference/groups/groups-join-requests-api.md` | `Group::invite_link`, `reset_invite_link`, `delete_invite_link`; `join_requests`, `approve_join_requests`, `reject_join_requests` | `GET`, `POST …/groups/{group_id}/invite-link`, `GET …/join-requests`, `POST …/join-requests/approve` and `…/reject` (`server_core::groups::Groups::invite_link`, `reset_invite_link`, `join_requests`, `approve_join_requests`, `reject_join_requests`): 1 to 100 requests a call, a partial success a `200` with the failures as Meta's codes and the service's kinds, a refusal answering its own code (`group_limit_reached`, `join_request_not_found`…, roadmap L27, design D170) with none of Meta's text, the changes audited by count; deleting the invite link is not offered (design D156) | done / done |

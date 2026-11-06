@@ -1465,6 +1465,23 @@ pub const SAMPLE_PIN: &str = "212834";
 /// The file every sample upload sends: a PNG signature.
 pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
 
+/// A JPEG's headers (SOI, JFIF, a start-of-frame of `width` by `height`),
+/// `filler` where the scan would be, and the end marker: what the service
+/// reads of a group's picture (roadmap M5f2) and Meta would refuse to
+/// decode.
+pub fn jpeg(width: u16, height: u16, filler: &[u8]) -> Vec<u8> {
+    let mut out = vec![
+        0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0,
+    ];
+    out.extend([0xFF, 0xC0, 0, 17, 8]);
+    out.extend(height.to_be_bytes());
+    out.extend(width.to_be_bytes());
+    out.extend([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+    out.extend(filler);
+    out.extend([0xFF, 0xD9]);
+    out
+}
+
 /// A sample call of `operation` with `key` (none for an unkeyed one).
 pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) -> Call {
     let mut path = sample.fill(&operation.template);
@@ -1482,6 +1499,12 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
             ("type", None, b"image/png"),
             ("file", Some("voucher.png"), SAMPLE_PNG),
         ]);
+    }
+    // A group's picture is a square JPEG of 192 pixels (roadmap M5f2).
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("PUT", "/v1/numbers/{pn}/groups/{group_id}/picture")
+    {
+        return call.multipart(&[("file", Some("group.jpg"), &jpeg(192, 192, b"scan"))]);
     }
     // A deregistration confirms the path's number (roadmap M3d).
     if (operation.method.as_str(), operation.template.as_str())

@@ -311,6 +311,7 @@ fn groups_routes() -> OpenApiRouter<Grant> {
             groups::get_group_invite_link,
             groups::reset_group_invite_link
         ))
+        .routes(routes!(groups::set_group_picture))
         .routes(routes!(groups::list_group_participants))
         .routes(routes!(groups::remove_group_participants))
         .routes(routes!(groups::list_group_join_requests))

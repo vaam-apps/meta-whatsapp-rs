@@ -8,6 +8,7 @@
 //! | `GET /v1/numbers/{pn}/groups` | `GET /{pn}/groups` (the groups listed are recorded as the number's) |
 //! | `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/groups/{group_id}` | `GET`, `POST`, `DELETE /{group_id}` |
 //! | `GET`, `POST /v1/numbers/{pn}/groups/{group_id}/invite-link` | `GET`, `POST /{group_id}/invite_link` |
+//! | `PUT /v1/numbers/{pn}/groups/{group_id}/picture` | `POST /{group_id}` (multipart: `messaging_product`, `file`; roadmap M5f2) |
 //! | `GET /v1/numbers/{pn}/groups/{group_id}/participants` | `GET /{group_id}?fields=participants,total_participant_count` |
 //! | `POST /v1/numbers/{pn}/groups/{group_id}/participants/remove` | `DELETE /{group_id}/participants` (a body on a `DELETE`: the service takes a `POST`) |
 //! | `GET /v1/numbers/{pn}/groups/{group_id}/join-requests` | `GET /{group_id}/join_requests` |
@@ -22,16 +23,30 @@
 //! asked (the core's [`meta_whatsapp_server_core::groups`] says how the
 //! records are kept). Creating a group takes an `Idempotency-Key`.
 //!
+//! **The picture** (roadmap M5f2) is the media uploads' transfer: the body
+//! is a form of one field, `file`, read through the HTTP crate's
+//! [`read_file_form`] (the uploads' framing budget, the file read no
+//! further than 5 MiB, `413 media_too_large` past it), after the group is
+//! the number's and after a slot of the tenant's share of
+//! `WA_SERVER_MEDIA_CONCURRENCY` is taken (`429`). The file is judged by
+//! its bytes: a JPEG whose frame header says square and at least 192 by 192
+//! pixels, else `422` on `file`, with Meta not asked. A replacement takes no
+//! `Idempotency-Key` (setting the same picture twice is the same state);
+//! the library may repeat the request after a timeout, as for the
+//! settings. The audit event (`group_picture_set`) holds no byte of the
+//! picture and no size.
+//!
 //! Nothing of a participant (a phone number, a BSUID, a username, a join
 //! request's id) reaches a log, an error or an audit event; the changes are
 //! audited by count and outcome. Meta's texts are answered nowhere here:
 //! Meta's code and the service's kind for it only.
 
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::State;
+use meta_whatsapp_rs::webhooks::axum::extract::{Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::groups::{self as domain, Groups, Person};
+use meta_whatsapp_server_http::api::media::read_file_form;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -655,6 +670,75 @@ pub(crate) async fn update_group(
         .update(owned.capability(&state), &update)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A group picture's form (`multipart/form-data`).
+#[derive(Debug, ToSchema)]
+#[schema(as = GroupPictureUpload)]
+pub struct PictureUpload {
+    /// A JPEG (judged by its bytes, not by the part's type) of at most
+    /// 5 MiB, square and at least 192 by 192 pixels. The form takes no
+    /// other field.
+    #[schema(value_type = String, format = Binary)]
+    pub file: Vec<u8>,
+}
+
+/// `PUT /v1/numbers/{pn}/groups/{group_id}/picture`: replace a group's
+/// picture.
+#[utoipa::path(
+    put,
+    path = "/v1/numbers/{pn}/groups/{group_id}/picture",
+    tag = "groups",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("group_id" = String, Path, description = "Group id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    request_body(content = PictureUpload, content_type = "multipart/form-data"),
+    responses(
+        (status = 204, description = "Asked: Meta tells the outcome in a `group_settings_update` event"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing changed", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 413, description = "`media_too_large`: the file is larger than 5 MiB; `payload_too_large`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `file` (not a JPEG, not square, smaller than 192 by 192 pixels, or missing) or `body` (not a form of `file` alone, or its framing past 16 KiB)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy; or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`: the picture may have been changed", body = ErrorBody),
+    )
+)]
+pub(crate) async fn set_group_picture(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedGroup,
+    request: Request,
+) -> Response {
+    let groups = match groups(&state, &caller, owned.number()) {
+        Ok(groups) => groups,
+        Err(error) => return error.into_response(),
+    };
+    // The slot is taken before the body is read, as an upload's: a body
+    // that trickles in holds one of its tenant's slots, never another's.
+    let permit = match groups.transfer_slot(state.media_slots()) {
+        Ok(permit) => permit,
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let picture = match read_file_form(domain::PICTURE_MAX, request).await {
+        Ok(data) => domain::Picture::new(data),
+        Err(error) => return error.into_response(),
+    };
+    let picture = match picture {
+        Ok(picture) => picture,
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let done = groups.set_picture(owned.capability(&state), &picture).await;
+    drop(permit);
+    match done {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => ApiError::from(error).into_response(),
+    }
 }
 
 /// `DELETE /v1/numbers/{pn}/groups/{group_id}`: delete a group, removing
