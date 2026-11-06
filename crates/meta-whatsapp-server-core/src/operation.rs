@@ -36,6 +36,38 @@ pub enum Operation {
     RequestDisplayNameChange,
     /// `get_display_name`: a number's display name and the review of a requested one (roadmap M5c2; pending the owner's confirmation before the first release).
     GetDisplayName,
+    /// `get_number_settings`: a number's settings: local storage and payload encryption's status, never a key (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetNumberSettings,
+    /// `update_number_settings`: one of a number's settings changed (roadmap M5c3; pending the owner's confirmation before the first release).
+    UpdateNumberSettings,
+    /// `enable_payload_encryption`: payload encryption turned on with the business's public key (roadmap M5c3; pending the owner's confirmation before the first release).
+    EnablePayloadEncryption,
+    /// `disable_payload_encryption`: payload encryption turned off (roadmap M5c3; pending the owner's confirmation before the first release).
+    DisablePayloadEncryption,
+    /// `get_username`: a number's business username (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetUsername,
+    /// `set_username`: a business username adopted or changed (roadmap M5c3; pending the owner's confirmation before the first release).
+    SetUsername,
+    /// `delete_username`: a business username removed (roadmap M5c3; pending the owner's confirmation before the first release).
+    DeleteUsername,
+    /// `list_username_suggestions`: the usernames WhatsApp reserved for the portfolio (roadmap M5c3; pending the owner's confirmation before the first release).
+    ListUsernameSuggestions,
+    /// `get_official_business_account`: a number's Official Business Account status (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetOfficialBusinessAccount,
+    /// `request_official_business_account`: an application for Official Business Account status (not a legal act; audited) (roadmap M5c3; pending the owner's confirmation before the first release).
+    RequestOfficialBusinessAccount,
+    /// `get_compliance_info`: a number's business compliance information (India) (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetComplianceInfo,
+    /// `set_compliance_info`: a number's business compliance information declared (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
+    SetComplianceInfo,
+    /// `get_health_status`: a number's health status (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetHealthStatus,
+    /// `get_conversational_components`: a number's welcome message flag, ice breakers and commands (roadmap M5c3; pending the owner's confirmation before the first release).
+    GetConversationalComponents,
+    /// `set_conversational_components`: a number's welcome message flag, ice breakers and commands set (roadmap M5c3; pending the owner's confirmation before the first release).
+    SetConversationalComponents,
+    /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (irreversible, an explicit erasure under the scope `erasure`, not gated by `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
+    DeleteContactBookEntry,
     /// `disconnect_waba`: a WABA disconnected (unsubscribed, its token
     /// and bindings deleted).
     DisconnectWaba,
@@ -274,7 +306,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 110] = [
+    pub const ALL: [Self; 126] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -282,6 +314,22 @@ impl Operation {
         Self::UpdateProfile,
         Self::RequestDisplayNameChange,
         Self::GetDisplayName,
+        Self::GetNumberSettings,
+        Self::UpdateNumberSettings,
+        Self::EnablePayloadEncryption,
+        Self::DisablePayloadEncryption,
+        Self::GetUsername,
+        Self::SetUsername,
+        Self::DeleteUsername,
+        Self::ListUsernameSuggestions,
+        Self::GetOfficialBusinessAccount,
+        Self::RequestOfficialBusinessAccount,
+        Self::GetComplianceInfo,
+        Self::SetComplianceInfo,
+        Self::GetHealthStatus,
+        Self::GetConversationalComponents,
+        Self::SetConversationalComponents,
+        Self::DeleteContactBookEntry,
         Self::DisconnectWaba,
         Self::SendMessage,
         Self::MarkRead,
@@ -398,6 +446,22 @@ impl Operation {
             Self::UpdateProfile => "update_profile",
             Self::RequestDisplayNameChange => "request_display_name_change",
             Self::GetDisplayName => "get_display_name",
+            Self::GetNumberSettings => "get_number_settings",
+            Self::UpdateNumberSettings => "update_number_settings",
+            Self::EnablePayloadEncryption => "enable_payload_encryption",
+            Self::DisablePayloadEncryption => "disable_payload_encryption",
+            Self::GetUsername => "get_username",
+            Self::SetUsername => "set_username",
+            Self::DeleteUsername => "delete_username",
+            Self::ListUsernameSuggestions => "list_username_suggestions",
+            Self::GetOfficialBusinessAccount => "get_official_business_account",
+            Self::RequestOfficialBusinessAccount => "request_official_business_account",
+            Self::GetComplianceInfo => "get_compliance_info",
+            Self::SetComplianceInfo => "set_compliance_info",
+            Self::GetHealthStatus => "get_health_status",
+            Self::GetConversationalComponents => "get_conversational_components",
+            Self::SetConversationalComponents => "set_conversational_components",
+            Self::DeleteContactBookEntry => "delete_contact_book_entry",
             Self::DisconnectWaba => "disconnect_waba",
             Self::SendMessage => "send_message",
             Self::MarkRead => "mark_read",
@@ -520,6 +584,21 @@ impl Operation {
             | Self::UpdateProfile
             | Self::RequestDisplayNameChange
             | Self::GetDisplayName
+            | Self::GetNumberSettings
+            | Self::UpdateNumberSettings
+            | Self::EnablePayloadEncryption
+            | Self::DisablePayloadEncryption
+            | Self::GetUsername
+            | Self::SetUsername
+            | Self::DeleteUsername
+            | Self::ListUsernameSuggestions
+            | Self::GetOfficialBusinessAccount
+            | Self::RequestOfficialBusinessAccount
+            | Self::GetComplianceInfo
+            | Self::SetComplianceInfo
+            | Self::GetHealthStatus
+            | Self::GetConversationalComponents
+            | Self::SetConversationalComponents
             | Self::DisconnectWaba
             | Self::RequestVerificationCode
             | Self::VerifyCode
@@ -580,7 +659,7 @@ impl Operation {
             | Self::CompleteSignup
             | Self::ListSignupAttempts
             | Self::ResumeSignup => Scope::Signup,
-            Self::EraseCustomer => Scope::Erasure,
+            Self::EraseCustomer | Self::DeleteContactBookEntry => Scope::Erasure,
             Self::GetCommerceSettings
             | Self::UpdateCommerceSettings
             | Self::ListCatalogs

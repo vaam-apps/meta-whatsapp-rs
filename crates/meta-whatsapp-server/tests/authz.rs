@@ -94,6 +94,26 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         // Roadmap M5c2 (the design's M5.1): the display name.
         (Method::POST, "/v1/numbers/{pn}/display-name"),
         (Method::GET, "/v1/numbers/{pn}/display-name"),
+        // Roadmap M5c3 (the design's M5.1): a number's settings.
+        (Method::GET, "/v1/numbers/{pn}/settings"),
+        (Method::PATCH, "/v1/numbers/{pn}/settings"),
+        (Method::PUT, "/v1/numbers/{pn}/settings/payload-encryption"),
+        (
+            Method::DELETE,
+            "/v1/numbers/{pn}/settings/payload-encryption",
+        ),
+        (Method::GET, "/v1/numbers/{pn}/username"),
+        (Method::PUT, "/v1/numbers/{pn}/username"),
+        (Method::DELETE, "/v1/numbers/{pn}/username"),
+        (Method::GET, "/v1/numbers/{pn}/username/suggestions"),
+        (Method::GET, "/v1/numbers/{pn}/official-business-account"),
+        (Method::POST, "/v1/numbers/{pn}/official-business-account"),
+        (Method::GET, "/v1/numbers/{pn}/compliance-info"),
+        (Method::PUT, "/v1/numbers/{pn}/compliance-info"),
+        (Method::GET, "/v1/numbers/{pn}/health-status"),
+        (Method::GET, "/v1/numbers/{pn}/conversational-components"),
+        (Method::PUT, "/v1/numbers/{pn}/conversational-components"),
+        (Method::DELETE, "/v1/numbers/{pn}/contact-book/{bsuid}"),
         (Method::DELETE, "/v1/wabas/{waba_id}"),
         (Method::DELETE, "/v1/admin/wabas/{waba_id}/binding"),
         (Method::POST, "/v1/numbers/{pn}/messages"),
@@ -442,7 +462,7 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 8] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 9] = [
     // A resumable upload's chunk and status name an upload the sample
     // does not hold: refused after the vault, before Meta (roadmap M5c1).
     (
@@ -481,6 +501,15 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 8] = [
         StatusCode::NOT_FOUND,
     ),
     (Method::POST, "/v1/numbers/{pn}/erasures", StatusCode::OK),
+    // Roadmap M5c3 (D192): the one legal act, off in this harness (the
+    // vault is read for the owner's token; the gate then refuses before
+    // Meta is asked). The application and the contact book erasure are not
+    // gated and are asked of Meta like any route.
+    (
+        Method::PUT,
+        "/v1/numbers/{pn}/compliance-info",
+        StatusCode::FORBIDDEN,
+    ),
 ];
 
 /// The control of M1.3: the counter counts, and A's own key does reach the

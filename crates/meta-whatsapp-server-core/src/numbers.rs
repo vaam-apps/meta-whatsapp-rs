@@ -4,7 +4,7 @@
 //!
 //! | Operation | Graph calls |
 //! | --- | --- |
-//! | [`Numbers::details`] | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` ([`NUMBER_FIELDS`]) |
+//! | [`Numbers::details`] | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput,messaging_limit_tier` ([`NUMBER_FIELDS`]) |
 //! | [`Numbers::profile`] | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical` ([`PROFILE_FIELDS`]) |
 //! | [`Numbers::update_profile`] | `POST /{pn}/whatsapp_business_profile` (none for an empty change; a picture's `profile_picture_handle` from [`ProfilePicture`], roadmap M5c2), then the `GET` above |
 //! | [`Waba::disconnect`] | `DELETE /{waba_id}/subscribed_apps`; then `number_disconnected` for each of its numbers ([`crate::number_events`]), then the token and bindings are deleted |
@@ -39,12 +39,13 @@ use crate::request::wire;
 use crate::uploads::ProfilePicture;
 
 /// The fields [`Numbers::details`] asks Meta for.
-pub const NUMBER_FIELDS: [&str; 5] = [
+pub const NUMBER_FIELDS: [&str; 6] = [
     "display_phone_number",
     "verified_name",
     "quality_rating",
     "name_status",
     "throughput",
+    "messaging_limit_tier",
 ];
 
 /// The profile fields the service reads and writes.
@@ -87,6 +88,9 @@ pub struct NumberDetails {
     pub name_status: Option<String>,
     /// Throughput.
     pub throughput: Option<Throughput>,
+    /// Messaging limit tier, as Meta names it (`TIER_250`, `TIER_1K`, …;
+    /// roadmap M5c3).
+    pub messaging_limit_tier: Option<String>,
 }
 
 /// A business profile, as the service answers it: [`PROFILE_FIELDS`].
@@ -172,7 +176,7 @@ fn profile_text(field: &'static str, text: &str, newlines: bool) -> Result<(), S
 /// An email: empty (clears it), or one `@` between two non-empty parts,
 /// at most [`EMAIL_MAX_CHARS`] characters, with no whitespace, control,
 /// bidi or zero-width character. Meta judges the rest.
-fn profile_email(email: &str) -> Result<(), ServiceError> {
+pub(crate) fn profile_email(email: &str) -> Result<(), ServiceError> {
     if email.is_empty() {
         return Ok(());
     }
@@ -195,7 +199,7 @@ fn profile_email(email: &str) -> Result<(), ServiceError> {
 /// zero-width character as written (the URL parser would strip some).
 /// Nothing else is sent as a customer-facing link: not `javascript:`,
 /// `data:`, `ftp:` nor `https://good.example@evil.example/`.
-fn profile_website(website: &str) -> Result<(), ServiceError> {
+pub(crate) fn profile_website(website: &str) -> Result<(), ServiceError> {
     let bad = || ServiceError::invalid("websites");
     if website.chars().count() > WEBSITE_MAX_CHARS
         || website
@@ -297,6 +301,7 @@ impl<'a> Numbers<'a> {
             quality_rating: wire(info.quality_rating.as_ref()),
             name_status: wire(info.name_status.as_ref()),
             throughput: info.throughput.map(|t| Throughput { level: t.level }),
+            messaging_limit_tier: wire(info.messaging_limit_tier.as_ref()),
             display_phone_number: info.display_phone_number,
             verified_name: info.verified_name,
         }
