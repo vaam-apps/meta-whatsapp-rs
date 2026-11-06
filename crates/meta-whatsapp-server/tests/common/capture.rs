@@ -3450,6 +3450,7 @@ pub fn check(logs: &str, secrets: &Secrets) {
 /// (roadmap M3f): neither the deployment's system token, the pool's, the
 /// business tokens, the `appsecret_proof`, the PIN nor a pre-verified
 /// number's one-time code is logged, on success or on Meta's refusal.
+#[allow(clippy::too_many_lines)] // one scenario per feature, read top to bottom
 async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
     use super::signup::{
         BUSINESS, HOSTED_PROOF, HOSTED_TOKEN, PHONE_3, POOL_TOKEN, PRE_VERIFIED, PRE_VERIFIED_CODE,

@@ -629,6 +629,8 @@ mod tests {
             steps_completed: vec!["exchange_code", "store_token"],
             needs_coexistence_sync: false,
             credit_allocation_id: None,
+            wabas: Vec::new(),
+            not_bound_waba_ids: Vec::new(),
         }));
         assert_eq!(
             serde_json::to_value(&connected).unwrap(),
@@ -640,6 +642,34 @@ mod tests {
                 "needs_coexistence_sync": false
             })
         );
+        // M3f: the WABAs of a several-WABA completion, and the ones not bound.
+        let many = SignupResultView::from(Completed::Connected(Connected {
+            waba_id: WabaId::new("524126980791429").unwrap(),
+            phone_number_ids: Vec::new(),
+            steps_completed: Vec::new(),
+            needs_coexistence_sync: false,
+            credit_allocation_id: None,
+            wabas: vec![WabaResult {
+                waba_id: WabaId::new("524126980791430").unwrap(),
+                primary: false,
+                status: WabaStatus::Refused,
+                phone_number_ids: Vec::new(),
+                failed_step: None,
+                resumable: false,
+                code: Some("waba_owned_by_another_tenant".to_owned()),
+            }],
+            not_bound_waba_ids: vec![WabaId::new("524126980791431").unwrap()],
+        }));
+        let many = serde_json::to_value(&many).unwrap();
+        assert_eq!(
+            many["wabas"],
+            json!([{
+                "waba_id": "524126980791430", "primary": false, "status": "refused",
+                "phone_number_ids": [], "resumable": false,
+                "code": "waba_owned_by_another_tenant"
+            }])
+        );
+        assert_eq!(many["not_bound_waba_ids"], json!(["524126980791431"]));
         let cancelled = SignupResultView::from(Completed::Cancelled {
             current_step: Some("PHONE_NUMBER_SETUP".to_owned()),
         });

@@ -592,7 +592,6 @@ impl Config {
         };
         let flows_private_key = flows_private_key(&r)?;
         let onboarding = onboarding(&r)?;
-        let signup_options = signup_options(&r, &onboarding)?;
         let account_update_confirmation =
             match r.plain("WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION")?.as_deref() {
                 None | Some("graph") => AccountUpdateConfirmation::Graph,
@@ -624,8 +623,8 @@ impl Config {
             otp_default_tenant,
             erasure_key,
             flows_private_key,
+            signup_options: signup_options(&r, &onboarding)?,
             onboarding,
-            signup_options,
             account_update_confirmation,
             graph_endpoint,
             migrate: runtime.migrate,
