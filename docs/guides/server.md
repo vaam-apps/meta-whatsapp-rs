@@ -140,6 +140,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
+| `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal acts their keys allow ([Number settings](#number-settings)): the Official Business Account application, a compliance information declaration and a contact book erasure. Off, each answers `403 feature_not_available` and asks Meta nothing |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
@@ -1613,6 +1614,55 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/display-name" \
   its key: read `GET …/display-name` to see whether Meta took it.
 - The picture's handle, Meta's upload session, the picture's URL and the
   upload ids are in no log line of the service.
+
+## Number settings
+
+Scope `numbers` (roadmap M5c3), on a number of your tenant (another's is
+`404`, nothing asked of Meta). `GET /v1/numbers/{pn}` now reports the
+number's `messaging_limit_tier` (`TIER_250`, `TIER_1K`, `TIER_10K`,
+`TIER_100K`, `TIER_UNLIMITED`, …) beside its quality rating and throughput.
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/numbers/{pn}/settings` | local storage, and payload encryption's `status` and key fingerprint |
+| `PATCH /v1/numbers/{pn}/settings` | **one** setting per call: `identity_key_check`, `local_storage` (`{enabled, data_localization_region}`; only while the number is not registered, Meta's rule), `search_visibility` (`VISIBLE`, `HIDDEN`), `security_notifications`, `notify_user_change_number`; answers `{setting}` |
+| `PUT`, `DELETE /v1/numbers/{pn}/settings/payload-encryption` | payload encryption on (`{client_encryption_key}`, your **public** key in base64) or off; `204` |
+| `GET`, `PUT`, `DELETE /v1/numbers/{pn}/username`, `GET …/username/suggestions` | the business username (3 to 35 characters, Meta's format; `force_transfer` moves it from another number of the portfolio); the usernames WhatsApp reserved |
+| `GET`, `POST /v1/numbers/{pn}/official-business-account` | the status; the application (a legal act, below) |
+| `GET`, `PUT /v1/numbers/{pn}/compliance-info` | India's business compliance information; the declaration (a legal act, below) |
+| `GET /v1/numbers/{pn}/health-status` | whether messages can be sent through the number, and each node's status |
+| `GET`, `PUT /v1/numbers/{pn}/conversational-components` | the welcome message flag, ice breakers (4 of 80 characters) and commands (30; names of 32 and hints of 256) |
+| `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase one user's contact book entry at Meta (a legal act, scope `erasure`) |
+
+- **Payload encryption keys are secrets.** The key is in the request body
+  only: not in a log, an error, a `Debug` or an answer (a private key or a
+  value that is not base64 is `422 invalid_request` on
+  `client_encryption_key`, never quoted). Meta's own `cloud_encryption_key`
+  is not answered: the settings read gives the status and your key's
+  fingerprint. Meta's error texts on these calls are withheld, and a
+  call cut by a timeout is not replayed (`504`: read the settings before
+  asking again).
+- **Legal acts are off until you turn them on.** The Official Business
+  Account application, a compliance information declaration and a
+  contact book erasure answer `403 feature_not_available`, with nothing
+  asked of Meta, unless the deployment sets `WA_SERVER_LEGAL_ACTS=on`.
+  Turned on, each is taken only when a tenant's key asks (the erasure
+  needs scope `erasure`), is **audited** (actions
+  `official_business_account_requested`, `compliance_info_set`,
+  `contact_book_entry_deleted`, with the tenant, WABA, number, the key's
+  public id and the outcome; never what they say or whose entry), and
+  nothing else in the service takes one. The application takes an
+  `Idempotency-Key` and is never replayed after a timeout; the erasure is
+  irreversible and takes only a BSUID (a phone number is `422`).
+- **Bounds.** Meta's documented limits are checked before any request
+  (`422` on the field); where Meta states none the service's own apply:
+  links are `http` or `https` without credentials, texts have no control,
+  bidi override or zero-width character, short texts are at most 128
+  characters and free texts 1024.
+- **Not offered**: changing the number's `webhook_url` or
+  `connection_status` (the service owns the number's events), calling
+  settings (roadmap M5e), bot details and the coexistence data sync. No
+  call of these routes was run against Meta live.
 
 ## Rate limits
 
