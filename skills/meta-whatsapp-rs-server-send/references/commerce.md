@@ -1,6 +1,6 @@
 # Commerce, QR codes, analytics and the block list
 
-> **Verified against meta-whatsapp-rs e6cebefa7240233b0411f806092759c506d581fd (2026-11-05).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tags `commerce`, `qr_codes`, `analytics` and `contacts`), `docs/guides/server.md` section "Commerce, QR codes, analytics and the block list" and [examples/commerce.ts](../examples/commerce.ts).
+> **Verified against meta-whatsapp-rs 5c740bb62a4bdab780e4e51725b85eeb5ee5ca2d (2026-11-06).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tags `commerce`, `qr_codes`, `analytics` and `contacts`), `docs/guides/server.md` section "Commerce, QR codes, analytics and the block list" and [examples/commerce.ts](../examples/commerce.ts).
 
 Four scopes, one per family: `commerce`, `qr_codes`, `analytics` and
 `contacts`. A key minted before them has none, and `send` grants none:
