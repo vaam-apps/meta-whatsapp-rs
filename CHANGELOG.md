@@ -84,7 +84,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5j2)
 
 - **Idempotency on the operator's creating POSTs** (roadmap M5j2, design
-  D255 done, D290 to D294, implementer's proposals): the business
+  D255 done, D290 to D294, the coordinator's decisions under the owner's delegation, swappable): the business
   verification submission (`POST /v1/admin/partners/business-verifications`)
   and the solution creation (`POST /v1/admin/partners/solutions`) take an
   optional `Idempotency-Key`, scoped to the **admin key** (records under
@@ -97,7 +97,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   (`admin idempotency`) adds `wa_server_admin_idempotency`, a table of the
   operator's records with no foreign key to the tenants; the namespace and
   the table are pending the owner's confirmation before the first release.
-  The OpenAPI change is additive (the header parameter on two routes).
+  The OpenAPI change is additive (the header parameter on two routes). The hosted claim's and the pool's keys are roadmap M5j3.
 
 ### Added (roadmap M5j)
 
