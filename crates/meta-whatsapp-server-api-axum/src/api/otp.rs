@@ -190,6 +190,7 @@ async fn issue(state: &Grant, caller: &Caller, request: IssueRequest) -> Result<
         .otp()
         .open(state.authz(), caller)?
         .observed_by(state.metrics())
+        .naming_the_account(state.settings().send_messaging_account_id)
         .issue(request)
         .await?;
     Success::json(StatusCode::OK, &OtpIssuedView::from(issued))

@@ -1472,7 +1472,9 @@ pub(crate) fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
 /// (`owned` is the state's own: the extractor made it with
 /// `state.authz()`, which admits it).
 fn messages<'a>(state: &'a Grant, owned: &'a OwnedNumber) -> Result<Messages<'a>, ApiError> {
-    Ok(Messages::new(state.authz(), owned.capability(state))?.observed_by(state.metrics()))
+    Ok(Messages::new(state.authz(), owned.capability(state))?
+        .observed_by(state.metrics())
+        .naming_the_account(state.settings().send_messaging_account_id))
 }
 
 /// Send `message` with the number's token: `202` with its id, or the
@@ -1482,7 +1484,7 @@ pub(crate) async fn send(
     owned: &OwnedNumber,
     message: &OutboundMessage,
 ) -> Result<Success, ApiError> {
-    let accepted = messages(state, owned)?.send(message).await?;
+    let accepted = Box::pin(messages(state, owned)?.send(message)).await?;
     Success::json(StatusCode::ACCEPTED, &MessageAccepted::from(accepted))
 }
 

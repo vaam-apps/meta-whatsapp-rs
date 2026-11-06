@@ -359,6 +359,8 @@ pub struct Conversations<'a> {
     /// The service's clock, the inbox's own: a read receipt's age.
     clock: Arc<dyn Clock>,
     observer: &'a dyn Observer,
+    /// [`Self::naming_the_account`].
+    names_account: bool,
 }
 
 impl std::fmt::Debug for Conversations<'_> {
@@ -405,7 +407,17 @@ impl<'a> Conversations<'a> {
             store,
             clock,
             observer: &(),
+            names_account: false,
         })
+    }
+
+    /// Whether a reply names the number's binding's WABA id as its
+    /// `messaging_account_id`, as [`messages::Messages::naming_the_account`]
+    /// does for a send (roadmap M5c5).
+    #[must_use]
+    pub fn naming_the_account(mut self, enabled: bool) -> Self {
+        self.names_account = enabled;
+        self
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).
@@ -636,6 +648,7 @@ impl<'a> Conversations<'a> {
             }
             messages::admit_named_object(self.authz, self.number, self.observer, &message).await?;
         }
+        let message = messages::billed_to_binding(&message, self.number, self.names_account);
         match self.inbox.send(&key, message).await {
             Ok(response) => Accepted::from_response(response),
             Err(error) => Err(self.failed(&error).await),

@@ -2379,6 +2379,25 @@ pub struct Messages<'a> {
     authz: &'a Authorizer,
     number: &'a OwnedNumber,
     observer: &'a dyn Observer,
+    /// [`Self::naming_the_account`].
+    names_account: bool,
+}
+
+/// `message` as a send from `number` bills it (roadmap M5c5, design D37):
+/// with `enabled` (`WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`), the number's
+/// binding's WABA id as the library's `messaging_account_id`; else as it
+/// is. The one place that names the account: [`Messages::send`] and the
+/// inbox's reply call it, and a request cannot carry the field itself
+/// ([`message`] never sets it and the request's unknown keys are
+/// refused), so the account is always the binding's.
+pub(crate) fn billed_to_binding(
+    message: &OutboundMessage,
+    number: &OwnedNumber,
+    enabled: bool,
+) -> OutboundMessage {
+    let mut named = message.clone();
+    named.messaging_account_id = enabled.then(|| number.waba_id().clone());
+    named
 }
 
 impl std::fmt::Debug for Messages<'_> {
@@ -2405,6 +2424,7 @@ impl<'a> Messages<'a> {
             authz,
             number,
             observer: &(),
+            names_account: false,
         })
     }
 
@@ -2412,6 +2432,16 @@ impl<'a> Messages<'a> {
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Whether a send names the number's binding's WABA id as its
+    /// `messaging_account_id` (roadmap M5c5, design D37; the adapter passes
+    /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`). Off until called: a send
+    /// names none and Meta resolves the account from the token.
+    #[must_use]
+    pub fn naming_the_account(mut self, enabled: bool) -> Self {
+        self.names_account = enabled;
         self
     }
 
@@ -2426,7 +2456,8 @@ impl<'a> Messages<'a> {
         api.with_details(error)
     }
 
-    /// Send `message` (built by [`message`]) with the number's token: the
+    /// Send `message` (built by [`message`]) with the number's token (naming
+    /// the binding's account when [`Self::naming_the_account`]): the
     /// accepted message, or the error, with Meta's `details`. A Flow or a
     /// catalog it names by id is checked first to be the number's WABA's
     /// (the [module](self)'s "Objects named by id"). A timeout, or a
@@ -2443,11 +2474,12 @@ impl<'a> Messages<'a> {
     /// message id.
     pub async fn send(&self, message: &OutboundMessage) -> Result<Accepted, ServiceError> {
         admit_named_object(self.authz, self.number, self.observer, message).await?;
+        let message = billed_to_binding(message, self.number, self.names_account);
         let sent = self
             .number
             .client()
             .messages(self.number.phone_number_id().clone())
-            .send(message)
+            .send(&message)
             .await;
         match sent {
             Ok(response) => Accepted::from_response(response),

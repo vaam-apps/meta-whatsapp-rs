@@ -146,6 +146,14 @@ pub struct Settings {
     /// (the default), it is `403 feature_not_available` and nothing is
     /// asked of Meta. AGENTS.md, Legal acts: never on by itself.
     pub legal_acts: bool,
+    /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (roadmap M5c5, design D37,
+    /// pending the owner's confirmation before the first release): whether
+    /// a send from a number (a message, an inbox reply) names its
+    /// binding's WABA id as `messaging_account_id`, so that Meta bills the
+    /// binding's Messaging Account whichever ones the token reaches. On
+    /// (the default); off, a send names none and Meta resolves the account
+    /// from the token.
+    pub send_messaging_account_id: bool,
 }
 
 impl Default for Settings {
@@ -169,6 +177,7 @@ impl Default for Settings {
             webhooks_out: None,
             flows: None,
             legal_acts: false,
+            send_messaging_account_id: true,
         }
     }
 }

@@ -48,7 +48,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L28, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L29, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2m |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
@@ -4844,6 +4844,25 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `unknown`; the SIP status codes of the page's SIP section are not
     Graph codes and are not classified; `613` as `rate_limited` makes a
     non-idempotent POST replayable on it (D241).
+- [ ] **L29. The Messaging Account on the calling actions**
+  (`meta-whatsapp-client`, `client::calling`; row 140; found reading
+  `account-model-evolution/messaging` for M5c5): Meta's Calling API takes
+  `messaging_account_id` in the body of every action (`connect`,
+  `pre_accept`, `accept`, `reject`, `terminate`), under the rule the
+  Messages API has (include it when the access token reaches several
+  Messaging Accounts on the number), "the same value on every request for
+  a call"; the page gives no phase for it, and the library's calls do not
+  carry it.
+  - **Kind:** additive (an option on the calling calls, as L16a's
+    `OutboundMessage::messaging_account_id`).
+  - **After:** nothing.
+  - **Decisive:** the page's `connect` request example as exact JSON;
+    an id that is not digits never reaches the transport; no option, no
+    key.
+  - **Then, in the service:** M5e's call routes name the number's
+    binding's WABA id under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`, on
+    every action of a call, with M5c5's test walking them (a follow-up of
+    this item, not yet scheduled).
 
 ## 4. Service milestones
 
@@ -6657,8 +6676,8 @@ or WABA fails the family's own cross-tenant test).
   - **Decisive:** M5.1, M5.2.
 - [ ] **M5c5. Messaging Accounts in the service** (row 140; design
   D37): a send from a bound number names its binding's WABA id as
-  `messaging_account_id`, behind the setting `send_messaging_account_id`
-  (on by default), and the guide says how a number shared by several
+  `messaging_account_id`, behind the setting `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`
+  (on by default; `send_messaging_account_id` in `Settings`), and the guide says how a number shared by several
   Messaging Accounts is held (one binding; the latest same-tenant attach
   is the one billed; another tenant's is refused). Several bindings per
   number wait for the owner's answer to OPEN_QUESTIONS #46.
@@ -6668,6 +6687,24 @@ or WABA fails the family's own cross-tenant test).
     holding the number, the sends name the second; another tenant's
     attach of it stays `409 waba_owned_by_another_tenant`; a send body
     naming `messaging_account_id` itself stays refused.
+  - **Landed (partly; the item stays open):** `Messages::send`, the
+    inbox reply and the OTP issue (the library's new
+    `OtpService::messaging_account_id`, additive) name the binding's WABA
+    id; the first two through one function
+    (`messages::billed_to_binding`), behind
+    `Settings::send_messaging_account_id` /
+    `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on; D270-D273, the
+    coordinator's decisions of 2026-11-06, pending the owner's confirmation of the
+    name before the first release); the guide says how a shared number is
+    held; `crates/meta-whatsapp-server/tests/messaging_account.rs` walks
+    the committed document for every route that reaches `/{pn}/messages`,
+    the latest same-tenant attach, the other tenant's refusal and the
+    refused body. No stored name, route or OpenAPI change.
+  - **Not done here:** the calling actions (Meta's `calling` pages accept
+    the field; the library's calls do not carry it): L29, then the
+    service. The marketing send (M5h, landed) names none: Meta's pages
+    for `/marketing_messages` document no such field; pinned by the walk. Several bindings per number
+    wait for OPEN_QUESTIONS #46.
 - [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,
   156): the per-number webhook override, the `connection_status` and
   `webhook_url` setters, a WABA's health status and bot details.
