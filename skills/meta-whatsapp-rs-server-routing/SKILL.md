@@ -25,15 +25,15 @@ All under `/v1/numbers/{pn}`, with the number's WABA token:
 
 | Route | Does |
 | --- | --- |
-| `GET …/routing-roles` | `{roles, is_standby}`: the roles your business holds (`calls`, `ctwa`, `customer_service`, `escalation`, `marketing`, `utility`), unordered; empty is a success |
+| `GET …/routing-roles` | `{roles, is_standby}`: the roles your business holds (calls, ctwa, customer_service, escalation, marketing, `utility`), unordered; empty is a success |
 | `POST …/thread-control/pass` | `{user, target_role?, metadata?}`; without a role, to the escalation partner |
 | `POST …/thread-control/take` | `{user, metadata?}`; the escalation partner only |
 | `POST …/thread-control/release` | `{user}`; the thread goes idle, and an idle one succeeds too |
 
 The three actions answer `200 {request_id}` (Meta's, for its support) and
 take an `Idempotency-Key`. Meta tells the caller nothing more: the new
-owner of a pass gets `control_passed`, the previous owner of a take gets
-`control_taken`, a release has no event, and **no call says who owns a
+owner of a pass gets control_passed, the previous owner of a take gets
+control_taken, a release has no event, and **no call says who owns a
 thread** (keep that state yourself, from those events and your own calls).
 
 ## The user, and a role never an app
@@ -49,12 +49,12 @@ export function bsuid(userId: string): ThreadUser {
 }
 ```
 
-A pass hands the thread to a **role**: `target_role` is `ai_agent`, `ctwa`,
-`customer_service`, `escalation`, `marketing` or `utility`, spelled so
+A pass hands the thread to a **role**: `target_role` is ai_agent, ctwa,
+customer_service, escalation, marketing or `utility`, spelled so
 (anything else is `422 target_role`). There is no app id in this API: the
 business that owns the number configures which responder holds each role,
 so a pass cannot reach another tenant's app. Without a role it goes to
-the escalation partner, which therefore cannot pass. `ai_agent` exists
+the escalation partner, which therefore cannot pass. ai_agent exists
 only where Meta Business Agent is enabled; Meta judges that.
 `metadata` (2,000 characters at most) is forwarded to the new owner.
 
@@ -100,8 +100,8 @@ A number without Conversation Routing answers the roles read with Meta's
 ## What never reaches a log
 
 The user (phone, `wa_id`, BSUID) and `metadata` are in no log line, error or
-audit event of the service. Each action is an audit event (`thread_passed`,
-`thread_taken`, `thread_released`) holding the key, tenant, WABA, number
+audit event of the service. Each action is an audit event (thread_passed,
+thread_taken, thread_released) holding the key, tenant, WABA, number
 and, for a pass, the role. Do the same on your side: log the handover, not
 the person.
 
@@ -112,8 +112,8 @@ which thread control needs and only the business can accept in Meta
 Business Suite. It does not report a thread's owner (Meta offers no call),
 and the service does not record your own pass, take or release in its
 inbox's owner state: after a pass, a free-form reply through the inbox
-routes may still be let through and Meta then refuses it (`409
-thread_owned_elsewhere`). It does not take a thread implicitly: the
+routes may still be let through and Meta then refuses it
+(`409 thread_owned_elsewhere`). It does not take a thread implicitly: the
 escalation partner's service message does, with no call.
 
 ## Related skills
