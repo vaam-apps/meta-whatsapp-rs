@@ -686,6 +686,21 @@ pub struct Restriction {
     pub expiration: Option<OffsetDateTime>,
 }
 
+/// `settings` with every SIP server's password removed: the second lock
+/// after the request's (`include_sip_credentials` is never sent), for a
+/// password Meta answers anyway. Decisive: the unit test sets one and reads
+/// it back through the field, which no serializer can hide.
+fn without_sip_passwords(mut settings: CallingSettings) -> CallingSettings {
+    for server in settings
+        .sip
+        .iter_mut()
+        .flat_map(|s| s.servers.iter_mut().flatten())
+    {
+        server.sip_user_password = None;
+    }
+    settings
+}
+
 impl Settings {
     /// The restrictions Meta reports.
     pub fn restrictions(&self) -> Vec<Restriction> {
@@ -833,17 +848,9 @@ impl<'a> Calls<'a> {
     /// Meta's refusal or failure, with its code (no text).
     pub async fn settings(&self) -> Result<Settings, ServiceError> {
         match self.client().settings(false).await {
-            Ok(settings) => {
-                let mut calling = settings.unwrap_or_default();
-                for server in calling
-                    .sip
-                    .iter_mut()
-                    .flat_map(|s| s.servers.iter_mut().flatten())
-                {
-                    server.sip_user_password = None;
-                }
-                Ok(Settings { calling })
-            }
+            Ok(settings) => Ok(Settings {
+                calling: without_sip_passwords(settings.unwrap_or_default()),
+            }),
             Err(error) => Err(self.failed(&error).await),
         }
     }
@@ -1219,6 +1226,36 @@ mod tests {
         // Debug names sections, never values.
         let shown = format!("{change:?}");
         assert!(shown.contains("voicemail") && !shown.contains("1037543291543636"));
+    }
+
+    /// A SIP server's password never leaves the core: the library keeps it
+    /// off the wire when serializing, so only the field itself shows the
+    /// drop. Decisive: delete the loop of `without_sip_passwords` and the
+    /// assertion fails, whatever the adapter's view holds.
+    #[test]
+    fn a_sip_servers_password_is_dropped_from_the_settings() {
+        let settings: CallingSettings = serde_json::from_value(json!({
+            "status": "ENABLED",
+            "sip": {"status": "ENABLED", "servers": [
+                {"hostname": "sip.example.com", "port": 5061, "sip_user_password": "hunter2-secret"},
+                {"hostname": "sip2.example.com", "sip_user_password": "other-secret"}]}
+        }))
+        .unwrap();
+        let servers = |s: &CallingSettings| s.sip.as_ref().unwrap().servers.clone().unwrap();
+        assert!(
+            servers(&settings)
+                .iter()
+                .all(|s| s.sip_user_password.is_some()),
+            "the fixture carries passwords"
+        );
+        let kept = without_sip_passwords(settings);
+        let after = servers(&kept);
+        assert_eq!(after.len(), 2, "the servers stay");
+        assert!(after.iter().all(|s| s.sip_user_password.is_none()));
+        assert_eq!(after[0].hostname, "sip.example.com");
+        // A change with no SIP section is untouched.
+        let plain = without_sip_passwords(CallingSettings::default());
+        assert!(plain.sip.is_none());
     }
 
     /// The record key is pinned (a stored name: a change orphans the
