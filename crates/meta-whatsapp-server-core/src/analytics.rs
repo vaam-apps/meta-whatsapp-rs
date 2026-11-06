@@ -56,6 +56,7 @@
 //! punctuation a stray value could close.
 
 use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::RetryPolicy;
 use meta_whatsapp_rs::client::analytics::Granularity;
 use meta_whatsapp_rs::client::analytics::{
     AnalyticsTime, CallAnalytics, CallAnalyticsQuery, CallDataPoint, ConversationAnalytics,
@@ -1251,8 +1252,10 @@ impl<'a> Analytics<'a> {
     /// Meta's page says it cannot be disabled once confirmed. Off until
     /// the deployment enables the legal acts ([`Self::with_legal_acts`]):
     /// `403 feature_not_available`, nothing asked of Meta. Audited as
-    /// [`TEMPLATE_INSIGHTS_ENABLED`]; repeating it is harmless (Meta
-    /// confirms again), and the library replays it after a timeout.
+    /// [`TEMPLATE_INSIGHTS_ENABLED`]. Exactly one request, never replayed
+    /// (not after a timeout, a throttle or a server error), although the
+    /// library marks the call replayable: this act is not retried on the
+    /// business's behalf.
     ///
     /// # Errors
     ///
@@ -1263,7 +1266,15 @@ impl<'a> Analytics<'a> {
             return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
         }
         let facts = AnalyticsFacts::default();
-        match self.client().enable_template_insights().await {
+        // The library marks the confirmation replayable (confirming twice
+        // is harmless to Meta), but it is an act the business directs and
+        // cannot undo: exactly one request, whatever the failure.
+        let once = self.waba.client().clone().with_retry(RetryPolicy::NONE);
+        match once
+            .analytics(self.waba.waba_id().clone())
+            .enable_template_insights()
+            .await
+        {
             Ok(_) => {
                 self.audit(TEMPLATE_INSIGHTS_ENABLED, &facts, Outcome::Answered);
                 Ok(())

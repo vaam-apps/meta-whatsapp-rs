@@ -15,8 +15,11 @@
 mod common;
 
 use common::{Call, Harness};
+use meta_whatsapp_rs::RetryPolicy;
 use meta_whatsapp_rs::core::clock::Clock as _;
+use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::testing::RecordedRequest;
+use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
 use meta_whatsapp_server::state::Settings;
@@ -480,6 +483,25 @@ async fn the_products_filter_is_parsed_and_bounded_before_any_request() {
         assert_eq!(error(&refused)["field"], "filter", "{bad}");
     }
     assert_eq!(h.graph.requests().len(), sent, "refused before any request");
+
+    // What the route answered with `query` before still does (D283): an
+    // unknown parameter, a key given twice, a `limit` that is no number.
+    for bad in [
+        "bogus=1",
+        "filter=%7B%7D&filter=%7B%7D",
+        "limit=many",
+        "limit=1&limit=2",
+    ] {
+        let refused = h.call(get(format!("{base}?{bad}"), &key)).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{bad}: {}",
+            refused.text
+        );
+        assert_eq!(error(&refused)["field"], "query", "{bad}");
+    }
+    assert_eq!(h.graph.requests().len(), sent, "refused before any request");
 }
 
 // ─── Template group analytics ────────────────────────────────────────────
@@ -706,8 +728,46 @@ async fn with_the_legal_acts_off_the_insights_are_refused_without_a_request_to_m
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
         assert_eq!(reply.code(), "feature_not_available");
     }
+    // Gate before body: a body the route would never parse (here not even
+    // JSON) changes nothing, and the answer stays `403`, not `422`.
+    let garbled = insights(&key)
+        .header("content-type", "application/json")
+        .body(Body::from("{not json"));
+    let reply = h.call(garbled).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
+    assert_eq!(reply.code(), "feature_not_available");
     assert!(h.graph.requests().is_empty(), "{:?}", h.graph.requests());
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A confirmation cut off by a timeout is sent **once**, even where the
+/// client retries (the library marks the call replayable; the service does
+/// not let it be): one request, `504`, nothing left over for a second.
+/// Decisive: the `with_retry(RetryPolicy::NONE)` in
+/// `Analytics::enable_template_insights`.
+#[tokio::test]
+async fn a_cut_off_insights_confirmation_is_never_replayed() {
+    let h = Harness::with_retry(
+        Settings {
+            legal_acts: true,
+            ..common::test_settings()
+        },
+        RetryPolicy {
+            max_retries: 3,
+            base_delay: std::time::Duration::ZERO,
+            max_delay: std::time::Duration::ZERO,
+        },
+    );
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Analytics]).await;
+    h.graph.push_error(|| TransportError::Timeout);
+    h.graph
+        .push_json(200, json!({"id": 102_290_129_340_398_u64}));
+    let reply = h.call(insights(&key)).await;
+    assert_eq!(reply.status, StatusCode::GATEWAY_TIMEOUT, "{}", reply.text);
+    assert_eq!(h.graph.requests().len(), 1, "{:?}", h.graph.requests());
+    assert_eq!(h.graph.remaining(), 1, "the second answer was never asked");
 }
 
 /// With the legal acts on: one request, the page's, with the tenant's

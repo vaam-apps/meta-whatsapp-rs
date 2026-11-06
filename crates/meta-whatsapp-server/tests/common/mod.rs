@@ -745,11 +745,35 @@ impl Harness {
         Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, wrap)
     }
 
+    /// On a memory store, with `settings`, Meta reached by a client that
+    /// follows `retry` (every other harness never retries), to prove what
+    /// the service does not let the library replay.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_retry(settings: Settings, retry: RetryPolicy) -> Self {
+        Self::build_with_retry(
+            Stores::memory(),
+            settings,
+            DEFAULT_APP_SECRETS,
+            |graph| Arc::new(graph),
+            retry,
+        )
+    }
+
     fn build(
         stores: Stores,
         settings: Settings,
         app_secrets: &[&str],
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::build_with_retry(stores, settings, app_secrets, wrap, RetryPolicy::NONE)
+    }
+
+    fn build_with_retry(
+        stores: Stores,
+        settings: Settings,
+        app_secrets: &[&str],
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+        retry: RetryPolicy,
     ) -> Self {
         let Stores {
             store,
@@ -767,7 +791,7 @@ impl Harness {
         let graph = ScriptedTransport::new();
         let client = Client::builder()
             .shared_transport(wrap(graph.clone()))
-            .retry(RetryPolicy::NONE)
+            .retry(retry)
             .build()
             .unwrap();
         let clock = ManualClock::new(time::OffsetDateTime::now_utc());
