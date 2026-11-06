@@ -2454,7 +2454,9 @@ async fn groups(h: &Harness, admin: &str) -> Vec<String> {
                                         "details": format!("{GROUP_PHONE} {GROUP_USERNAME}")}}}),
     );
     let refused = h.call(remove(json!([{"phone": GROUP_PHONE}]))).await;
-    assert_eq!(refused.status.as_u16(), 502, "{}", refused.text);
+    // `131203` is `409 recipient_terms_not_accepted` since L27 (it was
+    // `502 unknown`); the logs must hold none of Meta's text either way.
+    assert_eq!(refused.status.as_u16(), 409, "{}", refused.text);
     // The join requests.
     h.graph.push_json(
         200,

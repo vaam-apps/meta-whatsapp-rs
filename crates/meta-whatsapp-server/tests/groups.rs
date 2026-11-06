@@ -592,9 +592,14 @@ async fn a_group_is_read_changed_and_deleted_as_metas_page_says() {
     let reply = h
         .call(on(Method::PATCH, &path, &key).json(&json!({"subject": "x"})))
         .await;
-    // 131209 is no code the library classifies: `unknown`, answered `502`
-    // with Meta's code, and its text nowhere.
-    assert_eq!(reply.status, StatusCode::BAD_GATEWAY, "{}", reply.text);
+    // 131209 is an invalid parameter (L27, D170): `422`, with Meta's
+    // code, and its text nowhere.
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "invalid_parameter"),
+        "{}",
+        reply.text
+    );
     assert_eq!(reply.json()["error"]["graph"]["code"], 131_209);
     assert!(!reply.text.contains("do not echo me"), "{}", reply.text);
 
@@ -618,6 +623,266 @@ async fn a_group_is_read_changed_and_deleted_as_metas_page_says() {
         reply.text
     );
     assert!(reply.json()["error"]["graph"].is_null(), "{}", reply.text);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+// ─── Meta's group error codes (roadmap L27, D170-D172) ───────────────────
+
+/// `groups/error-codes`: each documented code, on a route it can come from,
+/// answers its kind's code and status (`ErrorKind::from_code`, the design's
+/// section 5.2) with Meta's code in `graph.code` and **none of Meta's text**
+/// (every text of the error carries a sentinel, which may quote a
+/// participant). The reads and the deletion no longer turn a documented
+/// refusal that is not `131041` into `404` (D172): `131059` on a listing
+/// is `422 invalid_cursor`, `131207` on a read `403 group_suspended`.
+/// Each answer is `retryable: false` and a 4xx proves nothing was sent.
+/// Decisive: a `from_code` arm; the service's `codes!` row; `failed_on_group`.
+#[tokio::test]
+#[allow(clippy::too_many_lines, clippy::type_complexity)] // the table of codes and the routes they come from
+async fn meta_group_error_codes_answer_their_kinds_code_and_none_of_its_text() {
+    const SENTINEL: &str = "SENTINEL-7f3a91";
+    let (h, key) = connected().await;
+    hold(&h, PN, GROUP).await;
+    let numbers = format!("/v1/numbers/{PN}/groups");
+    let group = format!("{numbers}/{GROUP}");
+    let remove = json!({"users": [{"phone": "+17865347866"}]});
+    let approve = json!({"join_request_ids": ["JOIN-1"]});
+    let create = json!({"subject": "New Purchase Inquiry"});
+    let update = json!({"subject": "x"});
+    // (method, path, body, Meta's code, the status and code answered)
+    let cases: Vec<(Method, String, Option<&Value>, i64, u16, &str)> = vec![
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_204,
+            409,
+            "group_limit_reached",
+        ),
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_211,
+            409,
+            "group_limit_reached",
+        ),
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_214,
+            409,
+            "group_creation_disabled",
+        ),
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_215,
+            403,
+            "feature_not_available",
+        ),
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_208,
+            429,
+            "group_rate_limited",
+        ),
+        (
+            Method::POST,
+            numbers.clone(),
+            Some(&create),
+            131_202,
+            422,
+            "invalid_parameter",
+        ),
+        (
+            Method::GET,
+            numbers.clone(),
+            None,
+            131_059,
+            422,
+            "invalid_cursor",
+        ),
+        (
+            Method::GET,
+            numbers.clone(),
+            None,
+            131_215,
+            403,
+            "feature_not_available",
+        ),
+        (Method::GET, group.clone(), None, 131_041, 404, "not_found"),
+        // D172, the rule kept: a code no page documents (`131216`, `Unknown`)
+        // answered with a 4xx on a read is Meta refusing the group.
+        (Method::GET, group.clone(), None, 131_216, 404, "not_found"),
+        (
+            Method::GET,
+            group.clone(),
+            None,
+            131_207,
+            403,
+            "group_suspended",
+        ),
+        (
+            Method::GET,
+            format!("{group}/join-requests"),
+            None,
+            131_059,
+            422,
+            "invalid_cursor",
+        ),
+        (
+            Method::PATCH,
+            group.clone(),
+            Some(&update),
+            131_209,
+            422,
+            "invalid_parameter",
+        ),
+        (
+            Method::PATCH,
+            group.clone(),
+            Some(&update),
+            131_210,
+            422,
+            "invalid_parameter",
+        ),
+        (
+            Method::PATCH,
+            group.clone(),
+            Some(&update),
+            131_207,
+            403,
+            "group_suspended",
+        ),
+        (
+            Method::DELETE,
+            group.clone(),
+            None,
+            131_041,
+            404,
+            "not_found",
+        ),
+        (
+            Method::DELETE,
+            group.clone(),
+            None,
+            131_207,
+            403,
+            "group_suspended",
+        ),
+        (
+            Method::POST,
+            format!("{group}/participants/remove"),
+            Some(&remove),
+            131_212,
+            422,
+            "group_participant_not_found",
+        ),
+        (
+            Method::POST,
+            format!("{group}/participants/remove"),
+            Some(&remove),
+            131_201,
+            409,
+            "group_partially_applied",
+        ),
+        (
+            Method::POST,
+            format!("{group}/join-requests/approve"),
+            Some(&approve),
+            131_213,
+            422,
+            "join_request_not_found",
+        ),
+        (
+            Method::POST,
+            format!("{group}/join-requests/approve"),
+            Some(&approve),
+            131_203,
+            409,
+            "recipient_terms_not_accepted",
+        ),
+        (
+            Method::POST,
+            format!("{group}/join-requests/reject"),
+            Some(&approve),
+            131_213,
+            422,
+            "join_request_not_found",
+        ),
+        (
+            Method::POST,
+            format!("{group}/invite-link"),
+            None,
+            131_207,
+            403,
+            "group_suspended",
+        ),
+    ];
+    for (i, (method, path, body, code, status, expected)) in cases.into_iter().enumerate() {
+        h.graph.push_json(
+            400,
+            json!({"error": {
+                "message": format!("(#{code}) {SENTINEL} message"),
+                "title": format!("{SENTINEL} title"),
+                "type": "OAuthException", "code": code,
+                "error_user_title": format!("{SENTINEL} user title"),
+                "error_user_msg": format!("{SENTINEL} user message"),
+                "error_data": {"messaging_product": "whatsapp", "details": format!("{SENTINEL} details")},
+                "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+        );
+        let mut call = on(method.clone(), &path, &key);
+        if let Some(body) = body {
+            call = call.json(body);
+        }
+        if path == numbers && method == Method::POST {
+            call = call.header("idempotency-key", &format!("create-{i}"));
+        }
+        let reply = h.call(call).await;
+        let what = format!("{method} {path} {code}: {}", reply.text);
+        assert_eq!(
+            (reply.status.as_u16(), reply.code().as_str()),
+            (status, expected),
+            "{what}"
+        );
+        let error = &reply.json()["error"];
+        if status == 404 {
+            // Meta refusing the group: not found, nothing of Meta's.
+            assert!(error["graph"].is_null(), "{what}");
+        } else {
+            assert_eq!(error["graph"]["code"], code, "{what}");
+            assert!(error["graph"]["details"].is_null(), "{what}");
+        }
+        assert_eq!(error["retryable"], false, "{what}");
+        assert_eq!(error["may_have_been_sent"], false, "{what}");
+        assert!(!reply.text.contains(SENTINEL), "{what}");
+        // Never retried: one request for the answer.
+        assert_eq!(h.graph.remaining(), 0, "{what}");
+    }
+}
+
+/// D172: the rule "a 4xx `Unknown` on a group read is Meta refusing the
+/// group" is for a 4xx only. An undocumented code on a 5xx is Meta failing,
+/// answered `502 unknown` with Meta's code, never `404`.
+#[tokio::test]
+async fn an_unknown_code_on_a_server_error_is_not_the_group_refused() {
+    let (h, key) = connected().await;
+    hold(&h, PN, GROUP).await;
+    let group = format!("/v1/numbers/{PN}/groups/{GROUP}");
+    h.graph.push_json(500, graph_error(131_216, "x"));
+    let reply = h.call(Call::get(&group).key(&key)).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::BAD_GATEWAY, "unknown"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(reply.json()["error"]["graph"]["code"], 131_216);
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -749,6 +1014,13 @@ async fn participants_are_removed_by_phone_wa_id_or_bsuid() {
     assert_eq!(
         reply.json()["error"]["graph"]["code"],
         131_203,
+        "{}",
+        reply.text
+    );
+    // `131203`: the person has not accepted the terms (D170).
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "recipient_terms_not_accepted"),
         "{}",
         reply.text
     );
