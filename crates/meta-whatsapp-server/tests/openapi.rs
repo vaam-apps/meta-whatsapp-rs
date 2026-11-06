@@ -417,7 +417,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// group's creation; since roadmap M5c1 a resumable upload's start; since
 /// roadmap M5d a Flow's creation; since roadmap M5f a group's creation; since
 /// roadmap M5g a QR code's creation, a block and an unblock; since roadmap
-/// M5c2 a display name's request; since roadmap M5c3 an Official Business Account application; since roadmap M5e the call a business places), and the upload is a multipart form.
+/// M5c2 a display name's request; since roadmap M5c3 an Official Business
+/// Account application; since roadmap M5e the call a business places; since roadmap M5l a
+/// thread's pass, take and release), and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -452,6 +454,9 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/qr-codes",
             "POST /v1/numbers/{pn}/register",
             "POST /v1/numbers/{pn}/request-code",
+            "POST /v1/numbers/{pn}/thread-control/pass",
+            "POST /v1/numbers/{pn}/thread-control/release",
+            "POST /v1/numbers/{pn}/thread-control/take",
             "POST /v1/otp/issue",
             "POST /v1/wabas/{waba_id}/flows",
             "POST /v1/wabas/{waba_id}/payment-configurations",

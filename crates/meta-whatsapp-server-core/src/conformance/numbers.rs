@@ -33,6 +33,7 @@ use crate::numbers::{
     BusinessProfile, NUMBER_FIELDS, NumberDetails, Numbers, ProfileChange, Throughput, Waba,
 };
 use crate::registration::{AttemptBudget, AttemptLimits, Registration, RegistrationAttempts, pin};
+use crate::routing::Routing;
 
 /// The tenant, its WABA, its number and the token in the vault.
 const TENANT: &str = "num-owner";
@@ -535,4 +536,17 @@ pub async fn the_registration_services_open_on_the_callers_own_number_only(backe
             .ends_with(r#""count":1}"#)
     );
     assert_eq!(script.remaining(), 0);
+
+    // 4. The routing service (roadmap M5l) opens on the same terms: B's
+    //    caller on A's number is `404`, another order's `403`, A's own
+    //    opens. Decisive: `Routing::new`'s tenant check dropped fails here.
+    let refused = Routing::new(&authz, &other, &owners_number)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (404, "not_found"));
+    let refused = Routing::new(&rival, &owner, &owners_number)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (403, "forbidden"));
+    assert!(Routing::new(&authz, &owner, &owners_number).is_ok());
 }

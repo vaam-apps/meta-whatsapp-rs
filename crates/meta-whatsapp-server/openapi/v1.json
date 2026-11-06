@@ -13003,6 +13003,135 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/routing-roles": {
+      "get": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/routing-roles`: the roles the number's business\nholds.",
+        "operationId": "get_routing_roles",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The roles the business holds on the number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingRoles"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling (the endpoint is rate limited per number and per app)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed or refused (code `100`: Conversation Routing is not enabled for the number)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/settings": {
       "get": {
         "tags": [
@@ -13515,6 +13644,489 @@
           },
           "504": {
             "description": "`timeout`: read the settings (not replayed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/thread-control/pass": {
+      "post": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/thread-control/pass`: pass the thread.",
+        "operationId": "pass_thread",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never pass twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PassThreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta accepted the pass; the new owner is told by its `control_passed` event, the caller by nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadControlResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `user`, `user.phone`, `user.wa_id`, `user.user_id`, `target_role`, `metadata` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed or refused (its code, never its text)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the thread may have been passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/thread-control/release": {
+      "post": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/thread-control/release`: release the thread.",
+        "operationId": "release_thread",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never release twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseThreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta accepted the release (an idle thread's too); no event follows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadControlResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `user`, `user.phone`, `user.wa_id`, `user.user_id` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed or refused (its code, never its text)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the thread may have been released",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/thread-control/take": {
+      "post": {
+        "tags": [
+          "routing"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/thread-control/take`: take the thread.",
+        "operationId": "take_thread",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never take twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeThreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta accepted the take; the previous owner is told by its `control_taken` event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadControlResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `user`, `user.phone`, `user.wa_id`, `user.user_id`, `metadata` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed or refused (code `2494191`: not the escalation partner)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the thread may have been taken",
             "content": {
               "application/json": {
                 "schema": {
@@ -28888,6 +29500,34 @@
           "not_found"
         ]
       },
+      "PassThreadRequest": {
+        "type": "object",
+        "description": "Pass the thread with a user to another responder.",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "metadata": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free text, at most 2,000 characters, forwarded verbatim to the new\nowner on its `control_passed` event. Never logged by the service."
+          },
+          "target_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role receiving the thread: `ai_agent`, `ctwa`,\n`customer_service`, `escalation`, `marketing` or `utility`. Absent:\nthe account's escalation partner (the same as `escalation`). A\nrole, never an app: the business that owns the number configures\nwho holds it."
+          },
+          "user": {
+            "$ref": "#/components/schemas/ThreadUser",
+            "description": "The user whose thread it is."
+          }
+        },
+        "additionalProperties": false
+      },
       "PayloadEncryptionBody": {
         "type": "object",
         "description": "The business's public key for payload encryption. Handled as a secret:\nits `Debug` shows a length, and it is in no log and no answer.",
@@ -30135,6 +30775,20 @@
           "pin_set"
         ]
       },
+      "ReleaseThreadRequest": {
+        "type": "object",
+        "description": "Release the thread with a user to idle.",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/ThreadUser",
+            "description": "The user whose thread it is."
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoveGroupParticipantsRequest": {
         "type": "object",
         "description": "The participants to remove. No `Debug`: it names people.",
@@ -30436,6 +31090,27 @@
         },
         "additionalProperties": false
       },
+      "RoutingRoles": {
+        "type": "object",
+        "description": "The routing roles a number's business holds.",
+        "required": [
+          "roles",
+          "is_standby"
+        ],
+        "properties": {
+          "is_standby": {
+            "type": "boolean",
+            "description": "Whether the business has standby visibility (copies of activity on\nthreads it does not own)."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Meta's names for the roles (`calls`, `ctwa`, `customer_service`,\n`escalation`, `marketing`, `utility`; a later one as Meta adds it),\nin no order. Empty: routing is on, and no entry point routes to\nthe business."
+          }
+        }
+      },
       "SavedAddress": {
         "type": "object",
         "description": "An address offered to the user.",
@@ -30481,6 +31156,7 @@
           "analytics",
           "contacts",
           "groups",
+          "routing",
           "calls"
         ]
       },
@@ -31037,6 +31713,27 @@
           "signature_hash": {
             "type": "string",
             "description": "The app's signing key hash (11 characters)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TakeThreadRequest": {
+        "type": "object",
+        "description": "Take the thread with a user (the escalation partner only).",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "metadata": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free text, at most 2,000 characters, forwarded verbatim to the\nprevious owner on its `control_taken` event. Never logged by the\nservice."
+          },
+          "user": {
+            "$ref": "#/components/schemas/ThreadUser",
+            "description": "The user whose thread it is."
           }
         },
         "additionalProperties": false
@@ -31820,6 +32517,50 @@
         },
         "additionalProperties": false
       },
+      "ThreadControlResult": {
+        "type": "object",
+        "description": "What Meta answered to a thread action it accepted.",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's opaque id of the request: quote it to Meta's support."
+          }
+        }
+      },
+      "ThreadUser": {
+        "type": "object",
+        "description": "The user whose thread an action acts on: exactly one of a phone\nnumber, a `wa_id` and a business-scoped user id (BSUID, Meta's\npreferred identifier).",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E.164 **with** its `+` (`+16505551234`)."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business-scoped user id (`US.13491208655302741918`); a parent\nBSUID (`US.ENT.…`) is refused."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's `wa_id`: digits, no `+` (`16505551234`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Throughput": {
         "type": "object",
         "description": "A number's throughput.",
@@ -32542,6 +33283,10 @@
     {
       "name": "contacts",
       "description": "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"
+    },
+    {
+      "name": "routing",
+      "description": "Conversation routing (scope `routing`; roadmap M5l): the routing roles a number's business holds, and passing, taking and releasing a user's thread; each action audited without the user, never replayed"
     },
     {
       "name": "inbox",
