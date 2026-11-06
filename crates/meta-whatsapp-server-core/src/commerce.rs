@@ -905,12 +905,12 @@ impl<'a> Catalogs<'a> {
             Ok(owner) => owner,
             Err(error) => return Err(object_failed(self.counted(&error).await, &error)),
         };
-        let owned = owner.id == set_id
+        let ours = owner.id == set_id
             && owner
                 .product_catalog
                 .as_ref()
                 .is_some_and(|c| c.id.as_str() == catalog.id);
-        if !owned {
+        if !ours {
             tracing::warn!("refused a product set that is not the WABA's catalog's");
             return Err(ServiceError::not_found());
         }
