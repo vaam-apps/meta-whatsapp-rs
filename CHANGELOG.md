@@ -349,7 +349,7 @@ stored data, the owner's).
   classification is the library's, whatever endpoint answered: see
   Changed, for the three codes a send or a media call may also see.
 - **Calling error codes** (roadmap L28, design D240-D243, the
-  implementer's proposal, not decided; from Meta's `calling/troubleshooting`
+  coordinator's decision under the owner's delegation, swappable; from Meta's `calling/troubleshooting`
   page, read on 2026-11-06). `ErrorKind::from_code` classifies `138000` to
   `138007`, `138009`, `138012` to `138015` and `138017` to `138023`
   (existing kinds where one fits: `138001` `undeliverable`, `138013`
@@ -3267,8 +3267,9 @@ stored data, the owner's).
   where it answered `502 unknown`, and `613` is now retryable, and
   resendable for a non-idempotent request, as every `rate_limited` is.
   Code that branched on `Unknown` for them has to branch on the new
-  kind. The calling page documents them for calls; the messages pages
-  were not checked for them.
+  kind. The calling page documents them for calls; the messages page
+  (`support/error-codes`, read 2026-11-06) lists none of the three, so the
+  calling page's meaning is the only one on record.
 - **Three Graph codes are classified now, whichever call they answer**
   (roadmap L27, design D170): `131020` ("Cannot send messages to single
   member groups", a group message) is `ErrorKind::Undeliverable`, `131041`

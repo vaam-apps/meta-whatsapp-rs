@@ -4824,8 +4824,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Done:** `calling/troubleshooting` (read 2026-11-06: `138000`-`138007`,
     `138009`, `138012`-`138015`, `138017`-`138023`, and the shared `100`,
     `613`, `131009`, `131030`, `131044`, `131055`) is classified in
-    `ErrorKind::from_code` (design D240-D243, the implementer's proposal,
-    not decided): existing kinds for `138001`, `131030` (`undeliverable`),
+    `ErrorKind::from_code` (design D240-D243, the coordinator's decision of
+    2026-11-06 under the owner's delegation, swappable): existing kinds for `138001`, `131030` (`undeliverable`),
     `138013` (`feature_not_available`), `131044` (`payment`), `613`
     (`rate_limited`) and `100`, `131009` (`invalid_parameter`, as before);
     eight new ones (`calling_not_enabled`, `calling_temporarily_disabled`,
