@@ -5,7 +5,7 @@ description: "WhatsApp Calling through meta-whatsapp-server, the meta-whatsapp-r
 
 # meta-whatsapp-rs-server-calling
 
-> **Verified against meta-whatsapp-rs 3cd24b38992fc5de77cffefaaf0edcf880b3e45f (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 4919b5caba4ae08b86755c2b0391bcdf64edf677 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/calls.ts](examples/calls.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#calling).
 
