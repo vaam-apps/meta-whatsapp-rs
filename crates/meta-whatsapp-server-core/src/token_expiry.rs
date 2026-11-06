@@ -390,6 +390,9 @@ mod tests {
         assert!(lead_fits_retention(day, day * 2));
         assert!(lead_fits_retention(day, day));
         assert!(!lead_fits_retention(day * 2, day));
+        // One second past the retention is past it: the row holding the key
+        // would be purged a second before the token lapses.
+        assert!(!lead_fits_retention(day + Duration::from_secs(1), day));
         assert!(lead_fits_retention(
             DEFAULT_LEAD,
             crate::events::DEFAULT_OUTBOX_RETENTION

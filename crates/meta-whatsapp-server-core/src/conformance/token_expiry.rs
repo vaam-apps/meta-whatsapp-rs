@@ -50,6 +50,7 @@ pub async fn run(backend: &dyn Backend) {
     an_event_for_a_binding_that_moved_before_the_insert_reaches_neither_tenant(backend).await;
     an_unreadable_record_neither_stops_the_round_nor_is_told(backend).await;
     a_walk_reaches_the_wabas_past_its_first_page(backend).await;
+    a_purged_event_is_told_again_which_is_why_the_lead_may_not_exceed_the_retention(backend).await;
 }
 
 const LEAD: Duration = Duration::from_hours(7 * 24);
@@ -668,4 +669,33 @@ pub async fn an_event_for_a_binding_that_moved_before_the_insert_reaches_neither
         let told = polled(backend, tenant).await;
         assert!(told.is_empty(), "{tenant}: {told:?}");
     }
+}
+
+/// Why the lead is bound by the outbox's retention (`lead_fits_retention`):
+/// the event's key lives as long as its row, so a purge of the row (here
+/// all of them, as one that ran with a retention shorter than the lead
+/// would, mid-way through a token's lead time) lets a token still due be
+/// told again by the next round. Pins the premise of the
+/// service's configuration check. Decisive: the key being kept anywhere but
+/// in the outbox row (the second round would record nothing).
+pub async fn a_purged_event_is_told_again_which_is_why_the_lead_may_not_exceed_the_retention(
+    backend: &dyn Backend,
+) {
+    const P: Holder = Holder {
+        id: "te-purge-p",
+        waba: "102290129346501",
+        pn: "106540352246511",
+    };
+    let records = backend.records();
+    hold(records.as_ref(), P).await;
+    let rig = rig(backend);
+    rig.store(P, Some(2 * DAY)).await;
+    assert!(rig.round(backend).await.recorded >= 1);
+    assert_eq!(rig.round(backend).await.recorded, 0);
+    backend.outbox().purge(Duration::ZERO).await.unwrap();
+    assert!(polled(backend, P.id).await.is_empty());
+    // (The purge took every case's rows: the others' tokens still due are
+    // told again too.)
+    assert!(rig.round(backend).await.recorded >= 1);
+    assert_eq!(polled(backend, P.id).await.len(), 1);
 }
