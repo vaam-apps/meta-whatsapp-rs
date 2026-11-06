@@ -531,6 +531,59 @@ async fn live_postgres_a_group_the_number_does_not_hold_is_not_found_before_the_
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// The design's M5.2 on Postgres (roadmap M5e): the records of the calls a
+/// number holds live in the Postgres key/value store (with their expiry),
+/// written by Meta's call events and read before the vault: a call the
+/// number does not hold (another tenant's, another number's, one never
+/// reported) is `404` with zero vault reads, and the owner's own is found
+/// with the token opened after it.
+#[tokio::test]
+async fn live_postgres_a_call_the_number_does_not_hold_is_not_found_before_the_vault() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    let (a_pn, a_pn_2, b_pn) = ("106540352242922", "106540352242923", "106540352242924");
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", "102290129340398", &[a_pn, a_pn_2], "TOKEN-OF-A")
+        .await;
+    h.tenant("tenant-b").await;
+    h.connect("tenant-b", "102290129340399", &[b_pn], "TOKEN-OF-B")
+        .await;
+    let a = h.tenant_key("tenant-a", &[Scope::Calls]).await;
+    let b = h.tenant_key("tenant-b", &[Scope::Calls]).await;
+    let call = "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh";
+    let reported = h
+        .webhook(&common::meta::call_connected("102290129340398", a_pn, call))
+        .await;
+    assert_eq!(reported.status, StatusCode::OK, "{}", reported.text);
+    for (key, pn) in [(&b, b_pn), (&a, a_pn_2), (&a, a_pn)] {
+        let reads = h.kv.vault_reads();
+        let reject = || {
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{pn}/calls/{call}/reject"),
+            )
+            .key(key)
+        };
+        if pn == a_pn {
+            // The owner's own: the token is opened, Meta asked.
+            h.graph.push_json(
+                200,
+                json!({"messaging_product": "whatsapp", "success": true}),
+            );
+            let reply = h.call(reject()).await;
+            assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
+            assert!(h.kv.vault_reads() > reads);
+        } else {
+            let reply = h.call(reject()).await;
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{pn}: {}", reply.text);
+            assert_eq!(h.kv.vault_reads(), reads, "{pn} read the vault");
+        }
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// The design's M5.1 and M5.2 on Postgres (roadmap M5c2): a resumable
 /// upload's record lives in the Postgres key/value store, and a profile
 /// picture is set from the handle in the number's own record only: another

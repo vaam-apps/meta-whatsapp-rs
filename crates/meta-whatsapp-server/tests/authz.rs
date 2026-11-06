@@ -257,6 +257,16 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
         ),
         (Method::GET, "/v1/numbers/{pn}/groups/{group_id}/analytics"),
+        // Roadmap M5e (the design's M5.1): a number's calling.
+        (Method::GET, "/v1/numbers/{pn}/call-settings"),
+        (Method::PATCH, "/v1/numbers/{pn}/call-settings"),
+        (Method::GET, "/v1/numbers/{pn}/call-permissions"),
+        (Method::POST, "/v1/numbers/{pn}/calls"),
+        (Method::POST, "/v1/numbers/{pn}/calls/{call_id}/pre-accept"),
+        (Method::POST, "/v1/numbers/{pn}/calls/{call_id}/accept"),
+        (Method::POST, "/v1/numbers/{pn}/calls/{call_id}/reject"),
+        (Method::POST, "/v1/numbers/{pn}/calls/{call_id}/terminate"),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/calls"),
     ] {
         assert!(
             routes
@@ -292,7 +302,7 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             checked += 1;
         }
     }
-    assert!(checked >= 42 + 2 * 13, "only {checked} calls");
+    assert!(checked >= 42 + 2 * 13 + 2 * 9, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
@@ -379,6 +389,89 @@ async fn a_group_the_number_does_not_hold_is_not_found_before_the_vault_on_every
             WABA_A,
             PN_A,
             common::SAMPLE_TEMPLATE_GROUP_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        h.graph.push_json(
+            500,
+            json!({"error": {"message": "x", "type": "OAuthException", "code": 2}}),
+        );
+        let asked = h.graph.requests().len();
+        let _ = h.call(call(operation, &a_key, None)).await;
+        assert!(
+            h.kv.vault_reads() > before,
+            "{label}: the vault was not read"
+        );
+        assert_eq!(h.graph.requests().len(), asked + 1, "{label}");
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The design's M5.2 for every route of the document that names a call of
+/// a number (roadmap M5e), each with A's own key on A's own number: the
+/// sample's call is none the number holds (no event reported it), so it is
+/// `404 not_found` with **zero vault reads** and nothing asked of Meta;
+/// once Meta's call event makes it the number's, the same call reads the
+/// vault and asks Meta. A call route that opened the token before the call
+/// fails the first half; one that skipped the call fails neither (the
+/// document's own M5.1 table is the other tenants'). Decisive:
+/// `CallRecords::owned` before `owned_number` in the `OwnedCall`
+/// extractor.
+#[tokio::test]
+async fn a_call_the_number_does_not_hold_is_not_found_before_the_vault_on_every_call_route() {
+    let h = two_tenants().await;
+    let a_key = h.tenant_key(A, &ALL_SCOPES).await;
+    let routes: Vec<_> = owned_routes()
+        .into_iter()
+        .filter(|o| o.template.contains("{pn}") && o.template.contains("{call_id}"))
+        .collect();
+    assert_eq!(routes.len(), 4, "the call routes: {routes:?}");
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        let reply = h.call(call(operation, &a_key, None)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+    // Another tenant's number holds that call; it is still not A's.
+    let held = h
+        .webhook(&common::meta::call_connected(
+            WABA_B,
+            PN_B,
+            common::SAMPLE_CALL_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        let reply = h.call(call(operation, &a_key, None)).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+    }
+    assert!(h.graph.requests().is_empty());
+    // A's own number reported it (a status event: the connect event of the
+    // same call is B's, and Meta's retries are deduplicated by call and
+    // event): now the token is opened and Meta asked.
+    let held = h
+        .webhook(&common::meta::call_status(
+            WABA_A,
+            PN_A,
+            common::SAMPLE_CALL_ID,
         ))
         .await;
     assert_eq!(held.status, StatusCode::OK, "{}", held.text);
@@ -525,6 +618,15 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             WABA_A,
             PN_A,
             common::SAMPLE_TEMPLATE_GROUP_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    // And the sample's call (Meta's connect event, roadmap M5e).
+    let held = h
+        .webhook(&common::meta::call_connected(
+            WABA_A,
+            PN_A,
+            common::SAMPLE_CALL_ID,
         ))
         .await;
     assert_eq!(held.status, StatusCode::OK, "{}", held.text);

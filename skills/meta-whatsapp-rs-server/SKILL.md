@@ -19,7 +19,7 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 
 Webhooks to your backend do not exist yet: write no code against them. The rest does, by skill: sends, media, templates, the inbox (`meta-whatsapp-rs-server-send`),
 Meta's webhooks, polling, one event by id and live events (`meta-whatsapp-rs-server-events`), login codes (`meta-whatsapp-rs-server-otp`),
-merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`), a number's profile picture and display name (`meta-whatsapp-rs-server-profile`), a number's settings, username, compliance information and health (`meta-whatsapp-rs-server-number-settings`), a number's groups, scope `groups` (`meta-whatsapp-rs-server-groups`).
+merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`), a number's profile picture and display name (`meta-whatsapp-rs-server-profile`), a number's settings, username, compliance information and health (`meta-whatsapp-rs-server-number-settings`), a number's groups, scope `groups` (`meta-whatsapp-rs-server-groups`), a number's calls, scope `calls` (`meta-whatsapp-rs-server-calling`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -154,7 +154,7 @@ export function nextStep(error: ErrorObject): Next {
 ## Related skills
 
 `meta-whatsapp-rs-server-send`, `meta-whatsapp-rs-server-events`, `meta-whatsapp-rs-server-otp`,
-`meta-whatsapp-rs-server-onboarding`, `meta-whatsapp-rs-server-registration`, `meta-whatsapp-rs-server-profile`, `meta-whatsapp-rs-server-number-settings`, `meta-whatsapp-rs-server-groups` (the routes above),
+`meta-whatsapp-rs-server-onboarding`, `meta-whatsapp-rs-server-registration`, `meta-whatsapp-rs-server-profile`, `meta-whatsapp-rs-server-number-settings`, `meta-whatsapp-rs-server-groups`, `meta-whatsapp-rs-server-calling` (the routes above),
 `meta-whatsapp-rs` (the Rust library, when you write Rust),
 `meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
 `meta-whatsapp-rs-production` (what the service does for you: secrets, logs, several instances).

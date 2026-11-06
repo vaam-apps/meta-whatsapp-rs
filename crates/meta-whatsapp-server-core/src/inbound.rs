@@ -87,6 +87,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use crate::backend::Backend;
+use crate::calls::CallRecords;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
 use crate::groups::GroupRecords;
 use crate::notify::{EventNotifier, Wakeup};
@@ -356,6 +357,7 @@ impl Pipeline {
             moves: inbound.moves,
             actions: None,
             groups: GroupRecords::new(backend.kv()),
+            calls: CallRecords::new(backend.kv()),
         };
         Self {
             verifier: inbound.verifier,
@@ -520,6 +522,7 @@ struct ServiceSink {
     /// tenant's number is kept, a group deleted forgotten, so that the
     /// group routes decide ownership before any token is opened.
     groups: GroupRecords,
+    calls: CallRecords,
 }
 
 impl ServiceSink {
@@ -606,6 +609,13 @@ impl ServiceSink {
                 .on_event(tenant, &event)
                 .await
                 .map_err(|e| self.failed("groups", kind, storage(e)))?;
+            // The same for a call: its record is written before the event is
+            // recorded, so no tenant sees a call event for a call the
+            // service cannot act on (roadmap M5e).
+            self.calls
+                .on_event(tenant, &event)
+                .await
+                .map_err(|e| self.failed("calls", kind, storage(e)))?;
         }
         if route.owner.is_some() {
             self.inbox

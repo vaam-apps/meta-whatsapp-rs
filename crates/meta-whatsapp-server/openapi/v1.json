@@ -3758,6 +3758,1157 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/call-permissions": {
+      "get": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/call-permissions`: whether the number may call a\nuser, and what it may do next.",
+        "operationId": "get_call_permissions",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "phone",
+            "in": "query",
+            "description": "A phone number in E.164 with its `+`; URL-encode the `+`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "A BSUID or a parent BSUID. With both parameters Meta uses the phone\nnumber.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user's permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallPermissions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `phone`, `user_id`, `user` (neither given) or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/call-settings": {
+      "get": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/call-settings`: the number's calling settings.",
+        "operationId": "get_call_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings; a SIP server's password is never in it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallingSettingsRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/call-settings`: change the number's calling\nsettings; only the fields set change, `call_hours` as a whole.",
+        "operationId": "update_call_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallingSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed; users' apps may take up to 7 days to show it. Audited by section name"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or a voicemail announcement that is not this number's media (only the lookup was sent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `update` (nothing to change), `body`, or the field at fault (`call_hours.status`, `sip.servers`, `voicemail.triggers`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the settings may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/calls": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/calls`: place a call to a user, with your SDP\noffer.",
+        "operationId": "connect_call",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never ring the user twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Placed: the user's phone rings. The call's events arrive as `call_updated` and `call_status_updated` events, and the call is the number's here from now on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallPlaced"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `to`, `sdp_offer`, `biz_opaque_callback_data`, `recording`, `transcription` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (code 138006 is a missing call permission: read it with the permissions route)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the call may have been placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/calls/{call_id}/accept": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/calls/{call_id}/accept`: accept a user's call.",
+        "operationId": "accept_call",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "call_id",
+            "in": "path",
+            "description": "Call id, as the `calls` event gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted: start sending media. Audited, with whether recording or transcription was enabled"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `sdp_answer`, `biz_opaque_callback_data`, `recording`, `transcription` or `body`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: not repeated; read the call's events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/calls/{call_id}/pre-accept": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/calls/{call_id}/pre-accept`: answer a user's\ncall so that media can connect before it is accepted.",
+        "operationId": "pre_accept_call",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "call_id",
+            "in": "path",
+            "description": "Call id, as the `calls` event gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreAcceptCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Pre-accepted. Audited"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such call among the number's (the call's last event is older than 24 hours, or none arrived); nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `sdp_answer` or `body`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: not repeated; read the call's events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/calls/{call_id}/reject": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/calls/{call_id}/reject`: reject a user's call.",
+        "operationId": "reject_call",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "call_id",
+            "in": "path",
+            "description": "Call id, as the `calls` event gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Rejected. Audited"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: not repeated; read the call's events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/calls/{call_id}/terminate": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/calls/{call_id}/terminate`: end a call, in either\ndirection.",
+        "operationId": "terminate_call",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "call_id",
+            "in": "path",
+            "description": "Call id, as the `calls` event gave it or the placing answered",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Ended. Audited; do it also after the media ended, for an accurate price"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: not repeated; read the call's events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/commerce-settings": {
       "get": {
         "tags": [
@@ -14284,6 +15435,217 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/analytics/calls": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/analytics/calls`: calls made and received.",
+        "operationId": "get_call_analytics",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (RFC 3339): at most a year before now.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (RFC 3339): after `start`, at most a year later.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "`HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_numbers",
+            "in": "query",
+            "description": "Comma-separated business phone numbers, digits only.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "country_codes",
+            "in": "query",
+            "description": "Comma-separated two-letter country codes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "directions",
+            "in": "query",
+            "description": "Comma-separated: `USER_INITIATED`, `BUSINESS_INITIATED`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dimensions",
+            "in": "query",
+            "description": "Comma-separated breakdowns, lowercase as Meta writes them: `phone`,\n`direction`, `country`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "metric_types",
+            "in": "query",
+            "description": "Comma-separated: `COUNT`, `COST`, `AVERAGE_DURATION`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/analytics/conversations": {
       "get": {
         "tags": [
@@ -21401,6 +22763,49 @@
   },
   "components": {
     "schemas": {
+      "AcceptCallRequest": {
+        "type": "object",
+        "description": "Your answer to a user's call, and what to add. No `Debug`: it holds the\nSDP answer.",
+        "required": [
+          "sdp_answer"
+        ],
+        "properties": {
+          "biz_opaque_callback_data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 512 characters echoed in the call's webhooks."
+          },
+          "recording": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallAnnouncement",
+                "description": "Record the call (off unless set)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sdp_answer": {
+            "type": "string",
+            "description": "Your SDP answer, the one of the pre-accept if there was one."
+          },
+          "transcription": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallAnnouncement",
+                "description": "Transcribe the call (off unless set)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "AcceptedContact": {
         "type": "object",
         "description": "The addressee, as Meta resolved it.",
@@ -21923,6 +23328,636 @@
             "description": "The username; `null` when the number has none."
           }
         }
+      },
+      "CallAnalytics": {
+        "type": "object",
+        "description": "Call analytics.",
+        "required": [
+          "data_points"
+        ],
+        "properties": {
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallDataPoint"
+            },
+            "description": "The data points (none when Meta has no data for the range)."
+          }
+        }
+      },
+      "CallAnnouncement": {
+        "type": "object",
+        "description": "The `recording` or `transcription` object of a call: **the caller's\nchoice, per call; the service never sets one**. When enabled, Meta\nplays an announcement of the purpose to both participants first, and a\nparticipant who does not consent ends the call.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "announcement_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The announcement's locale (`en_US`); required when enabled."
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, at most 250 characters; required when enabled."
+          },
+          "status": {
+            "type": "string",
+            "description": "`ENABLED` or `DISABLED`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallAudio": {
+        "type": "object",
+        "description": "Audio settings.",
+        "properties": {
+          "additional_codecs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`PCMA` and/or `PCMU`, beyond Opus."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallDataPoint": {
+        "type": "object",
+        "description": "A call analytics interval.",
+        "required": [
+          "start",
+          "end",
+          "count",
+          "cost",
+          "average_duration",
+          "phone_number",
+          "country",
+          "direction"
+        ],
+        "properties": {
+          "average_duration": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Average duration, in seconds."
+          },
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Approximate cost, in the WABA's currency."
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Calls.",
+            "minimum": 0
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country (the `country` breakdown)."
+          },
+          "direction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`USER_INITIATED` or `BUSINESS_INITIATED` (the `direction`\nbreakdown)."
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval end (RFC 3339)."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business phone number (the `phone` breakdown)."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval start (RFC 3339)."
+          }
+        }
+      },
+      "CallHolidayHours": {
+        "type": "object",
+        "description": "A holiday's window.",
+        "required": [
+          "date",
+          "start_time",
+          "end_time"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "`YYYY-MM-DD`."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "`HHMM`, after `start_time`."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "`HHMM`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallHours": {
+        "type": "object",
+        "description": "The hours calls are taken. Replaced as a whole by a change.",
+        "required": [
+          "status",
+          "timezone_id"
+        ],
+        "properties": {
+          "holiday_schedule": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CallHolidayHours"
+            },
+            "description": "At most 20 holiday windows."
+          },
+          "status": {
+            "type": "string",
+            "description": "`ENABLED` or `DISABLED`."
+          },
+          "timezone_id": {
+            "type": "string",
+            "description": "An IANA timezone id (`America/Manaus`)."
+          },
+          "weekly_operating_hours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallWeeklyHours"
+            },
+            "description": "At least one window; at most two a day."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallIcons": {
+        "type": "object",
+        "description": "Where call icons show.",
+        "properties": {
+          "restrict_to_user_countries": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Two-letter country codes: the call icon shows only to users of\nthese countries."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallParticipant": {
+        "type": "object",
+        "description": "A user: a phone number and/or a BSUID. With both, Meta uses the phone\nnumber.",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A phone number in E.164 **with** its `+` (`+16505551234`)."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business-scoped user id (`US.13491208655302741918`) or a parent\none (`US.ENT.11815799212886844830`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallPermissionAction": {
+        "type": "object",
+        "description": "What the business may do with a user's call permission.",
+        "required": [
+          "action_name",
+          "can_perform_action",
+          "limits"
+        ],
+        "properties": {
+          "action_name": {
+            "type": "string",
+            "description": "`start_call` or `send_call_permission_request`."
+          },
+          "can_perform_action": {
+            "type": "boolean",
+            "description": "Whether it is allowed right now, every limit considered."
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallPermissionLimit"
+            },
+            "description": "The limits on it."
+          }
+        }
+      },
+      "CallPermissionLimit": {
+        "type": "object",
+        "description": "A limit on an action.",
+        "required": [
+          "time_period",
+          "max_allowed",
+          "current_usage",
+          "limit_expiration_time"
+        ],
+        "properties": {
+          "current_usage": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Used within the period.",
+            "minimum": 0
+          },
+          "limit_expiration_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the limit resets (RFC 3339); present once it is reached."
+          },
+          "max_allowed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Allowed within the period.",
+            "minimum": 0
+          },
+          "time_period": {
+            "type": "string",
+            "description": "ISO 8601 duration (`PT24H`)."
+          }
+        }
+      },
+      "CallPermissions": {
+        "type": "object",
+        "description": "A user's call permission for the number.",
+        "required": [
+          "status",
+          "expiration_time",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallPermissionAction"
+            },
+            "description": "What the business may do now."
+          },
+          "expiration_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a temporary permission expires (RFC 3339)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`no_permission`, `temporary`, `permanent`, `granted`, `pending`,\n`denied` or `expired`, as Meta writes it."
+          }
+        }
+      },
+      "CallPlaced": {
+        "type": "object",
+        "description": "The call that was placed.",
+        "required": [
+          "call_id"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "Its id (`wacid.…`): what the actions and the `calls` events name."
+          }
+        }
+      },
+      "CallRestriction": {
+        "type": "object",
+        "description": "A restriction Meta put on the number's calling.",
+        "required": [
+          "type",
+          "reason",
+          "expiration"
+        ],
+        "properties": {
+          "expiration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it lifts (RFC 3339)."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, in Meta's words."
+          },
+          "type": {
+            "type": "string",
+            "description": "`RESTRICTED_BUSINESS_INITIATED_CALLING` or\n`RESTRICTED_USER_INITIATED_CALLING`."
+          }
+        }
+      },
+      "CallSip": {
+        "type": "object",
+        "description": "SIP signalling.",
+        "properties": {
+          "servers": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CallSipServer"
+            },
+            "description": "At most one server."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ENABLED` or `DISABLED`."
+          },
+          "webhook_delivery": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ENABLED` or `DISABLED`: whether call events are also delivered as\nwebhooks."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallSipServer": {
+        "type": "object",
+        "description": "A SIP server. Its password is not here: the service never asks Meta for\nit and never answers it.",
+        "required": [
+          "hostname"
+        ],
+        "properties": {
+          "hostname": {
+            "type": "string",
+            "description": "The server's host name."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its port.",
+            "minimum": 0
+          },
+          "request_uri_user_params": {
+            "type": "object",
+            "description": "Parameters of the request URI's user part, at most 128 characters\neach, key and value.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallVoicemail": {
+        "type": "object",
+        "description": "Voicemail.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallVoicemailAudio",
+                "description": "The announcement; required when enabled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`ENABLED` or `DISABLED`."
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`REJECT` and/or `TIMEOUT`; at least one when enabled."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallVoicemailAnnouncement": {
+        "type": "object",
+        "description": "The default voicemail announcement.",
+        "properties": {
+          "announcement_media_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The media id of an audio file uploaded **on this number**: any other\nis `404 not_found`, nothing changed."
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Seconds before the `TIMEOUT` trigger, 0 to 30.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallVoicemailAudio": {
+        "type": "object",
+        "description": "Voicemail audio.",
+        "required": [
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "$ref": "#/components/schemas/CallVoicemailAnnouncement",
+            "description": "The default announcement."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallWeeklyHours": {
+        "type": "object",
+        "description": "One day's window of the call hours.",
+        "required": [
+          "day_of_week",
+          "open_time",
+          "close_time"
+        ],
+        "properties": {
+          "close_time": {
+            "type": "string",
+            "description": "`HHMM`, after `open_time`."
+          },
+          "day_of_week": {
+            "type": "string",
+            "description": "`MONDAY` to `SUNDAY`."
+          },
+          "open_time": {
+            "type": "string",
+            "description": "`HHMM` (`0900`), 24-hour; `HH:MM` is taken too."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallingSettings": {
+        "type": "object",
+        "description": "A number's calling settings, as Meta's `calling` object has them: what\na change sets (at least one field) and what the read answers.",
+        "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallAudio",
+                "description": "Audio."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_hours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallHours",
+                "description": "The hours calls are taken."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call_icon_visibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`DEFAULT` or `DISABLE_ALL`."
+          },
+          "call_icons": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallIcons",
+                "description": "Where the call icon shows."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "callback_permission_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ENABLED` or `DISABLED`: whether users are offered to grant a call\npermission."
+          },
+          "sip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallSip",
+                "description": "SIP signalling. A call signalled over SIP is not answered through\nthese routes; its events reach the service only with\n`webhook_delivery` enabled."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ENABLED` or `DISABLED`: whether the number takes calls at all."
+          },
+          "voicemail": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallVoicemail",
+                "description": "Voicemail."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CallingSettingsRead": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CallingSettings",
+            "description": "The settings."
+          },
+          {
+            "type": "object",
+            "required": [
+              "restrictions"
+            ],
+            "properties": {
+              "restrictions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CallRestriction"
+                },
+                "description": "The restrictions Meta reports; empty when none."
+              }
+            }
+          }
+        ],
+        "description": "A number's calling settings, with Meta's restrictions."
       },
       "CarouselCard": {
         "type": "object",
@@ -22503,6 +24538,54 @@
               "type": "string"
             },
             "description": "Ice breakers: at most 4, of 1 to 80 characters (Meta's page\n`conversational-components`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConnectCallRequest": {
+        "type": "object",
+        "description": "A call to place. No `Debug`: it holds the SDP offer.",
+        "required": [
+          "to",
+          "sdp_offer"
+        ],
+        "properties": {
+          "biz_opaque_callback_data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 512 characters echoed in the call's webhooks."
+          },
+          "recording": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallAnnouncement",
+                "description": "Record the call (off unless set)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sdp_offer": {
+            "type": "string",
+            "description": "Your SDP offer (RFC 8866), up to 32 KiB, passed to Meta unparsed."
+          },
+          "to": {
+            "$ref": "#/components/schemas/CallParticipant",
+            "description": "The user to call; they must have granted the number a call\npermission."
+          },
+          "transcription": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallAnnouncement",
+                "description": "Transcribe the call (off unless set)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -27340,6 +29423,20 @@
           "unpin"
         ]
       },
+      "PreAcceptCallRequest": {
+        "type": "object",
+        "description": "Your answer to a user's call. No `Debug`: it holds the SDP answer.",
+        "required": [
+          "sdp_answer"
+        ],
+        "properties": {
+          "sdp_answer": {
+            "type": "string",
+            "description": "Your SDP answer (RFC 8866), up to 32 KiB, passed to Meta unparsed."
+          }
+        },
+        "additionalProperties": false
+      },
       "PreVerifiedCodeMethod": {
         "type": "string",
         "description": "How the one-time code is delivered.",
@@ -28383,7 +30480,8 @@
           "qr_codes",
           "analytics",
           "contacts",
-          "groups"
+          "groups",
+          "calls"
         ]
       },
       "SendMessage": {
@@ -30416,6 +32514,10 @@
     {
       "name": "groups",
       "description": "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"
+    },
+    {
+      "name": "calls",
+      "description": "Calling (scope `calls`; roadmap M5e): a number's calling settings, a user's call permission, the call a business places and the actions on a call (pre-accept, accept, reject, terminate); a call is the number's or it does not exist. SDP and SIP passwords are secrets: in no log, error or audit event, and a SIP password is never answered. Call analytics are the WABA's (tag `analytics`)"
     },
     {
       "name": "flows",
