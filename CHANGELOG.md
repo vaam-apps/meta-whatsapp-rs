@@ -15,8 +15,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5c5)
 
 - **The Messaging Account a send bills, in the service** (roadmap M5c5,
-  parity row 140's service side partial; choices D270-D273, proposed by the
-  implementer, not decided, swappable; from Meta's `account-model-evolution`
+  parity row 140's service side partial; choices D270-D273, decided by the
+  coordinator on 2026-11-06 under the owner's delegation, swappable; from Meta's `account-model-evolution`
   and `account-model-evolution/messaging` pages, read on 2026-11-06). A send
   from a bound number (`POST /v1/numbers/{pn}/messages` and an inbox reply)
   names its binding's WABA id as `messaging_account_id`, which Meta requires

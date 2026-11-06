@@ -6694,7 +6694,7 @@ or WABA fails the family's own cross-tenant test).
     (`messages::billed_to_binding`), behind
     `Settings::send_messaging_account_id` /
     `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on; D270-D273, the
-    implementer's proposals, pending the owner's confirmation of the
+    coordinator's decisions of 2026-11-06, pending the owner's confirmation of the
     name before the first release); the guide says how a shared number is
     held; `crates/meta-whatsapp-server/tests/messaging_account.rs` walks
     the committed document for every route that reaches `/{pn}/messages`,

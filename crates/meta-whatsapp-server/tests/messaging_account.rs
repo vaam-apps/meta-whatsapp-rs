@@ -201,11 +201,17 @@ async fn with_the_setting_off_no_send_route_names_an_account() {
 /// the inbox).
 #[test]
 fn only_the_known_files_reach_the_librarys_send() {
-    const SENDING_CALLS: [&str; 4] = [
+    const SENDING_CALLS: [&str; 6] = [
         ".messages(",
         "inbox.send(",
         "OtpService::new(",
         ".marketing(",
+        // The library's group pin posts to `/{pn}/messages` too; the
+        // service does not offer it (groups.rs), and a route that does
+        // must name the account (the library's pin has no option for it
+        // yet) or be listed here with why not.
+        ".pin_message(",
+        ".unpin_message(",
     ];
     // The files that reach the library's send, and why.
     let known: BTreeSet<&str> = BTreeSet::from([
