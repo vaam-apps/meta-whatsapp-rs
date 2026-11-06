@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use http::Method;
 use meta_whatsapp_core::error::TransportError;
-use meta_whatsapp_core::ids::MediaId;
+use meta_whatsapp_core::ids::{MediaId, WabaId};
 use meta_whatsapp_core::testing::ScriptedTransport;
 use meta_whatsapp_core::{Error, ErrorKind};
 use serde_json::json;
@@ -1648,4 +1648,165 @@ fn an_announcement_media_id_is_kept_as_sent() {
         );
     }
     assert!(MediaId::new("MEDIA-1/x").is_err());
+}
+
+// ── The Messaging Account (roadmap L29) ─────────────────────────────────
+
+const ACCOUNT: &str = "102290129340398";
+
+fn account_calling(ts: &ScriptedTransport) -> Calling {
+    client(ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .messaging_account_id(WabaId::new(ACCOUNT).unwrap())
+}
+
+/// `account-model-evolution/messaging#calling-api`: the page's `connect`
+/// request, with `messaging_account_id` beside `action`, as a string.
+#[tokio::test]
+async fn connect_matches_the_messaging_account_pages_example() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "calls": [{"id": DOCS_CALL}]}),
+    );
+    account_calling(&ts)
+        .connect(&ConnectCall::new(
+            Recipient::Phone("14085551234".into()),
+            DOCS_SDP,
+        ))
+        .await
+        .unwrap();
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "action": "connect",
+            "messaging_account_id": ACCOUNT,
+            "session": {"sdp_type": "offer", "sdp": DOCS_SDP}
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// Every other action names it too, the same value on each.
+#[tokio::test]
+async fn every_action_names_the_messaging_account() {
+    let ts = ScriptedTransport::new();
+    for _ in 0..5 {
+        ts.push_json(200, success());
+    }
+    let calling = account_calling(&ts);
+    let id = CallId::new(DOCS_CALL);
+    let expect = |ts: &ScriptedTransport, action: &str, session: Option<&str>| {
+        let mut body = json!({
+            "messaging_product": "whatsapp",
+            "call_id": DOCS_CALL,
+            "action": action,
+            "messaging_account_id": ACCOUNT,
+        });
+        if let Some(t) = session {
+            body["session"] = json!({"sdp_type": t, "sdp": DOCS_SDP});
+        }
+        assert_calls_post(ts, &body);
+    };
+    calling.pre_accept(&id, DOCS_SDP).await.unwrap();
+    expect(&ts, "pre_accept", Some("answer"));
+    calling.accept(&id, DOCS_SDP, None).await.unwrap();
+    expect(&ts, "accept", Some("answer"));
+    calling
+        .accept_with(&id, DOCS_SDP, &AcceptOptions::default())
+        .await
+        .unwrap();
+    expect(&ts, "accept", Some("answer"));
+    calling.reject(&id).await.unwrap();
+    expect(&ts, "reject", None);
+    calling.terminate(&id).await.unwrap();
+    expect(&ts, "terminate", None);
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// No option, no key, on each of the five actions.
+#[tokio::test]
+async fn without_the_option_no_action_names_a_messaging_account() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, json!({"calls": [{"id": DOCS_CALL}]}));
+    for _ in 0..5 {
+        ts.push_json(200, success());
+    }
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    let id = CallId::new(DOCS_CALL);
+    let bare = |ts: &ScriptedTransport| {
+        let body = ts.last_request().unwrap().json().unwrap();
+        let body = body.as_object().unwrap();
+        assert!(!body.contains_key("messaging_account_id"), "{body:?}");
+        assert!(!body.contains_key("paid_messaging_account_id"), "{body:?}");
+    };
+    calling.connect(&docs_connect()).await.unwrap();
+    bare(&ts);
+    calling.pre_accept(&id, DOCS_SDP).await.unwrap();
+    bare(&ts);
+    calling.accept(&id, DOCS_SDP, None).await.unwrap();
+    bare(&ts);
+    calling.reject(&id).await.unwrap();
+    bare(&ts);
+    calling.terminate(&id).await.unwrap();
+    bare(&ts);
+    calling
+        .accept_with(&id, DOCS_SDP, &AcceptOptions::default())
+        .await
+        .unwrap();
+    bare(&ts);
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// An id that is not digits never reaches the transport, on any action.
+#[tokio::test]
+async fn a_malformed_messaging_account_id_never_reaches_the_transport() {
+    let ts = ScriptedTransport::new();
+    let id = CallId::new(DOCS_CALL);
+    for bad in ["+49", "12 3", "abc", "", "1e5"] {
+        let calling = client(&ts)
+            .calling(PhoneNumberId::new(PHONE).unwrap())
+            .messaging_account_id(WabaId::new_unchecked(bad));
+        let errs = [
+            calling.connect(&docs_connect()).await.unwrap_err(),
+            calling.pre_accept(&id, DOCS_SDP).await.unwrap_err(),
+            calling.accept(&id, DOCS_SDP, None).await.unwrap_err(),
+            calling.reject(&id).await.unwrap_err(),
+            calling.terminate(&id).await.unwrap_err(),
+        ];
+        for err in &errs {
+            assert_eq!(validation_field(err), "messaging_account_id", "{bad:?}");
+        }
+    }
+    assert!(ts.last_request().is_none());
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// The settings and the permission read have no such field on their pages.
+#[tokio::test]
+async fn settings_and_permissions_never_carry_it() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, json!({}));
+    ts.push_json(
+        200,
+        json!({"permission": {"status": "no_permission"}, "actions": []}),
+    );
+    let calling = account_calling(&ts);
+    calling.settings(false).await.unwrap();
+    assert_eq!(ts.last_request().unwrap().url.query(), None);
+    calling
+        .permissions(&Recipient::Phone("14085551234".into()))
+        .await
+        .unwrap();
+    let query = ts
+        .last_request()
+        .unwrap()
+        .url
+        .query()
+        .unwrap_or("")
+        .to_owned();
+    assert!(!query.contains("messaging_account_id"), "{query}");
+    assert_eq!(ts.remaining(), 0);
 }
