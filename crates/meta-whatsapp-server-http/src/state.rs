@@ -20,6 +20,7 @@ use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::calls::CallRecords;
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
 use meta_whatsapp_server_core::flows_endpoint::{FlowsDeployment, FlowsEndpoint};
 use meta_whatsapp_server_core::groups::GroupRecords;
@@ -190,6 +191,7 @@ struct Inner {
     templates: TemplateCache,
     uploads: UploadSessions,
     group_records: GroupRecords,
+    call_records: CallRecords,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -289,6 +291,8 @@ impl AppState {
         // The groups each number holds, on the same store (roadmap M5f): the
         // webhook pipeline writes them from the same bundle's `KvStore`.
         let group_records = GroupRecords::new(backend.kv());
+        // And the calls each number holds (roadmap M5e), the same way.
+        let call_records = CallRecords::new(backend.kv());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -305,6 +309,7 @@ impl AppState {
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 uploads,
                 group_records,
+                call_records,
                 otp,
                 signups,
                 streams,
@@ -417,6 +422,11 @@ impl AppState {
     /// The groups each number holds (roadmap M5f).
     pub(crate) fn group_records(&self) -> &GroupRecords {
         &self.inner.group_records
+    }
+
+    /// The calls each number holds (roadmap M5e).
+    pub(crate) fn call_records(&self) -> &CallRecords {
+        &self.inner.call_records
     }
 
     /// The template lists cached per WABA.
@@ -546,6 +556,13 @@ impl Grant {
     /// (`meta_whatsapp_server_core::groups::GroupRecords::owned`).
     pub fn group_records(&self) -> &GroupRecords {
         self.0.group_records()
+    }
+
+    /// The calls each number holds (roadmap M5e), which decide whether a
+    /// call is a number's before any token is opened
+    /// (`meta_whatsapp_server_core::calls::CallRecords::owned`).
+    pub fn call_records(&self) -> &CallRecords {
+        self.0.call_records()
     }
 
     /// The OTP services (roadmap M3c): codes in the backend's key/value

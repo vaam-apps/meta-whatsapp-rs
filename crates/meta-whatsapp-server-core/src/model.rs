@@ -149,11 +149,18 @@ pub enum Scope {
     /// participants, join requests and analytics (roadmap M5f; a stored
     /// name, pending the owner's confirmation before the first release).
     Groups,
+    /// Calling (roadmap M5e): a number's calling settings, a user's call
+    /// permission, the call a business places and the actions on a call
+    /// (pre-accept, accept, reject, terminate). Calls carry SDP and may be
+    /// recorded, so a scope of its own, which `send` does not grant (a
+    /// stored name, pending the owner's confirmation before the first
+    /// release).
+    Calls,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 17] = [
+    pub const ALL: [Scope; 18] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -171,6 +178,7 @@ impl Scope {
         Self::Analytics,
         Self::Contacts,
         Self::Groups,
+        Self::Calls,
     ];
 
     /// Stored and API name.
@@ -193,6 +201,7 @@ impl Scope {
             Self::Analytics => "analytics",
             Self::Contacts => "contacts",
             Self::Groups => "groups",
+            Self::Calls => "calls",
         }
     }
 

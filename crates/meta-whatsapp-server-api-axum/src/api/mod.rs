@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; calling `calls`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -21,6 +21,7 @@
 pub mod admin;
 pub mod analytics;
 pub mod blocked_users;
+pub mod calls;
 pub mod commerce;
 pub mod display_name;
 pub mod erasure;
@@ -104,6 +105,7 @@ impl Modify for Security {
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
         (name = "groups", description = "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"),
+        (name = "calls", description = "Calling (scope `calls`; roadmap M5e): a number's calling settings, a user's call permission, the call a business places and the actions on a call (pre-accept, accept, reject, terminate); a call is the number's or it does not exist. SDP and SIP passwords are secrets: in no log, error or audit event, and a SIP password is never answered. Call analytics are the WABA's (tag `analytics`)"),
         (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "commerce", description = "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"),
@@ -192,6 +194,20 @@ fn inbox_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(inbox::get_conversation_window))
         .routes(routes!(inbox::mark_conversation_read))
         .routes(routes!(inbox::get_inbox_message))
+}
+
+fn calls_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            calls::get_call_settings,
+            calls::update_call_settings
+        ))
+        .routes(routes!(calls::get_call_permissions))
+        .routes(routes!(calls::connect_call))
+        .routes(routes!(calls::pre_accept_call))
+        .routes(routes!(calls::accept_call))
+        .routes(routes!(calls::reject_call))
+        .routes(routes!(calls::terminate_call))
 }
 
 fn groups_routes() -> OpenApiRouter<Grant> {
@@ -306,6 +322,7 @@ fn analytics_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(analytics::get_messaging_analytics))
         .routes(routes!(analytics::get_conversation_analytics))
         .routes(routes!(analytics::get_pricing_analytics))
+        .routes(routes!(analytics::get_call_analytics))
         .routes(routes!(analytics::get_template_analytics))
 }
 
@@ -400,6 +417,7 @@ fn api_routes(
         .merge(tenant(analytics_routes(), Scope::Analytics))
         .merge(tenant(contacts_routes(), Scope::Contacts))
         .merge(tenant(groups_routes(), Scope::Groups))
+        .merge(tenant(calls_routes(), Scope::Calls))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
@@ -562,6 +580,7 @@ mod tests {
             ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
             ("display_name.rs", include_str!("display_name.rs")),
+            ("calls.rs", include_str!("calls.rs")),
             ("groups.rs", include_str!("groups.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),

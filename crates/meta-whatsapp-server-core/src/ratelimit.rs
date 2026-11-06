@@ -118,6 +118,9 @@ impl RouteClass {
             | Operation::ListGroupParticipants
             | Operation::ListGroupJoinRequests
             | Operation::GetGroupAnalytics
+            | Operation::GetCallSettings
+            | Operation::GetCallPermissions
+            | Operation::GetCallAnalytics
             | Operation::GetDisplayName => Self::Read,
             Operation::UpdateProfile
             | Operation::RequestDisplayNameChange
@@ -161,7 +164,13 @@ impl RouteClass {
             | Operation::ResetGroupInviteLink
             | Operation::RemoveGroupParticipants
             | Operation::ApproveGroupJoinRequests
-            | Operation::RejectGroupJoinRequests => Self::Send,
+            | Operation::RejectGroupJoinRequests
+            | Operation::UpdateCallSettings
+            | Operation::ConnectCall
+            | Operation::PreAcceptCall
+            | Operation::AcceptCall
+            | Operation::RejectCall
+            | Operation::TerminateCall => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -590,6 +599,15 @@ mod tests {
             ("approve_group_join_requests", RouteClass::Send),
             ("reject_group_join_requests", RouteClass::Send),
             ("get_group_analytics", RouteClass::Read),
+            ("get_call_settings", RouteClass::Read),
+            ("update_call_settings", RouteClass::Send),
+            ("get_call_permissions", RouteClass::Read),
+            ("connect_call", RouteClass::Send),
+            ("pre_accept_call", RouteClass::Send),
+            ("accept_call", RouteClass::Send),
+            ("reject_call", RouteClass::Send),
+            ("terminate_call", RouteClass::Send),
+            ("get_call_analytics", RouteClass::Read),
             ("create_flow", RouteClass::Templates),
             ("list_flows", RouteClass::Templates),
             ("get_flow", RouteClass::Templates),

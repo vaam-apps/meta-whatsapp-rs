@@ -75,6 +75,39 @@ pub fn group_created(waba: &str, pn: &str, group: &str) -> Vec<u8> {
     bytes(&payload)
 }
 
+/// Meta's "call connect" webhook of a user-initiated call
+/// (`calling/user-initiated-calls`), for `pn` of `waba`, its call `call`,
+/// dated [`sent_now`]: what makes `call` the number's (roadmap M5e). Its
+/// `session` carries the user's SDP offer.
+pub fn call_connected(waba: &str, pn: &str, call: &str) -> Vec<u8> {
+    let mut payload = with_ids(
+        serde_json::from_str(include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/calling.user-initiated-calls__call_connect_webhook.json"
+        ))
+        .unwrap(),
+        waba,
+        pn,
+    );
+    payload["entry"][0]["changes"][0]["value"]["calls"][0]["id"] = json!(call);
+    bytes(&payload)
+}
+
+/// Meta's webhook of a business-initiated call's status
+/// (`calling/business-initiated-calls`), for `pn` of `waba`, its call
+/// `call`, dated [`sent_now`].
+pub fn call_status(waba: &str, pn: &str, call: &str) -> Vec<u8> {
+    let mut payload = with_ids(
+        serde_json::from_str(include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/calling.business-initiated-calls__call_status_webhook.json"
+        ))
+        .unwrap(),
+        waba,
+        pn,
+    );
+    payload["entry"][0]["changes"][0]["value"]["statuses"][0]["id"] = json!(call);
+    bytes(&payload)
+}
+
 /// Now, in Unix seconds.
 pub fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()

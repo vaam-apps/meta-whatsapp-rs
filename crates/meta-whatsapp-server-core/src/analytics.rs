@@ -7,10 +7,11 @@
 //! | [`Analytics::messaging`] | `GET /{waba_id}?fields=analytics.start(…).end(…).granularity(…)[.phone_numbers([…])][.country_codes([…])]` |
 //! | [`Analytics::conversation`] | `GET /{waba_id}?fields=conversation_analytics.start(…).end(…).granularity(…)[.phone_numbers([…])]…` |
 //! | [`Analytics::pricing`] | `GET /{waba_id}?fields=pricing_analytics.start(…).end(…).granularity(…)[.phone_numbers([…])]…` |
+//! | [`Analytics::calls`] | `GET /{waba_id}?fields=call_analytics.start(…).end(…).granularity(…)[.phone_numbers([…])][.country_codes([…])][.directions([…])][.dimensions([…])][.metric_types([…])]` (roadmap M5e) |
 //! | [`Analytics::template`] | the walk of the WABA's templates (`GET /{waba_id}/message_templates?fields=id&limit=100`, as D116), then `GET /{waba_id}/template_analytics?start=…&end=…&granularity=DAILY&template_ids=[…]` |
 //!
-//! Page: `analytics`. Not offered: call analytics (roadmap M5e's), group
-//! analytics (M5f's), template group analytics (they need the groups'
+//! Page: `analytics`. Not offered: group analytics (M5f's, on the group's
+//! route), template group analytics (they need the groups'
 //! ids: not routed yet), and the two switches the page documents
 //! (`enable_template_insights`, button click tracking), which change the
 //! WABA's settings rather than read.
@@ -43,10 +44,10 @@
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::analytics::Granularity;
 use meta_whatsapp_rs::client::analytics::{
-    AnalyticsTime, ConversationAnalytics, ConversationAnalyticsQuery, ConversationDataPoint,
-    MAX_TEMPLATE_IDS, MessagingAnalytics, MessagingAnalyticsQuery, MessagingGranularity,
-    PricingAnalytics, PricingAnalyticsQuery, PricingDataPoint, TemplateAnalytics,
-    TemplateAnalyticsQuery,
+    AnalyticsTime, CallAnalytics, CallAnalyticsQuery, CallDataPoint, ConversationAnalytics,
+    ConversationAnalyticsQuery, ConversationDataPoint, MAX_TEMPLATE_IDS, MessagingAnalytics,
+    MessagingAnalyticsQuery, MessagingGranularity, PricingAnalytics, PricingAnalyticsQuery,
+    PricingDataPoint, TemplateAnalytics, TemplateAnalyticsQuery,
 };
 use meta_whatsapp_rs::core::ids::TemplateId;
 use time::{Date, Duration, Month, OffsetDateTime, Time};
@@ -101,6 +102,9 @@ const PRICING_DIMENSIONS: [&str; 5] = [
     "PRICING_TYPE",
     "TIER",
 ];
+const CALL_DIRECTIONS: [&str; 2] = ["USER_INITIATED", "BUSINESS_INITIATED"];
+const CALL_DIMENSIONS: [&str; 3] = ["phone", "direction", "country"];
+const CALL_METRICS: [&str; 3] = ["COUNT", "COST", "AVERAGE_DURATION"];
 const TEMPLATE_METRICS: [&str; 5] = ["COST", "CLICKED", "DELIVERED", "READ", "SENT"];
 
 // ─── The requests ────────────────────────────────────────────────────────
@@ -164,6 +168,28 @@ pub struct PricingRequest {
     pub pricing_categories: Vec<String>,
     /// The breakdowns.
     pub dimensions: Vec<String>,
+}
+
+/// A call analytics request, as the caller carried it (roadmap M5e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallRequest {
+    /// Range start.
+    pub start: OffsetDateTime,
+    /// Range end.
+    pub end: OffsetDateTime,
+    /// `HALF_HOUR`, `DAILY` or `MONTHLY`.
+    pub granularity: String,
+    /// Only these business phone numbers (digits).
+    pub phone_numbers: Vec<String>,
+    /// Only these countries (two letters).
+    pub country_codes: Vec<String>,
+    /// `USER_INITIATED`, `BUSINESS_INITIATED`.
+    pub directions: Vec<String>,
+    /// The breakdowns: `phone`, `direction`, `country` (lowercase, as the
+    /// page writes them).
+    pub dimensions: Vec<String>,
+    /// `COUNT`, `COST`, `AVERAGE_DURATION`.
+    pub metric_types: Vec<String>,
 }
 
 /// A bound of a template analytics range: a moment, or a calendar day.
@@ -403,6 +429,37 @@ pub fn pricing_query(
     Ok(query)
 }
 
+/// The library's call analytics query for `request`, checked against
+/// `now` (the range as messaging analytics': the page states no look-back
+/// for calls, so the service's own bound applies, D145).
+///
+/// # Errors
+///
+/// `422 invalid_request` on the field at fault.
+pub fn call_query(
+    now: OffsetDateTime,
+    request: &CallRequest,
+) -> Result<CallAnalyticsQuery, ServiceError> {
+    granularity(&request.granularity, &GRANULARITIES)?;
+    year_range(now, request.start, request.end, &request.granularity)?;
+    phone_numbers(&request.phone_numbers)?;
+    country_codes(&request.country_codes)?;
+    one_of("directions", &request.directions, &CALL_DIRECTIONS)?;
+    one_of("dimensions", &request.dimensions, &CALL_DIMENSIONS)?;
+    one_of("metric_types", &request.metric_types, &CALL_METRICS)?;
+    let mut query = CallAnalyticsQuery::new(
+        request.start,
+        request.end,
+        Granularity::from(request.granularity.as_str()),
+    );
+    query.phone_numbers.clone_from(&request.phone_numbers);
+    query.country_codes.clone_from(&request.country_codes);
+    query.directions = typed(&request.directions);
+    query.dimensions = typed(&request.dimensions);
+    query.metric_types = typed(&request.metric_types);
+    Ok(query)
+}
+
 /// The library's template query for `request`, checked against `now`; the
 /// template ids are Meta ids here (that they are the WABA's is
 /// [`Analytics::template`]'s check).
@@ -586,6 +643,49 @@ impl From<&PricingDataPoint> for PricingPoint {
 #[must_use]
 pub fn pricing_points(analytics: &PricingAnalytics) -> Vec<PricingPoint> {
     analytics.data_points().map(PricingPoint::from).collect()
+}
+
+/// An interval of call analytics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallPoint {
+    /// Interval start.
+    pub start: OffsetDateTime,
+    /// Interval end.
+    pub end: OffsetDateTime,
+    /// Calls.
+    pub count: Option<u64>,
+    /// Approximate cost, in the WABA's currency.
+    pub cost: Option<f64>,
+    /// Average duration, in seconds.
+    pub average_duration: Option<f64>,
+    /// The business phone number (the `phone` breakdown).
+    pub phone_number: Option<String>,
+    /// The country (the `country` breakdown).
+    pub country: Option<String>,
+    /// `USER_INITIATED` or `BUSINESS_INITIATED`, as Meta writes it (the
+    /// `direction` breakdown).
+    pub direction: Option<String>,
+}
+
+impl From<&CallDataPoint> for CallPoint {
+    fn from(p: &CallDataPoint) -> Self {
+        Self {
+            start: p.start,
+            end: p.end,
+            count: p.count,
+            cost: p.cost,
+            average_duration: p.average_duration,
+            phone_number: p.phone_number.clone(),
+            country: p.country.clone(),
+            direction: wire(p.direction.as_ref()),
+        }
+    }
+}
+
+/// Every data point of call analytics.
+#[must_use]
+pub fn call_points(analytics: &CallAnalytics) -> Vec<CallPoint> {
+    analytics.data_points.iter().map(CallPoint::from).collect()
 }
 
 /// A day, or a moment, of template analytics.
@@ -839,6 +939,19 @@ impl<'a> Analytics<'a> {
         }
     }
 
+    /// Call analytics for `request` (range and filters checked first).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::messaging`].
+    pub async fn calls(&self, request: &CallRequest) -> Result<Vec<CallPoint>, ServiceError> {
+        let query = call_query(self.authz.now(), request)?;
+        match self.client().calls(&query).await {
+            Ok(analytics) => Ok(analytics.as_ref().map(call_points).unwrap_or_default()),
+            Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
     /// Template analytics for `request`, once every template id is found
     /// among the WABA's own templates.
     ///
@@ -1016,6 +1129,54 @@ mod tests {
         let mut pricing = pricing;
         pricing.country_codes.truncate(1);
         assert!(pricing_query(NOW, &pricing).is_ok());
+    }
+
+    /// Call analytics (roadmap M5e) write their lists into a field
+    /// expansion too: the page's lowercase breakdowns and uppercase
+    /// directions and metrics, nothing else. Decisive: each list refused
+    /// at its position, and the range bounded as the others'.
+    #[test]
+    fn call_filters_are_the_pages_values_and_the_range_is_bounded() {
+        let base = || CallRequest {
+            start: NOW - Duration::days(2),
+            end: NOW,
+            granularity: "DAILY".to_owned(),
+            phone_numbers: vec!["16505550111".to_owned()],
+            country_codes: vec!["US".to_owned()],
+            directions: vec!["USER_INITIATED".to_owned()],
+            dimensions: vec!["direction".to_owned()],
+            metric_types: vec!["COUNT".to_owned(), "AVERAGE_DURATION".to_owned()],
+        };
+        let query = call_query(NOW, &base()).unwrap();
+        assert_eq!(query.dimensions.len(), 1);
+        let mut bad = base();
+        bad.dimensions = vec!["direction".to_owned(), "DIRECTION".to_owned()];
+        assert_eq!(field(&call_query(NOW, &bad).unwrap_err()), "dimensions[1]");
+        let mut bad = base();
+        bad.directions = vec!["user_initiated".to_owned()];
+        assert_eq!(field(&call_query(NOW, &bad).unwrap_err()), "directions[0]");
+        let mut bad = base();
+        bad.metric_types = vec!["COUNT".to_owned(), "SUM".to_owned()];
+        assert_eq!(
+            field(&call_query(NOW, &bad).unwrap_err()),
+            "metric_types[1]"
+        );
+        let mut bad = base();
+        bad.granularity = "DAY".to_owned();
+        assert_eq!(field(&call_query(NOW, &bad).unwrap_err()), "granularity");
+        let mut bad = base();
+        bad.phone_numbers = vec!["1)".to_owned()];
+        assert_eq!(
+            field(&call_query(NOW, &bad).unwrap_err()),
+            "phone_numbers[0]"
+        );
+        let mut bad = base();
+        bad.granularity = "HALF_HOUR".to_owned();
+        bad.start = NOW - Duration::days(32);
+        assert_eq!(field(&call_query(NOW, &bad).unwrap_err()), "end");
+        let mut bad = base();
+        bad.start = NOW - Duration::days(400);
+        assert_eq!(field(&call_query(NOW, &bad).unwrap_err()), "start");
     }
 
     /// Template analytics keep to their 90 days, 10 ids, days with the

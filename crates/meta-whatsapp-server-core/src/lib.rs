@@ -77,6 +77,7 @@ pub mod audit;
 pub mod authz;
 pub mod backend;
 pub mod blocked_users;
+pub mod calls;
 pub mod commerce;
 #[cfg(feature = "conformance")]
 pub mod conformance;
