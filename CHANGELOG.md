@@ -12,6 +12,29 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5c5)
+
+- **The Messaging Account a send bills, in the service** (roadmap M5c5,
+  parity row 140's service side partial; choices D270-D273, decided by the
+  coordinator on 2026-11-06 under the owner's delegation, swappable; from Meta's `account-model-evolution`
+  and `account-model-evolution/messaging` pages, read on 2026-11-06). A send
+  from a bound number (`POST /v1/numbers/{pn}/messages` and an inbox reply)
+  names its binding's WABA id as `messaging_account_id`, which Meta requires
+  once the token reaches several Messaging Accounts on the number (phase 2,
+  H1 2027). A caller cannot choose it: a body naming it, or Meta's
+  deprecated alias, is `422 invalid_request`. New setting, pending the
+  owner's confirmation before the first release:
+  `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (`on` by default; `off` sends none,
+  as before). The guide says how a number shared by several Messaging
+  Accounts is held: one binding, the latest same-tenant attach is the one
+  billed, another tenant's is `409 waba_owned_by_another_tenant`. The OTP
+  issue names it too, through a new option of the library's `OtpService`
+  (`messaging_account_id`, additive). Not named yet: the calling actions,
+  for want of an option in the library (roadmap L29), and the marketing
+  send, whose Meta pages document no such field. Several bindings per number stay OPEN_QUESTIONS #46
+  (the owner's). No new scope, route, error code or stored name; the
+  OpenAPI document is unchanged.
+
 ### Added (roadmap M5h)
 
 - The service's Marketing Messages API, max price and Click-to-WhatsApp
