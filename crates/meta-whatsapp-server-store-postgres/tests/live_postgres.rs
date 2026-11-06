@@ -718,7 +718,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)

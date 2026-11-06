@@ -1099,7 +1099,7 @@ where
 
 /// [`run`] for an operator: `operation` for `admin` under `key`, in the
 /// records of the admin key's own namespace (roadmap M5j2, design D290):
-/// the stored name is `admin/<key id>` ([`TenantId::admin_scope`]), which
+/// the stored name is `admin/<key id>` (`TenantId::admin_scope`, crate-private), which
 /// no tenant id can spell, so an admin key's record is never a tenant's
 /// and a tenant's never an admin key's, with the same key string; two
 /// admin keys do not share theirs either. `admin` must be one `authz`

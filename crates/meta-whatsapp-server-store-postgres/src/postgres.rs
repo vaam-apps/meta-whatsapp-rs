@@ -510,14 +510,7 @@ impl RecordStore for PgStore {
         if has_wabas.is_some() {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
-        // Its idempotency records go with it, by hand: since migration 10
-        // they have no foreign key (an operator's records have no tenant).
-        sqlx::query("DELETE FROM wa_server_idempotency WHERE tenant_id = $1")
-            .bind(id.as_str())
-            .execute(&mut *tx)
-            .await
-            .map_err(backend)?;
-        // Keys and events go with it (ON DELETE
+        // Keys, idempotency records and events go with it (ON DELETE
         // CASCADE), and the tombstones of the WABAs it was unbound from
         // forget it (ON DELETE SET NULL: a tenant created again under its
         // id is another tenant to them, roadmap S2b); its event stream
@@ -1121,10 +1114,11 @@ impl IdempotencyRecords for PgStore {
         // the insert that found a live row and the read of it, the row may
         // be released: then claim again (a few times: each round, another
         // request made progress).
+        let table = idempotency_table(tenant);
         for _ in 0..3 {
-            let claimed = sqlx::query(
-                "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim",
-            )
+            let insert = "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim"
+                .replace("wa_server_idempotency", table);
+            let claimed = sqlx::query(&insert)
             .bind(tenant.as_str())
             .bind(key.as_str())
             .bind(fingerprint.as_slice())
@@ -1137,9 +1131,9 @@ impl IdempotencyRecords for PgStore {
             if claimed.is_some() {
                 return Ok(IdempotencyClaim::Claimed);
             }
-            let row = sqlx::query(
-                "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()",
-            )
+            let select = "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()"
+                .replace("wa_server_idempotency", table);
+            let row = sqlx::query(&select)
             .bind(tenant.as_str())
             .bind(key.as_str())
             .fetch_optional(&self.pool)
@@ -1179,9 +1173,9 @@ impl IdempotencyRecords for PgStore {
         status: u16,
         body: &[u8],
     ) -> StoreResult<bool> {
-        let done = sqlx::query(
-            "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
-        )
+        let update = "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
+            .replace("wa_server_idempotency", idempotency_table(tenant));
+        let done = sqlx::query(&update)
         .bind(tenant.as_str())
         .bind(key.as_str())
         .bind(claim)
@@ -1199,9 +1193,9 @@ impl IdempotencyRecords for PgStore {
         key: &IdempotencyKey,
         claim: &str,
     ) -> StoreResult<bool> {
-        let done = sqlx::query(
-            "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
-        )
+        let delete = "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
+            .replace("wa_server_idempotency", idempotency_table(tenant));
+        let done = sqlx::query(&delete)
         .bind(tenant.as_str())
         .bind(key.as_str())
         .bind(claim)
@@ -1214,11 +1208,34 @@ impl IdempotencyRecords for PgStore {
     async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
         // No lock of its own (housekeeping holds its turn): two at once
         // delete a record once.
-        let done = sqlx::query("DELETE FROM wa_server_idempotency WHERE expires_at <= now()")
-            .execute(&self.pool)
-            .await
-            .map_err(busy_or_backend)?;
-        Ok(done.rows_affected())
+        let mut purged = 0;
+        for table in [IDEMPOTENCY_TABLE, ADMIN_IDEMPOTENCY_TABLE] {
+            let done = sqlx::query(&format!("DELETE FROM {table} WHERE expires_at <= now()"))
+                .execute(&self.pool)
+                .await
+                .map_err(busy_or_backend)?;
+            purged += done.rows_affected();
+        }
+        Ok(purged)
+    }
+}
+
+/// The tenants' idempotency records (migration 2).
+const IDEMPOTENCY_TABLE: &str = "wa_server_idempotency";
+
+/// An operator's idempotency records (roadmap M5j2, migration 10): the
+/// same columns, no foreign key to the tenants, since an admin key's
+/// scope (`admin/<key id>`) has no tenant row.
+const ADMIN_IDEMPOTENCY_TABLE: &str = "wa_server_admin_idempotency";
+
+/// The table a scope's records live in: an admin key's namespace
+/// (`admin/...`, which no tenant id can spell) in its own, else the
+/// tenants'.
+fn idempotency_table(scope: &TenantId) -> &'static str {
+    if scope.as_str().starts_with("admin/") {
+        ADMIN_IDEMPOTENCY_TABLE
+    } else {
+        IDEMPOTENCY_TABLE
     }
 }
 
@@ -1498,7 +1515,7 @@ mod tests {
         ),
         (
             10,
-            "b155e8d925fa0d3f0099bb7a491945033cebbe0b402b977cac03975e3a4750762e984faf83ea1fcc3488e25f2a7ad9e3",
+            "805d46eed073988cf8ff26bdc87cd2d18f5b529c117f5ea099888484814d019acac59315453a0561b2577dcc569df020",
         ),
     ];
 
