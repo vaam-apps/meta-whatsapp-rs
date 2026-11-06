@@ -97,8 +97,8 @@ of its own, after an HTML comment; keep that when you add one.
    option (off: one WABA, as `onboard`) and by calling `onboard` instead.
    Roadmap L11b (landed); the service's side, M3f (landed).
 
-   **Decided 2026-11-06 (coordinator, owner's delegation) for the
-   service, D200:** a deployment setting, `WA_SIGNUP_EVERY_GRANTED_WABA`,
+   **Landed with roadmap M3f (2026-11-06), the service's side, its
+   choices the coordinator's (owner's delegation), D200:** a deployment setting, `WA_SIGNUP_EVERY_GRANTED_WABA`,
    off by default; on, every WABA a signup grants is bound to its tenant
    (D4 checked on each the event names before the attempt is redeemed, and
    again in each approval), off, the primary WABA only, the answer listing
@@ -292,8 +292,8 @@ of its own, after an HTML comment; keep that when you add one.
     held-WABA refusal by deleting the record first. Roadmap L11a
     (landed); the service's side, M3f (landed).
 
-    **Decided 2026-11-06 (coordinator, owner's delegation) for the
-    service, D201 and D202:** the service remembers a signed
+    **Landed with roadmap M3f (2026-11-06), the service's side, its
+    choices the coordinator's (owner's delegation), D201 and D202:** the service remembers a signed
     `PARTNER_ADDED` for 7 days (`wa.es.hosted`) when `WA_HOSTED_SIGNUP` is
     on (off by default), and the operator claims it:
     `POST /v1/admin/signup/hosted` (admin key) names the tenant, the WABA

@@ -60,8 +60,8 @@ export async function claimHostedSignup(
 already, lapsed, or another business), or no such tenant.
 `waba_owned_by_another_tenant` (409): another merchant holds the WABA.
 `onboarding_failed` is as for a completion: `resumable: false` puts the
-arrival back to claim again, `true` leaves an attempt the merchant's
-tenant resumes. The claim is the operator's, never a tenant's, because the
+arrival back to claim again; `resumable: true` leaves an attempt the
+merchant's tenant resumes. The claim is the operator's, never a tenant's, because the
 ids are no secrets: a route open to merchants would let one take
 another's arrival. A tenant key gets `forbidden` (403). Off, the route
 answers `signup_not_configured` (409).
