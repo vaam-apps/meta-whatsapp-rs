@@ -103,8 +103,8 @@ commands (names of 32 characters without a leading slash, unique; hints of
 ## One legal act stays off until the deployment turns it on
 
 The **compliance information declaration** (India) is a legal act. Until
-the deployment sets `WA_SERVER_LEGAL_ACTS=on` it is `403
-feature_not_available` and nothing is asked of Meta; a read is never
+the deployment sets `WA_SERVER_LEGAL_ACTS=on` it is
+`403 feature_not_available` and nothing is asked of Meta; a read is never
 gated. The **application** (a request for Meta's review) and the
 **contact book erasure** (irreversible at Meta) are not gated.
 
