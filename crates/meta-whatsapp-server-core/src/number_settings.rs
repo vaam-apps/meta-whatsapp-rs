@@ -253,7 +253,7 @@ fn link(field: &'static str, url: &str) -> Result<(), ServiceError> {
 
 /// An application, checked: the library's rules (the two required
 /// fields, 5 to 10 supporting links) and the service's own (links
-/// `http`/`https` of at most [`WEBSITE_MAX_CHARS`], texts without control
+/// `http`/`https` of at most [`crate::numbers::WEBSITE_MAX_CHARS`], texts without control
 /// or invisible characters, at most [`SHORT_MAX_CHARS`] or
 /// [`TEXT_MAX_CHARS`]).
 ///
