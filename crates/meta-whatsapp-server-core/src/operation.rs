@@ -68,6 +68,18 @@ pub enum Operation {
     SetConversationalComponents,
     /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (irreversible, an explicit erasure under the scope `erasure`, not gated by `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
     DeleteContactBookEntry,
+    /// `get_business_verification`: a WABA's business verification status (roadmap M5j; pending the owner's confirmation before the first release).
+    GetBusinessVerification,
+    /// `create_solution_migration_intent`: a WABA tagged for migration to a Multi-Partner Solution, which its client then accepts in Meta Business Suite (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    CreateSolutionMigrationIntent,
+    /// `get_solution_migration_intent`: a migration intent of the WABA (roadmap M5j; pending the owner's confirmation before the first release).
+    GetSolutionMigrationIntent,
+    /// `create_billing_migration`: a billing currency or payment method migration started, which clones the WABA (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    CreateBillingMigration,
+    /// `get_billing_migration`: where a billing migration of the WABA stands (roadmap M5j; pending the owner's confirmation before the first release).
+    GetBillingMigration,
+    /// `resume_billing_migration`: a billing migration completed, which switches the numbers' billing (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    ResumeBillingMigration,
     /// `disconnect_waba`: a WABA disconnected (unsubscribed, its token
     /// and bindings deleted).
     DisconnectWaba,
@@ -324,7 +336,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 135] = [
+    pub const ALL: [Self; 141] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -348,6 +360,12 @@ impl Operation {
         Self::GetConversationalComponents,
         Self::SetConversationalComponents,
         Self::DeleteContactBookEntry,
+        Self::GetBusinessVerification,
+        Self::CreateSolutionMigrationIntent,
+        Self::GetSolutionMigrationIntent,
+        Self::CreateBillingMigration,
+        Self::GetBillingMigration,
+        Self::ResumeBillingMigration,
         Self::DisconnectWaba,
         Self::SendMessage,
         Self::MarkRead,
@@ -489,6 +507,12 @@ impl Operation {
             Self::GetConversationalComponents => "get_conversational_components",
             Self::SetConversationalComponents => "set_conversational_components",
             Self::DeleteContactBookEntry => "delete_contact_book_entry",
+            Self::GetBusinessVerification => "get_business_verification",
+            Self::CreateSolutionMigrationIntent => "create_solution_migration_intent",
+            Self::GetSolutionMigrationIntent => "get_solution_migration_intent",
+            Self::CreateBillingMigration => "create_billing_migration",
+            Self::GetBillingMigration => "get_billing_migration",
+            Self::ResumeBillingMigration => "resume_billing_migration",
             Self::DisconnectWaba => "disconnect_waba",
             Self::SendMessage => "send_message",
             Self::MarkRead => "mark_read",
@@ -734,6 +758,12 @@ impl Operation {
             | Self::ApproveGroupJoinRequests
             | Self::RejectGroupJoinRequests
             | Self::GetGroupAnalytics => Scope::Groups,
+            Self::GetBusinessVerification
+            | Self::CreateSolutionMigrationIntent
+            | Self::GetSolutionMigrationIntent
+            | Self::CreateBillingMigration
+            | Self::GetBillingMigration
+            | Self::ResumeBillingMigration => Scope::Partners,
             Self::GetCallSettings
             | Self::UpdateCallSettings
             | Self::GetCallPermissions

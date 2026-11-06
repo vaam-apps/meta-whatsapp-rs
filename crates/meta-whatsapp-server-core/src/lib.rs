@@ -106,6 +106,7 @@ pub mod observe;
 pub mod operation;
 pub mod otp;
 pub mod outbox;
+pub mod partners;
 pub mod payments;
 pub mod qr_codes;
 pub mod ratelimit;

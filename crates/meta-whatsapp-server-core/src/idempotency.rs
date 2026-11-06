@@ -360,6 +360,26 @@ impl Fingerprint {
         Self::json(Operation::ConnectCall, &[("pn", number.as_str())], body)
     }
 
+    /// `create_solution_migration_intent` on `waba`, with the JSON body the
+    /// request carried (roadmap M5j; no legacy fingerprint).
+    pub fn create_solution_migration_intent(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateSolutionMigrationIntent,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `create_billing_migration` on `waba`, with the JSON body the request
+    /// carried (roadmap M5j; no legacy fingerprint).
+    pub fn create_billing_migration(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateBillingMigration,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
     /// `request_display_name_change` on `number`, with the JSON body the
     /// request carried (roadmap M5c2; no legacy fingerprint).
     pub fn request_display_name_change(number: &PhoneNumberId, body: &serde_json::Value) -> Self {

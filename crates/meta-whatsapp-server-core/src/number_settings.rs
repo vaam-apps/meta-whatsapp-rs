@@ -77,7 +77,13 @@ use crate::request::wire;
 /// operation to the gate is one more arm here.
 #[must_use]
 pub fn is_legal_act(operation: Operation) -> bool {
-    matches!(operation, Operation::SetComplianceInfo)
+    matches!(
+        operation,
+        Operation::SetComplianceInfo
+            | Operation::CreateSolutionMigrationIntent
+            | Operation::CreateBillingMigration
+            | Operation::ResumeBillingMigration
+    )
 }
 
 /// The audit action of [`NumberSettings::change`]: a stored name in the
@@ -837,15 +843,25 @@ mod tests {
 
     use super::*;
 
-    /// D192: the compliance declaration is the one legal act among the
+    /// D192 and D250: the compliance declaration and the three partner acts
+    /// of roadmap M5j (a migration intent to a solution, a billing
+    /// migration and its resumption) are the legal acts among the
     /// operations; the application and the erasure are not.
     #[test]
-    fn only_the_compliance_declaration_is_a_legal_act() {
+    fn only_the_declaration_and_the_partner_acts_are_legal_acts() {
         let gated: Vec<_> = Operation::ALL
             .into_iter()
             .filter(|operation| is_legal_act(*operation))
             .collect();
-        assert_eq!(gated, [Operation::SetComplianceInfo]);
+        assert_eq!(
+            gated,
+            [
+                Operation::SetComplianceInfo,
+                Operation::CreateSolutionMigrationIntent,
+                Operation::CreateBillingMigration,
+                Operation::ResumeBillingMigration,
+            ]
+        );
     }
 
     fn invalid_field<T: fmt::Debug>(result: Result<T, ServiceError>) -> String {

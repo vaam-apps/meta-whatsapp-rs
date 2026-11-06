@@ -156,11 +156,18 @@ pub enum Scope {
     /// stored name, pending the owner's confirmation before the first
     /// release).
     Calls,
+    /// Partner acts on a tenant's own WABA (roadmap M5j): the read of its
+    /// business verification status, a migration intent to a
+    /// Multi-Partner Solution, and a billing currency or payment method
+    /// migration. The last two are legal or irreversible acts, so a scope
+    /// of its own, which `numbers` does not grant (a stored name, pending
+    /// the owner's confirmation before the first release).
+    Partners,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 18] = [
+    pub const ALL: [Scope; 19] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -179,6 +186,7 @@ impl Scope {
         Self::Contacts,
         Self::Groups,
         Self::Calls,
+        Self::Partners,
     ];
 
     /// Stored and API name.
@@ -202,6 +210,7 @@ impl Scope {
             Self::Contacts => "contacts",
             Self::Groups => "groups",
             Self::Calls => "calls",
+            Self::Partners => "partners",
         }
     }
 
