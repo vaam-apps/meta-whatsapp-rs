@@ -446,7 +446,11 @@ async fn the_products_filter_is_parsed_and_bounded_before_any_request() {
     assert_eq!(h.graph.remaining(), 0);
 
     let sent = h.graph.requests().len();
-    let deep = format!(r#"{{"name":{{"eq":{}1{}}}}}"#, "[".repeat(300), "]".repeat(300));
+    let deep = format!(
+        r#"{{"name":{{"eq":{}1{}}}}}"#,
+        "[".repeat(300),
+        "]".repeat(300)
+    );
     let long = format!(r#"{{"name":{{"eq":"{}"}}}}"#, "a".repeat(2048));
     for bad in [
         "x",
