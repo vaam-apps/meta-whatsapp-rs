@@ -1051,3 +1051,36 @@ fn the_legal_acts_are_off_unless_the_deployment_turns_them_on() {
         }
     }
 }
+
+/// Roadmap M5c5: `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` is on unless the
+/// deployment says `off`; anything else is refused, naming the variable.
+/// Decisive: each arm of `send_messaging_account_id`, and the default.
+#[test]
+fn sends_name_the_bindings_account_unless_the_deployment_turns_it_off() {
+    for on in [None, Some("on"), Some(" ")] {
+        let vars = on.map_or_else(production, |v| {
+            production().set("WA_SERVER_SEND_MESSAGING_ACCOUNT_ID", v)
+        });
+        assert!(
+            Config::from_env(&vars)
+                .unwrap()
+                .settings
+                .send_messaging_account_id,
+            "{on:?}"
+        );
+    }
+    assert!(
+        !Config::from_env(&production().set("WA_SERVER_SEND_MESSAGING_ACCOUNT_ID", "off"))
+            .unwrap()
+            .settings
+            .send_messaging_account_id
+    );
+    for bad in ["true", "1", "OFF", "no"] {
+        match refused(&production().set("WA_SERVER_SEND_MESSAGING_ACCOUNT_ID", bad)) {
+            ConfigError::Invalid { name, .. } => {
+                assert_eq!(name, "WA_SERVER_SEND_MESSAGING_ACCOUNT_ID");
+            }
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}

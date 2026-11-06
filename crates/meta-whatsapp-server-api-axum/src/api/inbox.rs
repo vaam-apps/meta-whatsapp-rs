@@ -475,7 +475,8 @@ fn conversations<'a>(
         checks,
         state.clock(),
     )?
-    .observed_by(state.metrics()))
+    .observed_by(state.metrics())
+    .naming_the_account(state.settings().send_messaging_account_id))
 }
 
 /// `GET /v1/numbers/{pn}/conversations`: the number's conversations.

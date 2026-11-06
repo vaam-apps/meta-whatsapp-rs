@@ -288,6 +288,7 @@ impl OtpCodes {
             authz,
             caller,
             observer: &(),
+            names_account: false,
         })
     }
 }
@@ -411,6 +412,8 @@ pub struct Otp<'a> {
     authz: &'a Authorizer,
     caller: &'a Caller,
     observer: &'a dyn Observer,
+    /// [`Self::naming_the_account`].
+    names_account: bool,
 }
 
 impl fmt::Debug for Otp<'_> {
@@ -427,6 +430,17 @@ impl<'a> Otp<'a> {
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Whether the code's message names the sending number's binding's
+    /// WABA id as its `messaging_account_id`, as
+    /// [`crate::messages::Messages::naming_the_account`] does for a send
+    /// (roadmap M5c5; the adapter passes
+    /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`). Off until called.
+    #[must_use]
+    pub fn naming_the_account(mut self, enabled: bool) -> Self {
+        self.names_account = enabled;
         self
     }
 
@@ -451,7 +465,10 @@ impl<'a> Otp<'a> {
         let purpose = purpose(request.purpose)?;
         let (holder, settings) = self.settings().await?;
         let number = self.sender(&holder, &settings).await?;
-        let service = self.service(number.client().clone(), &settings)?;
+        let mut service = self.service(number.client().clone(), &settings)?;
+        if self.names_account {
+            service = service.messaging_account_id(number.waba_id().clone());
+        }
         // The default OTP tenant's number: one issue limit per recipient
         // for every tenant and purpose sending from it, reserved first and
         // given back when nothing was sent.
