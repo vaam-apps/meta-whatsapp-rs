@@ -1789,6 +1789,7 @@ async fn a_malformed_messaging_account_id_never_reaches_the_transport() {
 async fn settings_and_permissions_never_carry_it() {
     let ts = ScriptedTransport::new();
     ts.push_json(200, json!({}));
+    ts.push_json(200, json!({"success": true}));
     ts.push_json(
         200,
         json!({"permission": {"status": "no_permission"}, "actions": []}),
@@ -1796,6 +1797,14 @@ async fn settings_and_permissions_never_carry_it() {
     let calling = account_calling(&ts);
     calling.settings(false).await.unwrap();
     assert_eq!(ts.last_request().unwrap().url.query(), None);
+    // The settings change is a POST with a body: it carries no such key.
+    calling.update_settings(&docs_update()).await.unwrap();
+    let body = ts.last_request().unwrap().json().unwrap();
+    assert!(!body.to_string().contains("messaging_account"), "{body}");
+    assert_eq!(
+        body.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["calling"]
+    );
     calling
         .permissions(&Recipient::Phone("14085551234".into()))
         .await

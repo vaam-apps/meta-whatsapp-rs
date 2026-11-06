@@ -4875,7 +4875,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     off twin now walk the five call routes (holding the sample call by its
     `calls` event), `a_call_body_naming_the_account_is_refused` and
     `a_call_names_the_same_account_on_every_action`. The choices are
-    D310-D313, the implementer's proposals, not decided: one setting for
+    D310-D313, decided by the coordinator under the owner's delegation,
+    swappable: one setting for
     sends and calls; the binding's WABA as read for each request, nothing
     stored with the call (so the stored `wa.server.call` record is
     unchanged); a body naming the field is refused. No OpenAPI change.

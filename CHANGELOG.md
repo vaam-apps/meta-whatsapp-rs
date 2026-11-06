@@ -21,8 +21,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   Account in the body of `connect`, `pre_accept`, `accept`, `reject` and
   `terminate` (a JSON string, as the pages' examples show), checked as
   digits before any request; unset, no key is sent. Additive (no struct
-  gained a field). Service (choices D310-D313, the implementer's proposals,
-  not decided): the call routes name the number's binding's WABA id on every
+  gained a field). Service (choices D310-D313, decided by the coordinator
+  under the owner's delegation, swappable): the call routes name the number's binding's WABA id on every
   action under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (the sends' setting, on);
   a body naming the field, or the deprecated alias, is `422 invalid_request`.
   No new setting, scope, route, error code or stored name; the OpenAPI
