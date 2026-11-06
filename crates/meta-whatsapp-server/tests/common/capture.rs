@@ -2528,6 +2528,17 @@ async fn groups(h: &Harness, admin: &str) -> Vec<String> {
         )]))
         .await;
     assert_eq!(pictured.status.as_u16(), 204, "{}", pictured.text);
+    // ...and one cut by a timeout, with the bytes in the failing path too.
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut_picture = h
+        .call(call(Method::PUT, &format!("{one}/picture")).multipart(&[(
+            "file",
+            Some("group.jpg"),
+            &picture,
+        )]))
+        .await;
+    assert_eq!(cut_picture.status.as_u16(), 504, "{}", cut_picture.text);
     // The invite link: read, reset, reset again with the call cut.
     h.graph.push_json(
         200,
@@ -4348,6 +4359,7 @@ fn check_group_audit(changes: &[&serde_json::Value]) {
             ("group_creation_requested", "answered", 0, 0, 0),
             ("group_settings_updated", "answered", 0, 0, 0),
             ("group_picture_set", "answered", 0, 0, 0),
+            ("group_picture_set", "unknown", 0, 0, 0),
             ("group_invite_link_reset", "answered", 0, 0, 0),
             ("group_invite_link_reset", "unknown", 0, 0, 0),
             ("group_participants_removed", "answered", 3, 0, 0),

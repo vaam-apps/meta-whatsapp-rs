@@ -870,7 +870,12 @@ impl Picture {
         if data.len() > PICTURE_MAX_BYTES {
             return Err(ServiceError::new(ErrorCode::MEDIA_TOO_LARGE));
         }
-        // The SOI marker and the first segment's marker prefix.
+        // The SOI marker and the first segment's marker prefix. Three
+        // guards hold this, each enough alone: this line, the header
+        // reader's own SOI check and the client library's `set_picture`
+        // (the same three bytes); so no route test can tell one gone, and
+        // `the_header_reader_survives_hostile_input` holds the reader's
+        // (roadmap M5f2 review).
         if !data.starts_with(&[0xFF, 0xD8, 0xFF]) {
             return Err(ServiceError::invalid("file"));
         }
@@ -896,6 +901,10 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     let be16 = |at: usize| -> Option<u32> {
         Some(u32::from(*data.get(at)?) << 8 | u32::from(*data.get(at + 1)?))
     };
+    // The reader does not lean on its caller for the signature.
+    if !data.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
     let mut at = 2; // past the SOI marker
     loop {
         // A marker: 0xFF, any fill 0xFF, then its code.
@@ -1625,6 +1634,108 @@ mod tests {
             format!("{:?}", Picture::new(jpeg(0xC0, 192, 192, &[])).unwrap()),
             "Picture { len: 17 }"
         );
+    }
+
+    /// The header reader on input built to hurt it: every prefix of a valid
+    /// file, every value of every byte of its headers, a wall of fill bytes,
+    /// a million empty segments, lengths running past the end, and
+    /// pseudo-random bytes behind a signature end in a verdict, never a
+    /// panic, and in one pass. Decisive: each guard of `jpeg_dimensions`
+    /// (a scan, the end or a stuffed byte stops it; a frame under 8 bytes
+    /// is no frame; a marker without a length is skipped).
+    #[test]
+    fn the_header_reader_survives_hostile_input() {
+        let valid = jpeg(0xC0, 512, 512, &[0xFF, 0xE1, 0, 5, 1, 2, 3]).to_vec();
+        assert!(Picture::new(Bytes::from(valid.clone())).is_ok());
+        for cut in 0..valid.len() {
+            let _ = Picture::new(Bytes::copy_from_slice(&valid[..cut]));
+        }
+        for at in 0..valid.len() {
+            for value in 0..=255u8 {
+                let mut changed = valid.clone();
+                changed[at] = value;
+                let _ = Picture::new(Bytes::from(changed));
+            }
+        }
+        // Fill bytes up to the bound, then nothing; or then a frame.
+        let mut fill = vec![0xFF, 0xD8];
+        fill.resize(PICTURE_MAX_BYTES, 0xFF);
+        assert!(Picture::new(Bytes::from(fill)).is_err());
+        let mut fill_then_frame = vec![0xFF, 0xD8];
+        fill_then_frame.resize(PICTURE_MAX_BYTES - 20, 0xFF);
+        fill_then_frame.extend([0xC0, 0, 11, 8, 0x01, 0x00, 0x01, 0x00, 1, 1, 0x11, 0]);
+        assert!(Picture::new(Bytes::from(fill_then_frame)).is_ok());
+        // A million segments of nothing, and no frame.
+        let mut empty = vec![0xFF, 0xD8];
+        while empty.len() + 4 <= PICTURE_MAX_BYTES {
+            empty.extend([0xFF, 0xE0, 0, 2]);
+        }
+        assert!(Picture::new(Bytes::from(empty)).is_err());
+        // Lengths at the ends of their range.
+        for length in [0u16, 1, 2, 3, 7, 8, 0xFFFE, 0xFFFF] {
+            for marker in [0xE0, 0xC0, 0xFE] {
+                let mut data = vec![0xFF, 0xD8, 0xFF, marker];
+                data.extend(length.to_be_bytes());
+                data.extend([8, 1, 0, 1, 0, 1, 1, 0x11, 0]);
+                let _ = Picture::new(Bytes::from(data));
+            }
+        }
+        // A frame of 7 bytes (no component count) is no frame, even with
+        // sides that would pass; 8 is the smallest.
+        let seven = [0xFF, 0xD8, 0xFF, 0xC0, 0, 7, 8, 1, 0, 1, 0];
+        assert!(Picture::new(Bytes::copy_from_slice(&seven)).is_err());
+        let mut eight = seven.to_vec();
+        eight[5] = 8;
+        eight.push(0);
+        assert!(Picture::new(Bytes::from(eight)).is_ok());
+        // What lies behind a scan, the end or a stuffed byte is no header,
+        // however much it looks like one.
+        let frame = [0xFF, 0xC0, 0, 11, 8, 1, 0, 1, 0, 1, 1, 0x11, 0];
+        for (label, stop) in [
+            ("a scan", &[0xFF, 0xDA, 0, 2][..]),
+            ("the end", &[0xFF, 0xD9, 0, 2][..]),
+            ("a byte that is no marker", &[0x42, 0, 2][..]),
+            ("a stuffed byte", &[0xFF, 0x00, 0, 2][..]),
+        ] {
+            let mut data = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 2];
+            data.extend(stop);
+            data.extend(frame);
+            assert!(Picture::new(Bytes::from(data)).is_err(), "{label}");
+        }
+        // Markers without a length are skipped: TEM, RSTn, a second SOI.
+        for marker in [0x01, 0xD0, 0xD7, 0xD8] {
+            let mut data = vec![0xFF, 0xD8, 0xFF, marker];
+            data.extend(frame);
+            assert!(Picture::new(Bytes::from(data)).is_ok(), "{marker:#x}");
+        }
+        // Pseudo-random bytes behind a signature (xorshift, fixed seed).
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        for _ in 0..2000 {
+            let mut data = vec![0xFF, 0xD8, 0xFF];
+            for _ in 0..(state % 97) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                // Biased to markers and lengths, which are what it parses.
+                data.push(if state % 3 == 0 {
+                    0xFF
+                } else {
+                    (state >> 24) as u8
+                });
+            }
+            let _ = Picture::new(Bytes::from(data));
+        }
+        // The reader alone refuses a file with no SOI, whatever follows.
+        let mut unsigned = vec![0x42, 0x42];
+        unsigned.extend(frame);
+        assert_eq!(jpeg_dimensions(&unsigned), None);
+        let mut signed = vec![0xFF, 0xD8];
+        signed.extend(frame);
+        assert_eq!(jpeg_dimensions(&signed), Some((256, 256)));
+        assert_eq!(jpeg_dimensions(&[]), None);
+        assert_eq!(jpeg_dimensions(&[0xFF]), None);
+        // The widest a side can be is accepted: no bound of ours.
+        assert!(Picture::new(jpeg(0xC0, u16::MAX, u16::MAX, &[])).is_ok());
     }
 
     /// A group's subject is 1 to 128 characters once trimmed, its

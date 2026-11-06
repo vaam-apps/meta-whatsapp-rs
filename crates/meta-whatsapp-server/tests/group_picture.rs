@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{Call, Harness, jpeg};
 use futures::StreamExt as _;
+use meta_whatsapp_rs::core::store::{Expiry, KvStore as _};
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::{Scope, TenantId};
@@ -120,7 +121,10 @@ async fn a_file_that_is_not_a_square_jpeg_of_192_pixels_is_refused_with_no_reque
     no_frame.extend([0xFF, 0xD9]);
     let mut cut = jpeg(512, 512, b"");
     cut.truncate(24); // inside the frame header, before its sides
-    // A frame header at the right place, behind no JPEG signature.
+    // A frame header at the right place, behind no JPEG signature: three
+    // guards hold it (Picture::new, the header reader, the client library),
+    // each enough alone, so removing one is not seen here (the core's
+    // `the_header_reader_survives_hostile_input` holds the reader's).
     let mut unsigned = vec![0x42, 0x42];
     unsigned.extend(&jpeg(512, 512, b"")[2..]);
     let refused: [(&str, Vec<u8>); 9] = [
@@ -217,6 +221,82 @@ async fn the_form_is_one_file() {
         );
     }
     assert!(h.graph.requests().is_empty());
+}
+
+/// Every way the body can be refused hands the transfer slot back, and
+/// asks Meta nothing: with one slot, each refused body (not a form, no
+/// boundary, a part header past the framing budget, a second file, an
+/// extra field, a file past the bound, a file that is no image) is
+/// answered as its own code, and the next call, a good picture, is not
+/// `429`. Decisive: the permit's lifetime in `set_group_picture` (released
+/// on every early exit) and the framing budget.
+#[tokio::test]
+async fn every_refused_body_gives_the_slot_back_and_asks_meta_nothing() {
+    let (h, key) = connected_with(Settings {
+        media_concurrency: 1,
+        ..common::test_settings()
+    })
+    .await;
+    hold(&h, WABA, PN).await;
+    let good = jpeg(192, 192, b"scan");
+    let call = || Call::new(Method::PUT, path()).key(&key);
+    let mut long_header =
+        b"--x\r\nContent-Disposition: form-data; name=\"file\"; filename=\"".to_vec();
+    long_header.extend(vec![b'a'; 20 * 1024]);
+    long_header.extend(b"\"\r\n\r\nxx\r\n--x--\r\n");
+    let big = jpeg(512, 512, &vec![7u8; 5 * 1024 * 1024]);
+    let cases = [
+        (
+            "no boundary",
+            call()
+                .header("content-type", "multipart/form-data")
+                .body(Body::from(good.clone())),
+            "invalid_request",
+        ),
+        (
+            "a part header past the budget",
+            call()
+                .header("content-type", "multipart/form-data; boundary=x")
+                .body(Body::from(long_header)),
+            "invalid_request",
+        ),
+        (
+            "two files",
+            call().multipart(&[("file", None, &good), ("file", None, &good)]),
+            "invalid_request",
+        ),
+        (
+            "an extra field first",
+            call().multipart(&[("other", None, b"x"), ("file", None, &good)]),
+            "invalid_request",
+        ),
+        (
+            "past the bound",
+            call().multipart(&[("file", Some("big.jpg"), &big)]),
+            "media_too_large",
+        ),
+        (
+            "no image",
+            call().multipart(&[("file", None, b"plain text")]),
+            "invalid_request",
+        ),
+        ("empty body", call().body(Body::empty()), "invalid_request"),
+    ];
+    for (label, request, code) in cases {
+        let reply = h.call(request).await;
+        assert_eq!(reply.code(), code, "{label}: {}", reply.text);
+        assert!(reply.status.is_client_error(), "{label}: {}", reply.text);
+        h.graph.push_json(200, json!({"success": true}));
+        let next = h.call(put(&key, &good)).await;
+        assert_eq!(
+            next.status,
+            StatusCode::NO_CONTENT,
+            "{label}: the slot did not come back: {}",
+            next.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), 7, "only the good ones were sent");
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// A file over 5 MiB is `413 media_too_large` with no request, and the body
@@ -348,6 +428,64 @@ async fn a_group_the_number_does_not_hold_is_not_found_with_zero_vault_reads() {
     .multipart(&[("file", Some("g.jpg"), &picture)]);
     assert_eq!(h.call(other).await.status, StatusCode::NOT_FOUND);
     assert_eq!(h.kv.vault_reads(), reads);
+}
+
+/// The design's M5.1 and M5.2 mask each other: a number of another tenant
+/// holds no group of ours, and a group of another tenant's is not recorded
+/// under our number, so each check is tried where only it stands, with the
+/// record forged in the store (the webhook pipeline cannot write these):
+/// the record under our number says another **tenant**; the record under
+/// another tenant's number says **ours**; the record under our number
+/// names another **number**. Each is `404`, zero vault reads, nothing sent.
+/// Decisive: the record's tenant and number comparisons in
+/// `GroupRecords::owned`, and the number's tenant check (`tenant_number`
+/// and `Groups::new`'s, which hold the second case together).
+#[tokio::test]
+async fn each_ownership_check_holds_where_the_others_would_not() {
+    const GROUP_NAMESPACE: &str = "wa.server.group";
+    let picture = jpeg(192, 192, b"scan");
+    // (the number asked, the number whose event made the record, the
+    // forgery on the stored record)
+    let cases: [(&str, &str, &str, &str, &str); 3] = [
+        ("tenant", PN, PN, TENANT, OTHER_TENANT),
+        ("number's tenant", OTHER_PN, OTHER_PN, OTHER_TENANT, TENANT),
+        ("record's number", PN, PN, PN, OTHER_PN),
+    ];
+    for (label, ask, held_on, from, to) in cases {
+        let (h, key) = connected_with(common::test_settings()).await;
+        let waba = if held_on == PN { WABA } else { OTHER_WABA };
+        hold(&h, waba, held_on).await;
+        let (record, bytes) =
+            h.kv.writes()
+                .into_iter()
+                .find(|(k, _)| k.namespace() == GROUP_NAMESPACE)
+                .expect("the event recorded the group");
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(from), "{label}: {text}");
+        let forged = text.replace(from, to);
+        h.kv.put(&record, forged.into_bytes(), Expiry::Never)
+            .await
+            .unwrap();
+        let reads = h.kv.vault_reads();
+        let reply = h
+            .call(
+                Call::new(
+                    Method::PUT,
+                    format!("/v1/numbers/{ask}/groups/{GROUP}/picture"),
+                )
+                .key(&key)
+                .multipart(&[("file", Some("g.jpg"), &picture)]),
+            )
+            .await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(h.kv.vault_reads(), reads, "{label}: no token was opened");
+        assert!(h.graph.requests().is_empty(), "{label}");
+    }
 }
 
 /// The design's M5.1: another tenant's number is `404` with zero vault
