@@ -1045,9 +1045,12 @@ async fn call_events_make_the_calls_the_numbers() {
 async fn the_calling_routes_need_their_scope() {
     let (h, _) = connected().await;
     hold(&h, PN, CALL).await;
-    let send = h
-        .tenant_key(TENANT, &[Scope::Send, Scope::Groups, Scope::Numbers])
-        .await;
+    // Every scope but `calls`: none stands in for it.
+    let others: Vec<Scope> = Scope::ALL
+        .into_iter()
+        .filter(|scope| *scope != Scope::Calls)
+        .collect();
+    let send = h.tenant_key(TENANT, &others).await;
     let calls_only = h.tenant_key(TENANT, &[Scope::Calls]).await;
     let reads = h.kv.vault_reads();
     for (method, path, body) in [
@@ -1112,6 +1115,7 @@ async fn the_calling_routes_need_their_scope() {
 /// value, or a range out of bounds, is refused with no request.
 /// Decisive: `call_query` and the library's expansion.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Meta's example, the no-data answer, each refusal
 async fn call_analytics_are_asked_as_metas_expansion_and_bounded() {
     let (h, key) = connected().await;
     let now = time::OffsetDateTime::now_utc();
