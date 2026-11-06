@@ -534,6 +534,13 @@ impl Grant {
         self.0.template_cache()
     }
 
+    /// The resumable upload sessions (roadmap M5c1): the profile picture's
+    /// change reads a number's own completed upload from them (roadmap
+    /// M5c2, `meta_whatsapp_server_core::uploads::Uploads::profile_picture`).
+    pub fn upload_sessions(&self) -> &UploadSessions {
+        self.0.upload_sessions()
+    }
+
     /// The groups each number holds (roadmap M5f), which decide whether a
     /// group is a number's before any token is opened
     /// (`meta_whatsapp_server_core::groups::GroupRecords::owned`).

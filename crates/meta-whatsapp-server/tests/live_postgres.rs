@@ -23,7 +23,8 @@ use common::meta::{
 };
 use common::{ALL_SCOPES, Call, Harness, Stores, TestDb};
 use meta_whatsapp_rs::adapters::store::postgres::sqlx;
-use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::body::Body;
+use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_rs::webhooks::{Claim, DedupGuard, WebhookPayload};
 use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
@@ -527,6 +528,91 @@ async fn live_postgres_a_group_the_number_does_not_hold_is_not_found_before_the_
         .await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text);
     assert_eq!(h.kv.vault_reads(), reads);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The design's M5.1 and M5.2 on Postgres (roadmap M5c2): a resumable
+/// upload's record lives in the Postgres key/value store, and a profile
+/// picture is set from the handle in the number's own record only: another
+/// tenant's upload, and another number's of the same tenant, are `404` with
+/// zero requests to Meta, and the owner's own sets the picture.
+#[tokio::test]
+async fn live_postgres_a_picture_upload_of_another_tenant_or_number_is_not_found() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with_stores_and_settings(
+        Stores::postgres(&pool),
+        meta_whatsapp_server::state::Settings {
+            app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
+            ..common::test_settings()
+        },
+    );
+    let (a_pn, a_pn_2, b_pn) = ("106540352242922", "106540352242923", "106540352242924");
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", "102290129340398", &[a_pn, a_pn_2], "TOKEN-OF-A")
+        .await;
+    h.tenant("tenant-b").await;
+    h.connect("tenant-b", "102290129340399", &[b_pn], "TOKEN-OF-B")
+        .await;
+    let scopes = [Scope::Numbers, Scope::Media];
+    let a = h.tenant_key("tenant-a", &scopes).await;
+    let b = h.tenant_key("tenant-b", &scopes).await;
+    let mut ids = Vec::new();
+    for (key, pn) in [(&a, a_pn), (&a, a_pn_2), (&b, b_pn)] {
+        h.graph.push_json(200, json!({"id": "upload:SESSION"}));
+        let started = h
+            .call(
+                Call::new(Method::POST, format!("/v1/numbers/{pn}/media-uploads"))
+                    .key(key)
+                    .json(&json!({"file_name": "logo.png", "file_length": 12, "file_type": "image/png"})),
+            )
+            .await;
+        assert_eq!(started.status, StatusCode::CREATED, "{}", started.text);
+        let id = started.json()["upload_id"].as_str().unwrap().to_owned();
+        h.graph.push_json(200, json!({"h": "4::HANDLE"}));
+        let chunk = h
+            .call(
+                Call::new(
+                    Method::POST,
+                    format!("/v1/numbers/{pn}/media-uploads/{id}?file_offset=0"),
+                )
+                .key(key)
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(b"png bytes...".to_vec())),
+            )
+            .await;
+        assert_eq!(chunk.status, StatusCode::OK, "{}", chunk.text);
+        ids.push(id);
+    }
+    let patch = |pn: &str, key: &str, id: &str| {
+        Call::new(Method::PATCH, format!("/v1/numbers/{pn}/profile"))
+            .key(key)
+            .json(&json!({"profile_picture_upload_id": id}))
+    };
+    let asked = h.graph.requests().len();
+    // Another tenant's upload, and the same tenant's other number's.
+    for (key, pn, id) in [
+        (&a, a_pn, &ids[2]),
+        (&b, b_pn, &ids[0]),
+        (&a, a_pn, &ids[1]),
+    ] {
+        let reply = h.call(patch(pn, key, id)).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{pn}: {}", reply.text);
+    }
+    assert_eq!(h.graph.requests().len(), asked, "Meta was asked");
+    // The owner's own sets the picture, with the handle of the record.
+    h.graph.push_json(200, json!({"success": true}));
+    h.graph.push_json(200, json!({"data": [{"about": "Hi"}]}));
+    let set = h.call(patch(a_pn, &a, &ids[0])).await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.text);
+    let requests = h.graph.requests();
+    assert_eq!(
+        requests[requests.len() - 2].json().unwrap(),
+        json!({"messaging_product": "whatsapp", "profile_picture_handle": "4::HANDLE"})
+    );
     assert_eq!(h.graph.remaining(), 0);
 }
 

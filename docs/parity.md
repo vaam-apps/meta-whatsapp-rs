@@ -92,13 +92,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**75 of the 132 counted rows are done on both sides.** Parity is not
+**77 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 128 | 3 | 0 | 1 |
-| Service | 76 | 17 | 38 | 1 |
+| Service | 78 | 16 | 37 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -106,9 +106,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 3 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 55 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 53 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M3 6, M4 2, M5 46, P 1 (payments: P2b).
+  two): M3 6, M4 2, M5 44, P 1 (payments: P2b).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -352,8 +352,8 @@ The owner's definition (2026-09-26):
 
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 64 | Profile | Own profile (on the Cloud API, the business profile: about, address, description, email, websites, vertical, picture) | Yes (name, about, picture) | Yes (business profile) | `business-profiles`; `reference/whatsapp-business-phone-number/whatsapp-business-profile-api.md`, `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` | `client::business_profile::BusinessProfile::get`, `update`; the picture by upload handle (`ProfileUpdate::profile_picture_handle`) | `GET` and `PATCH /v1/numbers/{pn}/profile` (`server_api_axum::api::numbers::get_profile`, `update_profile`, over `server_core::numbers::Numbers::profile`, `update_profile`), without the picture | done / partial (M5c2) |
-| 65 | Profile | Display name change | — | — | `display-names` | `client::phone_numbers::PhoneNumber::request_display_name_change` | not exposed | done / gap (M5c2) |
+| 64 | Profile | Own profile (on the Cloud API, the business profile: about, address, description, email, websites, vertical, picture) | Yes (name, about, picture) | Yes (business profile) | `business-profiles`; `reference/whatsapp-business-phone-number/whatsapp-business-profile-api.md`, `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` | `client::business_profile::BusinessProfile::get`, `update`; the picture by upload handle (`ProfileUpdate::profile_picture_handle`) | `GET` and `PATCH /v1/numbers/{pn}/profile` (`server_api_axum::api::numbers::get_profile`, `update_profile`, over `server_core::numbers::Numbers::profile`, `update_profile`), with the picture: `profile_picture_upload_id` names one of the number's own completed uploads and `server_core::uploads::Uploads::profile_picture` reads its handle from the record (another tenant's or number's upload is `404`, Meta not asked; roadmap M5c2, design D160) | done / done |
+| 65 | Profile | Display name change | — | — | `display-names` | `client::phone_numbers::PhoneNumber::request_display_name_change` | `POST` and `GET /v1/numbers/{pn}/display-name` (`server_api_axum::api::display_name::request_display_name_change`, `get_display_name`, over `server_core::display_names::DisplayNames::request`, `status`: a request audited by count and outcome, under an `Idempotency-Key`; the status reads `verified_name`, `name_status`, `new_display_name` and `new_name_status`; the number is registered again by the existing route once Meta approves; roadmap M5c2, design D162–D164) | done / done |
 | 66 | Profile | Business username: adopt or change it, read it, reserved names, delete it; changes by webhook | — | — | `business-scoped-user-ids` (§ Business usernames: `POST`, `GET` and `DELETE /{Phone-Number-ID}/username`, `username_suggestions`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` | `client::phone_numbers::PhoneNumber::set_username` (the format checked first, `transfer_action` typed), `username`, `username_suggestions`, `delete_username`; the webhook `webhooks::WebhookEvent::BusinessUsernameUpdated` | `business_username_updated` events; no setter | done / partial (M5c3) |
 | 67 | Chats | Archive, pin, mute, star, clear chats | Yes | No | none | the inbox tracks unread only (`inbox::Inbox::mark_read`) | — | n/a — unofficial protocol |
 | 68 | Contacts | Check that a number is on WhatsApp | Yes | No | none: the `contacts` check belonged to the retired On-Premises API (Meta's `changelog`) | — | — | n/a — unofficial protocol |

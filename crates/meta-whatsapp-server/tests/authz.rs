@@ -91,6 +91,9 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}"),
         (Method::GET, "/v1/numbers/{pn}/profile"),
         (Method::PATCH, "/v1/numbers/{pn}/profile"),
+        // Roadmap M5c2 (the design's M5.1): the display name.
+        (Method::POST, "/v1/numbers/{pn}/display-name"),
+        (Method::GET, "/v1/numbers/{pn}/display-name"),
         (Method::DELETE, "/v1/wabas/{waba_id}"),
         (Method::DELETE, "/v1/admin/wabas/{waba_id}/binding"),
         (Method::POST, "/v1/numbers/{pn}/messages"),

@@ -251,7 +251,7 @@ stored data, the owner's).
 
 - **Groups, in the service** (roadmap M5f, parity rows 77, 79 and 81 now
   done in the service and row 76 partial until the picture, M5f2; choices
-  D150-D156, proposed, pending the coordinator's decision; from Meta's
+  D150-D156, decided by the coordinator 2026-11-05, swappable; from Meta's
   `groups/reference`, `groups/webhooks` and `analytics` pages, read on
   2026-11-05). A new scope, `groups`, and thirteen operations under
   `/v1/numbers/{pn}/groups`: create (`202` with Meta's `request_id`; an
@@ -309,6 +309,35 @@ stored data, the owner's).
     New names, pending the owner's confirmation before the first
     release: the namespace, the operation ids, the codes, the path, the
     field and its values, the settings and the feature (design D125-D131).
+- **Profile picture and display name, in the service** (roadmap M5c2,
+  parity rows 64 and 65 now done in the service; choices D160-D166,
+  proposed, pending the coordinator's decision; from `business-profiles`,
+  `reference/whatsapp-business-phone-number/whatsapp-business-profile-api`
+  and `display-names`).
+  - `PATCH /v1/numbers/{pn}/profile` takes `profile_picture_upload_id`:
+    one of the number's own completed JPEG or PNG uploads (M5c1), whose
+    handle the service reads from its record and sends as
+    `profile_picture_handle`. Another tenant's or another number's upload
+    is `404` with nothing asked of Meta; a raw handle is not accepted.
+    `GET` and `PATCH` answer `profile_picture_url` too.
+  - `POST /v1/numbers/{pn}/display-name` asks Meta to review a new
+    display name (`202`, an optional `Idempotency-Key`, audited by count
+    and outcome as `display_name_change_requested`, never the name) and
+    `GET` reads `verified_name`, `name_status`, `new_display_name` and
+    `new_name_status`. The name applies only once Meta approves it and the
+    number is registered again (the existing route, with its PIN).
+  - What customers read is refused before any request when it spoofs or
+    is unsafe (D165): a display name with a bidi override, a zero-width
+    character or another invisible format character (the joiners and
+    direction marks scripts need are kept), and in the profile an
+    `about`, `address` or `description` with a control or such a
+    character, an `email` without the shape `name@host` and a website
+    that is not an `http` or `https` URL without credentials (`422` on
+    the field).
+  - The OpenAPI document is additive (two operations, two fields). Scope
+    `numbers`; no new scope, code, setting or stored name. New names,
+    pending the owner's confirmation before the first release: the
+    operation ids, the path, the field and the audit action.
 - **CrateStack enters the workspace** (roadmap S10, design D20 and §8.3;
   coverage row 33; no parity or category row changes status: the
   adapter serves nothing yet).

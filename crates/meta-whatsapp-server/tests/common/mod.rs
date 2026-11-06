@@ -1142,6 +1142,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // display-names, "Update display name via API" (roadmap M5c2).
+        ("POST", "/v1/numbers/{pn}/display-name") => {
+            serde_json::json!({"new_display_name": "Lucky Shrub"})
+        }
         // The Graph guide's file types (roadmap M5c1).
         ("POST", "/v1/numbers/{pn}/media-uploads") => serde_json::json!({
             "file_name": "offer.png", "file_length": 12, "file_type": "image/png"

@@ -49,6 +49,7 @@ fn lucky_shrub_view() -> Value {
         "address": "1 Hacker Way, Menlo Park, CA 94025",
         "description": "At Lucky Shrub, we specialize in providing a...",
         "email": "lucky@luckyshrub.com",
+        "profile_picture_url": "https://pps.whatsapp.net/v/t61.24...",
         "websites": ["https://www.luckyshrub.com/"],
         "vertical": "RETAIL"
     })
@@ -137,7 +138,7 @@ async fn the_profile_is_read_with_the_documented_fields() {
     );
     assert_eq!(
         request.query("fields").as_deref(),
-        Some("about,address,description,email,websites,vertical")
+        Some("about,address,description,email,profile_picture_url,websites,vertical")
     );
     assert_eq!(request.bearer(), Some(TOKEN));
     assert_eq!(h.graph.remaining(), 0);
