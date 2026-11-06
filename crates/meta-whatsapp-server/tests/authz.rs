@@ -603,7 +603,7 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 9] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 13] = [
     // A resumable upload's chunk and status name an upload the sample
     // does not hold: refused after the vault, before Meta (roadmap M5c1).
     (
@@ -650,6 +650,29 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 9] = [
         Method::PUT,
         "/v1/numbers/{pn}/compliance-info",
         StatusCode::FORBIDDEN,
+    ),
+    // Roadmap M5j (D250): the three legal acts of a tenant's WABA, off in
+    // this harness, and a billing migration the WABA never started: `404`
+    // from the service's record, Meta not asked.
+    (
+        Method::POST,
+        "/v1/wabas/{waba_id}/solution-migration-intents",
+        StatusCode::FORBIDDEN,
+    ),
+    (
+        Method::POST,
+        "/v1/wabas/{waba_id}/billing-migrations",
+        StatusCode::FORBIDDEN,
+    ),
+    (
+        Method::POST,
+        "/v1/wabas/{waba_id}/billing-migrations/{migration_id}/resume",
+        StatusCode::FORBIDDEN,
+    ),
+    (
+        Method::GET,
+        "/v1/wabas/{waba_id}/billing-migrations/{migration_id}",
+        StatusCode::NOT_FOUND,
     ),
 ];
 
@@ -1665,6 +1688,55 @@ async fn the_hosted_and_pool_routes_follow_the_authorization_order() {
                 reply.text
             );
         }
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+}
+
+/// Roadmap M5j: the operator's partner routes follow the authorization
+/// order: no tenant key and no platform key (every scope) passes the admin
+/// guard, **before** the legal-act gate (a tenant key on `accept` is
+/// `403 forbidden`, never `feature_not_available`), and Meta is never
+/// asked. The admin key with the legal acts off meets the gate on the four
+/// legal acts. Decisive: the admin guard on `partners_admin_routes`, and
+/// `Signups::partners` admitting the admin before anything.
+#[tokio::test]
+async fn the_partner_routes_follow_the_authorization_order() {
+    let h = two_tenants().await;
+    let tenant = h.tenant_key(A, &ALL_SCOPES).await;
+    let platform = h.platform_key(AllowedTenants::All, &ALL_SCOPES).await;
+    let admin = h.admin_key().await;
+    let routes: Vec<_> = common::spec_operations()
+        .into_iter()
+        .filter(|operation| operation.template.starts_with("/v1/admin/partners/"))
+        .collect();
+    assert!(routes.len() >= 13, "{} routes", routes.len());
+    for operation in &routes {
+        for key in [&tenant, &platform] {
+            let reply = h.call(call(operation, key, Some(A))).await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::FORBIDDEN, "forbidden"),
+                "{}: {}",
+                operation.label(),
+                reply.text
+            );
+        }
+        let reply = h.call(call(operation, &admin, None)).await;
+        assert_ne!(
+            reply.status,
+            StatusCode::UNAUTHORIZED,
+            "{}",
+            operation.label()
+        );
+        assert!(
+            matches!(
+                reply.code().as_str(),
+                "feature_not_available" | "signup_not_configured"
+            ),
+            "{}: {}",
+            operation.label(),
+            reply.text
+        );
     }
     assert!(h.graph.requests().is_empty(), "Meta was never asked");
 }

@@ -935,7 +935,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 20] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 21] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1002,6 +1002,10 @@ impl Sample {
                 "pn" => &self.pn,
                 "waba_id" => &self.waba,
                 "id" if template.contains("/templates/") => SAMPLE_TEMPLATE_ID,
+                "id" if template.contains("/partners/solutions/") => SAMPLE_SOLUTION_ID,
+                "user_id" => SAMPLE_SYSTEM_USER_ID,
+                "intent_id" => SAMPLE_SOLUTION_ID,
+                "migration_id" => SAMPLE_MIGRATION_ID,
                 "id" => &self.tenant,
                 "key_id" => &self.key_id,
                 "message_id" => SAMPLE_MESSAGE_ID,
@@ -1025,6 +1029,15 @@ impl Sample {
         out
     }
 }
+
+/// A Multi-Partner Solution, and a migration intent (roadmap M5j).
+pub const SAMPLE_SOLUTION_ID: &str = "795033096057724";
+
+/// A system user (`reference/user/assigned-whatsapp-business-accounts-api`).
+pub const SAMPLE_SYSTEM_USER_ID: &str = "1972555232742222";
+
+/// A billing migration (`pricing/change-billing-currency`).
+pub const SAMPLE_MIGRATION_ID: &str = "mig_01HZYK3ABCDEF4567890";
 
 /// A received message's id (`messages/mark-message-as-read`).
 pub const SAMPLE_MESSAGE_ID: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA";
@@ -1404,6 +1417,22 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "/v1/numbers/{pn}/calls/{call_id}/pre-accept"
             | "/v1/numbers/{pn}/calls/{call_id}/accept",
         ) => serde_json::json!({"sdp_answer": SAMPLE_SDP}),
+        // Roadmap M5j: the partner routes' bodies.
+        ("POST", "/v1/admin/partners/business-verifications") => serde_json::json!({
+            "client_business_id": "2729063490586005",
+            "documents": [{"file_name": "registration.png",
+                           "content_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}]
+        }),
+        ("POST", "/v1/admin/partners/solutions") => serde_json::json!({
+            "name": "Social OVD with Lucky Shrub", "partner_app_id": "21202248997039",
+            "owner_permissions": ["MESSAGING"], "partner_permissions": ["MESSAGING"]
+        }),
+        ("POST", "/v1/wabas/{waba_id}/solution-migration-intents") => {
+            serde_json::json!({"solution_id": SAMPLE_SOLUTION_ID})
+        }
+        ("POST", "/v1/wabas/{waba_id}/billing-migrations") => {
+            serde_json::json!({"currency": "INR"})
+        }
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })
