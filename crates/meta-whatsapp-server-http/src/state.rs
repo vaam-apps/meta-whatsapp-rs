@@ -65,6 +65,10 @@ pub const TEMPLATE_CACHE_TTL: Duration = Duration::from_secs(60);
 /// What the operator tunes (sections 5.4, 6 and 7.2), and the design's
 /// fixed values, which tests shorten.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is an independent deployment setting read from its own variable, not a state machine"
+)]
 pub struct Settings {
     /// `WA_SERVER_RATE_*`.
     pub rate_limits: RateLimits,

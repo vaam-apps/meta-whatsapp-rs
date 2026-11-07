@@ -754,7 +754,9 @@ impl SipCredential {
     /// it or put it in an error; the answer to the caller is the only
     /// place it goes.
     pub fn password(&self) -> Option<&str> {
-        self.password.as_ref().map(|p| p.expose_secret())
+        self.password
+            .as_ref()
+            .map(meta_whatsapp_rs::client::calling::settings::SipPassword::expose_secret)
     }
 }
 

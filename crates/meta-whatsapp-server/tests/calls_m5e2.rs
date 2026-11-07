@@ -154,8 +154,11 @@ async fn the_password_needs_the_scope_that_no_other_scope_stands_in_for() {
     let reply = w.h.call(Call::get(sip_path(PN))).await;
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{}", reply.text);
     // The scope is a name an operator can give.
-    assert!(Scope::parse("call_credentials") == Some(Scope::CallCredentials));
-    assert!(Scope::CallCredentials.as_str() == "call_credentials");
+    assert_eq!(
+        Scope::parse("call_credentials"),
+        Some(Scope::CallCredentials)
+    );
+    assert_eq!(Scope::CallCredentials.as_str(), "call_credentials");
 }
 
 /// The setting is off by default (`Settings::default()`): the read is
@@ -417,12 +420,12 @@ async fn an_announcement_key_never_uploads_twice_and_a_timeout_is_not_repeated()
         .collect();
     let key = w.h.tenant_key(TENANT, &others).await;
     let reads = w.h.kv.vault_reads();
-    let reply = w.h.call(announce(&key, &file)).await;
+    let refused = w.h.call(announce(&key, &file)).await;
     assert_eq!(
-        (reply.status, reply.code().as_str()),
+        (refused.status, refused.code().as_str()),
         (StatusCode::FORBIDDEN, "forbidden"),
         "{}",
-        reply.text
+        refused.text
     );
     assert_eq!(w.h.kv.vault_reads(), reads);
 }
