@@ -230,9 +230,12 @@ impl Signup<'_> {
                 let primary = onboarded.waba_id.clone();
                 match self.connected(onboarded, "hosted_signup_completed").await {
                     Ok(completed) => Ok(single(completed, &request, &primary)),
+                    // Meta received the onboarding's requests (the token, the
+                    // subscription, the registration): a key must keep this
+                    // answer, never run them again (roadmap M5j3).
                     Err(error) => {
                         put_back().await;
-                        Err(error)
+                        Err(error.with_may_have_been_sent(true))
                     }
                 }
             }

@@ -23,6 +23,8 @@
 
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
+use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::signup::{
     Completed, Completion, Connected, HostedCompletion, Launch, Resumption, WabaResult, WabaStatus,
 };
@@ -34,6 +36,7 @@ use utoipa::ToSchema;
 use super::common::{ApiJson, PageParams, PageQuery, next_cursor, rfc3339};
 use crate::auth::{AdminCaller, Caller};
 use crate::error::{ApiError, ErrorBody};
+use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::model::SignupAttempt;
 use crate::state::Grant;
 
@@ -455,33 +458,14 @@ pub(crate) async fn complete_signup(
     Ok(Json(completed.into()))
 }
 
-/// `POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the
-/// service saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the
-/// operator names. The operator's explicit, audited decision (D202): the
-/// webhook names no tenant and its ids are no secret, so no tenant key
-/// claims.
-#[utoipa::path(
-    post,
-    path = "/v1/admin/signup/hosted",
-    tag = "admin",
-    security(("api_key" = [])),
-    request_body = CompleteHostedBody,
-    responses(
-        (status = 200, description = "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`", body = SignupResultView),
-        (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key; `tenant_suspended`", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)", body = ErrorBody),
-        (status = 409, description = "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed", body = ErrorBody),
-        (status = 502, description = "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)", body = ErrorBody),
-        (status = 503, description = "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)", body = ErrorBody),
-    )
-)]
-pub(crate) async fn complete_hosted_signup(
-    State(state): State<Grant>,
-    admin: AdminCaller,
-    ApiJson(body): ApiJson<CompleteHostedBody>,
-) -> Result<Json<SignupResultView>, ApiError> {
+/// The hosted claim as the operation a key keeps: the answer (never a
+/// token or the PIN), for a claim that connected or stopped after its
+/// token was stored.
+async fn claim_hosted(
+    state: &Grant,
+    admin: &AdminCaller,
+    body: CompleteHostedBody,
+) -> Result<Success, ApiError> {
     let CompleteHostedBody {
         tenant_id,
         waba_id,
@@ -490,7 +474,7 @@ pub(crate) async fn complete_hosted_signup(
     } = body;
     let completed = Box::pin(state.signups().complete_hosted(
         state.authz(),
-        &admin,
+        admin,
         HostedCompletion {
             tenant_id,
             waba_id,
@@ -500,7 +484,51 @@ pub(crate) async fn complete_hosted_signup(
         state.metrics(),
     ))
     .await?;
-    Ok(Json(completed.into()))
+    Success::json(StatusCode::OK, &SignupResultView::from(completed))
+}
+
+/// `POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the
+/// service saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the
+/// operator names. The operator's explicit, audited decision (D202): the
+/// webhook names no tenant and its ids are no secret, so no tenant key
+/// claims. It takes an `Idempotency-Key`, scoped to the admin key
+/// (roadmap M5j3): a retry after a `504` gets the first answer and does
+/// not run the onboarding again, and the PIN is never part of what the key
+/// keeps.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/signup/hosted",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never claim twice. The PIN's value is not part of what the key compares, and the answer is kept without any token"),
+    ),
+    request_body = CompleteHostedBody,
+    responses(
+        (status = 200, description = "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`", body = SignupResultView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key; `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)", body = ErrorBody),
+        (status = 409, description = "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`); `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`, `Idempotency-Key`), before the arrival is claimed; `idempotency_key_reused`", body = ErrorBody),
+        (status = 502, description = "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again; with a key, a failure Meta may have received is kept, so claim again under a new key)", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)", body = ErrorBody),
+        (status = 504, description = "`timeout`: repeat the request with the same `Idempotency-Key` for the first answer", body = ErrorBody),
+    )
+)]
+pub(crate) async fn complete_hosted_signup(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::complete_hosted_signup(&body);
+    let Ok(body) = serde_json::from_value::<CompleteHostedBody>(body) else {
+        return ApiError::invalid("body").into_response();
+    };
+    state
+        .idempotent_admin(&admin, key, fingerprint, claim_hosted(&state, &admin, body))
+        .await
 }
 
 /// `GET /v1/signup/attempts`: the calling tenant's attempts that stopped
