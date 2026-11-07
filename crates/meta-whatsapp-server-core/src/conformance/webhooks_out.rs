@@ -3290,6 +3290,28 @@ pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set
         [format!("{a}:evt-ps-a1")],
         "B's pending delivery went with B; A's stays"
     );
+    // A tenant deleted meanwhile is left out of a change, never added.
+    let with_gone = store
+        .update_endpoint(
+            &tenant(&x),
+            &endpoint.id,
+            &change(
+                Some(vec![a.as_str(), c.as_str()]),
+                "https://ok.example.net/hook",
+                Some(vec![cursor(&a, 0), cursor(&gone, 0)]),
+            ),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let names: Vec<String> = with_gone
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| t.tenant.to_string())
+        .collect();
+    assert_eq!(names, [a.clone()], "{gone} does not exist");
     // And the endpoint without a set takes its own change.
     let own_changed = store
         .update_endpoint(
