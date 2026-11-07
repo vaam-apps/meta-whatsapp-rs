@@ -3161,6 +3161,23 @@ pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set
     named.tenants = Some(vec![cursor(&a, 10), cursor(&b, 20)]);
     let endpoint = created(store.as_ref(), &named).await;
     let own = created(store.as_ref(), &new_endpoint(&x, 0)).await;
+    // The walk of M2i lists it with its named tenants, as any read does.
+    let mut after = None;
+    let mut seen = None;
+    loop {
+        let listed = store
+            .all_endpoints(&PageRequest { after, limit: 100 })
+            .await
+            .unwrap();
+        if let Some(found) = listed.items.into_iter().find(|e| e.id == endpoint.id) {
+            seen = Some(found);
+        }
+        match listed.next_after {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(seen.expect("listed").tenants, endpoint.tenants);
     let at = START;
     // A fan-out names a tenant of the endpoint and that tenant's cursor.
     assert!(
@@ -3355,6 +3372,7 @@ pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set
         .unwrap()
         .expect("no set expected, none held");
     assert_eq!(own_changed.url, "https://ok.example.net/own");
+}
 
 // ─── Re-sealing the secrets (roadmap M2i) ────────────────────────────────
 
