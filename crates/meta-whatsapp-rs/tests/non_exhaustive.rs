@@ -1,4 +1,4 @@
-//! The `#[non_exhaustive]` rule (roadmap L20b, OPEN_QUESTIONS #28,
+//! The `#[non_exhaustive]` rule (roadmap L20b, `OPEN_QUESTIONS` #28,
 //! `docs/architecture.md` § The `#[non_exhaustive]` rule): Meta adds fields
 //! and values, so naming one must not break an integrator.
 //!
@@ -74,15 +74,51 @@ const EXEMPT_TYPES: &[(&str, &str, &str)] = &[
         "CallingSettings",
         "read by `get` and built, with `Default`, to update; so are the parts below",
     ),
-    ("calling/settings.rs", "CallIcons", "part of CallingSettings"),
-    ("calling/settings.rs", "CallHours", "part of CallingSettings"),
-    ("calling/settings.rs", "WeeklyHours", "part of CallingSettings"),
-    ("calling/settings.rs", "HolidayHours", "part of CallingSettings"),
-    ("calling/settings.rs", "SipSettings", "part of CallingSettings"),
-    ("calling/settings.rs", "SipServer", "part of CallingSettings"),
-    ("calling/settings.rs", "AudioSettings", "part of CallingSettings"),
-    ("calling/settings.rs", "Voicemail", "part of CallingSettings"),
-    ("calling/settings.rs", "VoicemailAudio", "part of CallingSettings"),
+    (
+        "calling/settings.rs",
+        "CallIcons",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "CallHours",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "WeeklyHours",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "HolidayHours",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "SipSettings",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "SipServer",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "AudioSettings",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "Voicemail",
+        "part of CallingSettings",
+    ),
+    (
+        "calling/settings.rs",
+        "VoicemailAudio",
+        "part of CallingSettings",
+    ),
     (
         "calling/settings.rs",
         "VoicemailAudioConfig",
@@ -108,9 +144,21 @@ const EXEMPT_TYPES: &[(&str, &str, &str)] = &[
         "LibraryTemplateRequest",
         "request of a library template create",
     ),
-    ("templates/info.rs", "LibraryButtonInput", "part of the request above"),
-    ("templates/info.rs", "LibraryUrlInput", "part of the request above"),
-    ("templates/info.rs", "LibraryBodyInputs", "part of the request above"),
+    (
+        "templates/info.rs",
+        "LibraryButtonInput",
+        "part of the request above",
+    ),
+    (
+        "templates/info.rs",
+        "LibraryUrlInput",
+        "part of the request above",
+    ),
+    (
+        "templates/info.rs",
+        "LibraryBodyInputs",
+        "part of the request above",
+    ),
     (
         "templates/info.rs",
         "MigrationOptions",
@@ -136,7 +184,11 @@ const EXEMPT_TYPES: &[(&str, &str, &str)] = &[
         "AutofillMessage",
         "part of WelcomeMessage",
     ),
-    ("marketing/welcome.rs", "IceBreaker", "part of WelcomeMessage"),
+    (
+        "marketing/welcome.rs",
+        "IceBreaker",
+        "part of WelcomeMessage",
+    ),
 ];
 
 /// A top-level type of one file.
@@ -231,9 +283,7 @@ fn items(krate: &str) -> Vec<Item> {
 
 impl Item {
     fn has_attribute(&self) -> bool {
-        self.attrs
-            .lines()
-            .any(|l| l.trim() == "#[non_exhaustive]")
+        self.attrs.lines().any(|l| l.trim() == "#[non_exhaustive]")
     }
 
     fn derives_deserialize(&self) -> bool {
@@ -244,8 +294,9 @@ impl Item {
 
     fn has_pub_field(&self) -> bool {
         self.body.iter().any(|l| {
-            l.strip_prefix("    pub ")
-                .is_some_and(|r| r.split(':').next().is_some_and(|n| !n.contains(' ')) && r.contains(':'))
+            l.strip_prefix("    pub ").is_some_and(|r| {
+                r.split(':').next().is_some_and(|n| !n.contains(' ')) && r.contains(':')
+            })
         })
     }
 
@@ -283,7 +334,9 @@ impl Item {
 
 fn exempt(file: &str, name: &str) -> bool {
     EXEMPT_FILES.iter().any(|(p, _)| file.starts_with(p))
-        || EXEMPT_TYPES.iter().any(|(f, n, _)| *f == file && *n == name)
+        || EXEMPT_TYPES
+            .iter()
+            .any(|(f, n, _)| *f == file && *n == name)
 }
 
 /// The decisive test: every response or webhook struct and every open enum
@@ -293,7 +346,10 @@ fn exempt(file: &str, name: &str) -> bool {
 fn every_response_webhook_struct_and_open_enum_is_non_exhaustive() {
     let mut missing = Vec::new();
     let mut checked = 0;
-    for (krate, client) in [("meta-whatsapp-client", true), ("meta-whatsapp-webhooks", false)] {
+    for (krate, client) in [
+        ("meta-whatsapp-client", true),
+        ("meta-whatsapp-webhooks", false),
+    ] {
         for item in items(krate) {
             if item.is_response_like(client) {
                 checked += 1;
@@ -303,7 +359,10 @@ fn every_response_webhook_struct_and_open_enum_is_non_exhaustive() {
             }
         }
     }
-    assert!(checked > 250, "the scan met only {checked} types: it is blind");
+    assert!(
+        checked > 250,
+        "the scan met only {checked} types: it is blind"
+    );
     assert!(
         missing.is_empty(),
         "these types need `#[non_exhaustive]` (docs/architecture.md § The \
@@ -327,9 +386,9 @@ fn the_exemptions_are_live() {
     }
     for (prefix, reason) in EXEMPT_FILES {
         assert!(!reason.is_empty());
-        let hit = all.iter().any(|i| {
-            i.file.starts_with(prefix) && i.derives_deserialize() && i.has_pub_field()
-        });
+        let hit = all
+            .iter()
+            .any(|i| i.file.starts_with(prefix) && i.derives_deserialize() && i.has_pub_field());
         if !hit {
             dead.push((*prefix).to_owned());
         }
@@ -353,5 +412,8 @@ fn the_open_enum_macro_adds_the_attribute() {
     let at = macro_src
         .find("#[derive(Debug, Clone, PartialEq, Eq, Hash)]\n        #[non_exhaustive]\n        $vis enum $name")
         .is_some();
-    assert!(at, "open_enum! no longer puts #[non_exhaustive] on its enums");
+    assert!(
+        at,
+        "open_enum! no longer puts #[non_exhaustive] on its enums"
+    );
 }

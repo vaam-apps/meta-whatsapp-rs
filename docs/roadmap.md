@@ -4192,7 +4192,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
        naming a value Meta adds is not a breaking change; this settles
        L20b's rule for open enums ahead of it (below). Swappable: one
        attribute in the macro.
-- [ ] **L20b. The `#[non_exhaustive]` rule** (`meta-whatsapp-client`,
+- [x] **L20b. The `#[non_exhaustive]` rule** (`meta-whatsapp-client`,
   `meta-whatsapp-webhooks`, docs/architecture.md; OPEN_QUESTIONS #28): on
   every response struct, webhook payload struct and open enum, never on
   request or builder types; written into architecture.md.
@@ -4205,6 +4205,19 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     from `open_enum!`, which adds it (decided 2026-11-01, L20a's
     Landed note); L20b's scan only has to keep it there, and its work is
     the structs.
+  - **Landed:** the attribute is on 217 structs (every `Deserialize`
+    struct with public fields of the two crates, except the request types
+    below) and on `MessageProductType`. The rule is in
+    `docs/architecture.md`; the decisive test is
+    `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`
+    (`every_response_webhook_struct_and_open_enum_is_non_exhaustive`, with
+    `the_exemptions_are_live` so no exemption rots). Left open, sent and
+    received, each with its reason in the test: Flow JSON, template
+    definitions and send parameters, payment and checkout message
+    parameters, the calling settings, the welcome message, the
+    endpoints' answers. Callers and the service's tests now read values
+    from JSON, and the service's exhaustive destructures of library
+    answers end in `..`.
 - [x] **L20c. Ids checked against their documented shape**
   (`meta-whatsapp-core` ids and `client::GraphRequest`; OPEN_QUESTIONS
   #20): digits for numeric ids; whole-segment percent-encoding kept for

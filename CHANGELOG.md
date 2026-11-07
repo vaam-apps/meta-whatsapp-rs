@@ -12,6 +12,23 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Changed (breaking, roadmap L20b)
+
+- **`#[non_exhaustive]` on every response struct, webhook payload
+  struct and open enum** (roadmap L20b; OPEN_QUESTIONS #28, decided
+  2026-09-26): 217 structs in `meta-whatsapp-client` and
+  `meta-whatsapp-webhooks` and `MessageProductType` gained it, the
+  macro's enums already had it. Outside those crates a struct literal of
+  one of them no longer compiles, nor does an exhaustive destructure
+  (add `..`); build test values from JSON (`serde_json::from_value`) or
+  from `Default` and field assignment. Request types (Flow JSON, template
+  definitions and sends, payment and checkout message parameters, the
+  calling settings, the endpoints' answers) stay open; the exceptions
+  are listed with their reasons in
+  `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`, a source scan that
+  fails on a response or webhook struct, or an open enum, without the
+  attribute. The rule is in `docs/architecture.md`.
+
 ### Added (roadmap M5f3)
 
 - **The group records go with the binding** (roadmap M5f3; D380-D382): a per-number index beside `wa.server.group`

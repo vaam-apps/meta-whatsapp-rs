@@ -767,8 +767,8 @@ fn marketing_link_clicks_are_user_actions() {
 #[test]
 fn a_payment_status_carries_its_payment() {
     use meta_whatsapp_webhooks::fields::{
-        PaymentGatewayType, PaymentMethodType, PaymentTransactionStatus, RefundSpeed,
-        RefundStatus, StatusType,
+        PaymentGatewayType, PaymentMethodType, PaymentTransactionStatus, RefundSpeed, RefundStatus,
+        StatusType,
     };
 
     let name =

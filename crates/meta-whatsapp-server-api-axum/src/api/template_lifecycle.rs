@@ -869,7 +869,7 @@ pub(crate) async fn migrate_templates(
 
 #[cfg(test)]
 mod tests {
-        use meta_whatsapp_rs::core::ids::TemplateId;
+    use meta_whatsapp_rs::core::ids::TemplateId;
     use serde_json::json;
 
     use super::*;
@@ -931,7 +931,8 @@ mod tests {
                     "unarchived_templates": ["1473688840035974"],
                     "failed_templates": failed,
                 }))
-                .unwrap()))
+                .unwrap()
+            ))
             .unwrap(),
             json!({"unarchived_templates": ["1473688840035974"],
                    "failed_templates": {"1019496902803242": "Incorrect category"}})

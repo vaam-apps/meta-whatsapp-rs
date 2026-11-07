@@ -145,7 +145,6 @@ impl From<QrCode> for Code {
             prefilled_message,
             deep_link_url,
             qr_image_url,
-            creation_time: _,
             ..
         } = code;
         Self {
