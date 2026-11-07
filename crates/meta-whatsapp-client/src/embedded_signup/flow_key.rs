@@ -136,13 +136,14 @@ impl TokenVault {
         let text = std::str::from_utf8(pem.expose_secret())
             .map_err(|_| CryptoError::Malformed("decrypted Flow key record"))?;
         let parsed = FlowEndpointKey::from_pem(text)?;
-        if self.rotates_on_read() && !self.is_current(&blob) {
-            if let Err(error) = self.reseal_flow_key(&key, &plain, v.version).await {
-                tracing::warn!(
-                    kind = ?error.kind(),
-                    "Flow key: re-sealing under the active key failed; retried on next read"
-                );
-            }
+        if self.rotates_on_read()
+            && !self.is_current(&blob)
+            && let Err(error) = self.reseal_flow_key(&key, &plain, v.version).await
+        {
+            tracing::warn!(
+                kind = ?error.kind(),
+                "Flow key: re-sealing under the active key failed; retried on next read"
+            );
         }
         Ok(Some(parsed))
     }

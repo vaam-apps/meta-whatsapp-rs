@@ -345,15 +345,13 @@ fn flows_deployment(
     key: Option<FlowEndpointKey>,
     app_secrets: &[AppSecret],
     fallback: bool,
-) -> Option<FlowsDeployment> {
+) -> FlowsDeployment {
     let keys: Arc<dyn FlowKeys> = match key {
         Some(key) => Arc::new(DeploymentKey::new(key)),
         None => Arc::new(NoDeploymentKey),
     };
-    Some(
-        FlowsDeployment::new(app_secrets.to_vec(), keys, Arc::new(NoHandler))
-            .deployment_key_fallback(fallback),
-    )
+    FlowsDeployment::new(app_secrets.to_vec(), keys, Arc::new(NoHandler))
+        .deployment_key_fallback(fallback)
 }
 
 /// Erasure's settings (roadmap M2f): the configured key, its journal the
@@ -474,6 +472,7 @@ async fn prepare(config: &Config, backend: &dyn Backend) -> anyhow::Result<()> {
 /// [`serve_until`] once the configuration's warnings are out, stopping on
 /// the future `signal` makes: made before the listeners are bound, so
 /// that [`shutdown_signal`]'s handlers are in place once they answer.
+#[allow(clippy::too_many_lines)] // the start-up's steps, in order
 async fn run<S: Future<Output = ()>>(
     config: Config,
     backend: Arc<dyn Backend>,
@@ -519,11 +518,11 @@ async fn run<S: Future<Output = ()>>(
         &signup_options,
     );
     settings.webhooks_out = webhooks_out(webhooks)?;
-    settings.flows = flows_deployment(
+    settings.flows = Some(flows_deployment(
         flows_private_key,
         &app_secrets,
         settings.flows_deployment_key_fallback,
-    );
+    ));
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.

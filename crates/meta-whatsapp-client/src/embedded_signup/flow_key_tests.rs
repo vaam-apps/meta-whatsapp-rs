@@ -140,7 +140,7 @@ async fn a_key_that_cannot_decrypt_a_flow_request_is_refused_before_a_write() {
     }
     let not_text = SecretBytes::new(vec![0xff, 0xfe]);
     assert!(vault.store_flow_key(&w, "t", &not_text).await.is_err());
-    for owner in ["".to_owned(), "x".repeat(MAX_FLOW_KEY_OWNER_CHARS + 1)] {
+    for owner in [String::new(), "x".repeat(MAX_FLOW_KEY_OWNER_CHARS + 1)] {
         assert!(vault.store_flow_key(&w, &owner, &pem(PKCS8)).await.is_err());
     }
     assert!(raw(&kv, &w).await.is_none());
