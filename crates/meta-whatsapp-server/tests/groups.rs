@@ -1313,3 +1313,155 @@ async fn the_groups_scope_is_its_own() {
     }
     assert!(h.graph.requests().is_empty());
 }
+
+// ─── Roadmap M5f3: the records go with the binding ───────────────────────
+
+/// The live keys of the groups' two namespaces: every key the service
+/// wrote, still held.
+async fn live_group_keys(h: &Harness) -> Vec<String> {
+    use meta_whatsapp_rs::core::store::KvStore;
+    let mut live = std::collections::BTreeSet::new();
+    for key in h.kv.written() {
+        if (key.namespace() == "wa.server.group" || key.namespace() == "wa.server.group.index")
+            && h.kv.get(&key).await.unwrap().is_some()
+        {
+            live.insert(format!("{}/{}", key.namespace(), key.key()));
+        }
+    }
+    live.into_iter().collect()
+}
+
+fn naming(live: &[String], pn: &str) -> usize {
+    live.iter()
+        .filter(|k| k.starts_with(&format!("wa.server.group/{pn}.")))
+        .count()
+}
+
+/// Decisive (roadmap M5f3): after a tenant's own disconnection of a WABA,
+/// after the operator's unbind and after a tenant's deletion, no key of
+/// the namespaces names the number, and another number's records (another
+/// tenant's, another WABA's) are untouched. The operator's route for one
+/// number purges it, bound or not, and is admin-only.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn a_numbers_group_records_go_with_its_binding_and_by_the_operators_request() {
+    let (h, key) = connected().await;
+    let numbers_key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let admin = h.admin_key().await;
+    // A second WABA of the first tenant, with a number of its own.
+    const THIRD_WABA: &str = "102290129340397";
+    const THIRD_PN: &str = "106540352242925";
+    h.connect(TENANT, THIRD_WABA, &[THIRD_PN], TOKEN).await;
+    hold(&h, PN, GROUP).await;
+    hold(&h, PN, OTHER_GROUP).await;
+    hold(&h, PN_2, GROUP).await;
+    hold(&h, OTHER_PN, GROUP).await;
+    let reply = h
+        .webhook(&event(CREATE_SUCCEED, THIRD_WABA, THIRD_PN, GROUP))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let live = live_group_keys(&h).await;
+    assert_eq!(naming(&live, PN), 2);
+    assert_eq!(naming(&live, THIRD_PN), 1);
+    assert!(live.iter().any(|k| k.starts_with("wa.server.group.index/")));
+    assert!(
+        live.iter()
+            .filter(|k| k.starts_with("wa.server.group.index/"))
+            .all(|k| !k.contains(PN) && !k.contains(OTHER_PN)),
+        "an index key names a number"
+    );
+
+    // The operator's route: admin only, and only a number's id.
+    let route = |pn: &str| format!("/v1/admin/numbers/{pn}/group-records");
+    for who in [&key, &numbers_key] {
+        let refused = h.call(Call::new(Method::DELETE, route(PN)).key(who)).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    }
+    assert_eq!(
+        h.call(Call::new(Method::DELETE, route(PN))).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let odd = h
+        .call(Call::new(Method::DELETE, route("not-a-number")).key(&admin))
+        .await;
+    assert_eq!(
+        (odd.status, odd.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found")
+    );
+    assert_eq!(
+        naming(&live_group_keys(&h).await, PN),
+        2,
+        "refused calls purge nothing"
+    );
+
+    // 1. The operator's request for the first WABA's second number.
+    let purged = h
+        .call(Call::new(Method::DELETE, route(PN_2)).key(&admin))
+        .await;
+    assert_eq!(purged.status, StatusCode::OK, "{}", purged.text);
+    assert_eq!(purged.json(), json!({"deleted": 1}));
+    let live = live_group_keys(&h).await;
+    assert_eq!(naming(&live, PN_2), 0);
+    assert_eq!(naming(&live, PN), 2, "another number of the same WABA");
+    // The group is not the number's any longer: 404 with the vault unread.
+    let reads = h.kv.vault_reads();
+    let gone = h
+        .call(Call::get(format!("/v1/numbers/{PN_2}/groups/{GROUP}")).key(&key))
+        .await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+    assert_eq!(h.kv.vault_reads(), reads);
+    let again = h
+        .call(Call::new(Method::DELETE, route(PN_2)).key(&admin))
+        .await;
+    assert_eq!(again.json(), json!({"deleted": 0}));
+
+    // 2. The tenant disconnects the third WABA.
+    h.graph.push_json(200, json!({"success": true}));
+    let done = h
+        .call(Call::new(Method::DELETE, format!("/v1/wabas/{THIRD_WABA}")).key(&numbers_key))
+        .await;
+    assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
+    let live = live_group_keys(&h).await;
+    assert_eq!(
+        naming(&live, THIRD_PN),
+        0,
+        "after the tenant's disconnection"
+    );
+    assert_eq!(naming(&live, PN), 2);
+    assert_eq!(naming(&live, OTHER_PN), 1);
+
+    // 3. The operator unbinds the other tenant's WABA.
+    h.graph.push_json(200, json!({"success": true}));
+    let done = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/admin/wabas/{OTHER_WABA}/binding"),
+            )
+            .key(&admin),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
+    let live = live_group_keys(&h).await;
+    assert_eq!(naming(&live, OTHER_PN), 0, "after the operator's unbind");
+    assert_eq!(
+        naming(&live, PN),
+        2,
+        "the first tenant's number is untouched"
+    );
+
+    // 4. The first tenant is deleted.
+    h.graph.push_json(200, json!({"success": true}));
+    let done = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/tenants/{TENANT}")).key(&admin))
+        .await;
+    assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
+    let live = live_group_keys(&h).await;
+    assert_eq!(naming(&live, PN), 0, "after the tenant's deletion");
+    assert_eq!(
+        live,
+        Vec::<String>::new(),
+        "a key of the namespaces is left"
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
