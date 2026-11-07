@@ -445,6 +445,7 @@ fn idempotent_operations_declare_their_key() {
         declaring.into_iter().collect::<Vec<_>>(),
         [
             "POST /v1/admin/partners/business-verifications",
+            "POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding",
             "POST /v1/admin/partners/solutions",
             "POST /v1/admin/pre-verified-numbers",
             "POST /v1/admin/pre-verified-numbers/{id}/code",
