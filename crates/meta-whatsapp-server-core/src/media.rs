@@ -1182,13 +1182,15 @@ mod tests {
     /// type: a header must not carry Meta's control characters.
     #[test]
     fn the_content_type_is_metas_when_it_is_plain() {
-        let info = |mime_type: &str| MediaInfo {
-            messaging_product: "whatsapp".to_owned(),
-            url: String::new(),
-            mime_type: mime_type.to_owned(),
-            sha256: String::new(),
-            file_size: None,
-            id: MediaId::new("1").unwrap(),
+        let info = |mime_type: &str| -> MediaInfo {
+            serde_json::from_value(serde_json::json!({
+                "messaging_product": "whatsapp",
+                "url": "",
+                "mime_type": mime_type,
+                "sha256": "",
+                "id": "1",
+            }))
+            .unwrap()
         };
         assert_eq!(content_type(&info("image/jpeg")), "image/jpeg");
         assert_eq!(

@@ -215,6 +215,7 @@ pub struct ListBlockedUsers {
 
 /// Answer of [`BlockUsers::block`] (`BlockUsersData`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct BlockUsersResponse {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -229,6 +230,7 @@ pub struct BlockUsersResponse {
 
 /// `block_users` object of a block answer.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct BlockUsersResult {
     /// Users now blocked.
     #[serde(default)]
@@ -241,6 +243,7 @@ pub struct BlockUsersResult {
 /// Answer of [`BlockUsers::unblock`] (`UnblockUsersData`). Meta reuses the
 /// `block_users` key for unblock results.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct UnblockUsersResponse {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -255,6 +258,7 @@ pub struct UnblockUsersResponse {
 
 /// `block_users` object of an unblock answer.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct UnblockUsersResult {
     /// Users no longer blocked.
     #[serde(default)]
@@ -266,6 +270,7 @@ pub struct UnblockUsersResult {
 
 /// A user the operation succeeded for (`BlockedUserOperation`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct UserOutcome {
     /// What you sent: the phone number, or the BSUID if you sent only that.
     #[serde(default)]
@@ -280,6 +285,7 @@ pub struct UserOutcome {
 
 /// A user the operation failed for.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct FailedUser {
     /// What you sent.
     #[serde(default)]
@@ -298,6 +304,7 @@ pub struct FailedUser {
 
 /// An entry of the block list (`BlockedUser`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct BlockedUser {
     /// Always `whatsapp`.
     #[serde(default)]

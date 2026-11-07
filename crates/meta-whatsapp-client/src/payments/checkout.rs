@@ -135,6 +135,7 @@ open_enum! {
 /// `Debug` shows the buyer's phone number and addresses: personal data,
 /// not credentials (log it as such).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CheckoutRequest {
     /// The exchange's version, `1.0` in the page's examples; the answer
     /// echoes it.
@@ -153,6 +154,7 @@ pub struct CheckoutRequest {
 
 /// `data` of a checkout endpoint request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CheckoutRequestData {
     /// The order as the buyer sees it, without its payment settings, with
     /// the coupon applied so far.
@@ -163,6 +165,7 @@ pub struct CheckoutRequestData {
 
 /// `data.input` of a checkout endpoint request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CheckoutInput {
     /// The buyer's phone number, as the page calls it ("passes the user
     /// phone number"), digits with the country code (`919000090000`).
@@ -178,6 +181,7 @@ pub struct CheckoutInput {
 /// `input.coupon`: the code the buyer picked or typed, not yet checked by
 /// anyone (check it is yours, valid for this order and buyer).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SelectedCoupon {
     /// The code (`WELCOME70`).
     pub code: String,

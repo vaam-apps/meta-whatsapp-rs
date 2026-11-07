@@ -197,6 +197,7 @@ impl EndpointStatus {
 
 /// The body WhatsApp posts to a Flow data endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EncryptedFlowRequest {
     /// Base64 AES-128-GCM ciphertext of the payload, 16-byte tag appended.
     pub encrypted_flow_data: String,
@@ -236,6 +237,7 @@ open_enum! {
 /// rest of `data` is the user's form input and is shown as is. `Serialize`
 /// is not redacted.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowRequest {
     /// Data API version, `3.0` today.
     pub version: String,

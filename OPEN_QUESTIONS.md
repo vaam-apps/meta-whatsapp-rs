@@ -515,6 +515,12 @@ L20a and is deleted (CHANGELOG, "Open questions closed").
     matches of those types stop compiling), made before the first
     release. Swappable per kind. Roadmap L20b.
 
+    **Landed with roadmap L20b:** the rule is in `docs/architecture.md`
+    (§ The `#[non_exhaustive]` rule) and enforced by
+    `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`. The entry stays
+    until the CHANGELOG lists it under "Open questions decided" and
+    nothing cites it.
+
 29. **axum and sqlx: re-exports or your own pins?** Both are re-exported
     (`meta_whatsapp_rs::webhooks::axum`, `meta_whatsapp_rs::adapters::store::postgres::sqlx`)
     and their rustdoc says to use the re-export; the README and examples

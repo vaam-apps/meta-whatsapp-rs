@@ -382,6 +382,7 @@ struct UpsertBody<'a> {
 
 /// One template created or updated by an upsert.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UpsertedTemplate {
     /// Template id.
     pub id: TemplateId,
@@ -407,6 +408,7 @@ pub struct PreviewQuery {
 
 /// One language's preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplatePreview {
     /// Language code.
     pub language: String,
@@ -422,6 +424,7 @@ pub struct TemplatePreview {
 
 /// Button labels of a preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PreviewButton {
     /// Copy-code label.
     #[serde(default, skip_serializing_if = "Option::is_none")]

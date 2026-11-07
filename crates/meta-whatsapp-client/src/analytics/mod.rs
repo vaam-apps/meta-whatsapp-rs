@@ -678,6 +678,7 @@ open_enum! {
 
 /// `product_types` filter of messaging analytics. Sent as its numeric code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MessageProductType {
     /// `0`: template messages sent to users.
     Template,
@@ -1241,6 +1242,7 @@ impl GroupAnalyticsQuery {
 
 /// `analytics` object of messaging analytics.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct MessagingAnalytics {
     /// Phone numbers included.
     #[serde(default)]
@@ -1258,6 +1260,7 @@ pub struct MessagingAnalytics {
 
 /// A messaging analytics data point.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct MessagingDataPoint {
     /// Interval start.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
@@ -1275,6 +1278,7 @@ pub struct MessagingDataPoint {
 
 /// `{"data_points": [...]}`, the element of a `data` array.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct DataPointSet<T> {
     /// Data points.
     #[serde(default = "Vec::new")]
@@ -1283,6 +1287,7 @@ pub struct DataPointSet<T> {
 
 /// `conversation_analytics` object.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct ConversationAnalytics {
     /// Data point sets (one in every documented example).
     #[serde(default)]
@@ -1299,6 +1304,7 @@ impl ConversationAnalytics {
 /// A conversation analytics data point. Breakdown fields are present only
 /// for the requested `dimensions`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct ConversationDataPoint {
     /// Interval start.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
@@ -1331,6 +1337,7 @@ pub struct ConversationDataPoint {
 
 /// `pricing_analytics` object.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct PricingAnalytics {
     /// Data point sets.
     #[serde(default)]
@@ -1346,6 +1353,7 @@ impl PricingAnalytics {
 
 /// A pricing analytics data point.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct PricingDataPoint {
     /// Interval start.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
@@ -1379,6 +1387,7 @@ pub struct PricingDataPoint {
 
 /// `call_analytics` object.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct CallAnalytics {
     /// Granularity of the data points.
     #[serde(default)]
@@ -1393,6 +1402,7 @@ pub struct CallAnalytics {
 
 /// A call analytics data point.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct CallDataPoint {
     /// Interval start.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
@@ -1422,6 +1432,7 @@ pub struct CallDataPoint {
 
 /// An element of the template analytics `data` array.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateAnalytics {
     /// `DAILY`.
     #[serde(default)]
@@ -1440,6 +1451,7 @@ pub struct TemplateAnalytics {
 
 /// A template analytics data point.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateDataPoint {
     /// The template.
     pub template_id: TemplateId,
@@ -1470,6 +1482,7 @@ pub struct TemplateDataPoint {
 
 /// A click metric.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ClickMetric {
     /// Kind of click.
     #[serde(rename = "type")]
@@ -1484,6 +1497,7 @@ pub struct ClickMetric {
 
 /// A cost metric.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct CostMetric {
     /// Kind of cost.
     #[serde(rename = "type")]
@@ -1495,6 +1509,7 @@ pub struct CostMetric {
 
 /// An element of the template group analytics `data` array.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateGroupAnalytics {
     /// `DAILY`.
     #[serde(default)]
@@ -1512,6 +1527,7 @@ pub struct TemplateGroupAnalytics {
 
 /// A template group analytics data point.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateGroupDataPoint {
     /// The template group.
     pub template_group_id: TemplateGroupId,
@@ -1538,6 +1554,7 @@ pub struct TemplateGroupDataPoint {
 
 /// An element of the group analytics `data` array.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupAnalytics {
     /// `DAILY`.
     #[serde(default)]
@@ -1549,6 +1566,7 @@ pub struct GroupAnalytics {
 
 /// A group analytics data point.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupDataPoint {
     /// The group.
     pub group_id: GroupId,

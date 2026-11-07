@@ -76,6 +76,7 @@ open_enum! {
 /// An error Meta found in a Flow's JSON. Every one of them must be fixed
 /// before the Flow can be published.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowValidationError {
     /// Machine-readable error, e.g. `INVALID_PROPERTY_VALUE`.
     #[serde(default)]
@@ -105,6 +106,7 @@ pub struct FlowValidationError {
 
 /// One location a [`FlowValidationError`] points at.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowValidationPointer {
     /// First line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +232,7 @@ impl CreateFlow {
 
 /// Response of `POST /{WABA_ID}/flows`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct CreatedFlow {
     /// Id of the new Flow.
     pub id: FlowId,
@@ -392,6 +395,7 @@ pub(crate) fn validate_flow_json_len(field: &str, len: usize) -> Result<(), Vali
 /// defaults; the rest are only present when requested through `fields`
 /// ([`super::Flow::get`] requests all of them except `preview`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowDetails {
     /// Flow id.
     pub id: FlowId,
@@ -432,6 +436,7 @@ pub struct FlowDetails {
 ///
 /// `Debug` never shows the link's viewing token: see [`SecretUrl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowPreview {
     /// Preview page
     /// (`https://business.facebook.com/wa/manage/flows/<id>/preview/?token=…`);
@@ -462,6 +467,7 @@ impl FlowPreview {
 
 /// An asset attached to a Flow (`GET /{FLOW_ID}/assets`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowAsset {
     /// Asset name, `flow.json` for the Flow JSON.
     pub name: String,
@@ -480,6 +486,7 @@ pub struct FlowAsset {
 
 /// Response of a Flow JSON upload (`POST /{FLOW_ID}/assets`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct FlowJsonUpload {
     /// Whether the asset was stored. It is stored even when it has
     /// validation errors.

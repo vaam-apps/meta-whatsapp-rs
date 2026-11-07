@@ -94,6 +94,7 @@ impl MaxPriceAgreementSigner {
 /// The agreement's state, as `POST` and `GET /{BUSINESS_ID}/max_price_agreements`
 /// answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MaxPriceAgreement {
     /// `none`, `pending` or `accepted`.
     pub status: AgreementStatus,

@@ -21,6 +21,7 @@ use super::types::{
 /// `fields=…` (plus `id`), so everything else is optional rather than
 /// defaulted — an absent status is not an empty one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateInfo {
     /// Template id.
     pub id: TemplateId,
@@ -139,6 +140,7 @@ where
 
 /// `quality_score` (`templates/template-quality`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct QualityScore {
     /// Rating (optional in the reference schema, present in every example).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,6 +164,7 @@ pub use crate::common::{HealthEntity, HealthEntityType, HealthError, HealthState
 
 /// Response of a template creation (`CreateTemplateResponse`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateCreated {
     /// New template id.
     pub id: TemplateId,
@@ -264,6 +267,7 @@ pub struct LibraryQuery {
 
 /// A Template Library entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LibraryTemplate {
     /// Library template id.
     pub id: String,
@@ -463,6 +467,7 @@ pub struct MigrationOptions {
 
 /// Result of a migration batch.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MigrationResult {
     /// Ids of templates recreated in the destination.
     #[serde(default)]
@@ -487,6 +492,7 @@ open_enum! {
 
 /// One metric of `GET /{template_id}/compare` (`templates/template-comparison`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ComparisonMetric {
     /// The metric.
     pub metric: ComparisonMetricKind,
@@ -507,6 +513,7 @@ pub struct ComparisonMetric {
 
 /// `{key: template id, value}` of a comparison metric.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ComparisonValue<T> {
     /// Template id.
     pub key: TemplateId,

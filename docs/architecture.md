@@ -392,9 +392,8 @@ Rules for every endpoint module:
    its JSON text. `crates/meta-whatsapp-rs/tests/open_enums.rs` checks
    every one and scans the source for any other shape; a structured
    catch-all (`Unknown { raw }`, the templates' `Other(Value)`) is not a
-   string enum and stays as it is. The `#[non_exhaustive]` policy was
-   decided on 2026-09-26 (#28) and lands with roadmap L20b; the macro's
-   enums already carry it.
+   string enum and stays as it is. The `#[non_exhaustive]` rule has its
+   own section below.
 3. **Validate locally what Meta documents as a hard limit** (lengths,
    counts, formats) and return `ValidationError` naming the field. Do not
    invent limits the docs do not state.
@@ -477,6 +476,44 @@ Rules for every endpoint module:
    integrators for no gain): `PhoneNumbersQuery`, `WabaListQuery`,
    `TemplateListQuery`, `LibraryQuery`, `TemplateAnalyticsQuery`,
    `TemplateGroupAnalyticsQuery`, `GroupAnalyticsQuery`.
+
+### The `#[non_exhaustive]` rule
+
+Decided 2026-09-26 (OPEN_QUESTIONS #28), landed with roadmap L20b. Meta
+adds fields and values without notice, and naming one must not be a
+breaking change, so:
+
+- **Carry it**: every response struct of `meta-whatsapp-client`
+  (a `Deserialize` struct with public fields that Meta sends), every
+  payload struct of `meta-whatsapp-webhooks`, and every open enum
+  (`open_enum!` adds it; a hand-written enum with a catch-all, such as
+  `MessageProductType`, writes it).
+- **Never carry it**: a request type, one the caller builds and the
+  library only sends (a `Serialize` struct with a `new` or a builder, a
+  params struct, the Flow JSON document, a template definition, a
+  message to send). Struct literals of those stay possible and are the
+  documented way to build them. The exception is a request type that
+  already carried the attribute before L20b and is built through its
+  `new`, its `Default` or a builder (the Embedded Signup `Setup` and
+  prefills, `NewSignup`, `NewWaba`, query types such as
+  `PhoneNumbersQuery` and `ListFlows`): it keeps it, since callers do not
+  need a literal, and removing it later is not a breaking change. A new
+  request type follows the rule.
+- **Sent and received**: a type that is both (template components, the
+  calling settings, the welcome message's parts) is decided case by
+  case, and stays open when callers must build it to send it; each is
+  listed with its reason in the allowlist of
+  `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`, which scans the
+  source and fails on a response or webhook struct, or an open enum,
+  without the attribute.
+- **Building a value in a test** (outside the defining crate a struct
+  literal, even with `..Default::default()`, does not compile): read it
+  from a JSON fixture or `serde_json::from_value(json!({..}))`, as
+  the library does for Meta's answer, or take the type's `Default` (when
+  it derives it) and assign the fields. Destructuring needs a trailing
+  `..`. A `match` over an open enum needs a wildcard arm.
+- Inside the defining crate nothing changes: literals and exhaustive
+  destructures compile.
 
 ### Retries
 

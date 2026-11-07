@@ -55,8 +55,8 @@ impl From<TemplateGroup> for TemplateGroupDetails {
             description,
             creation_time,
             update_time,
-            whatsapp_business_account: _,
             whatsapp_business_templates,
+            ..
         } = group;
         Self {
             id,
