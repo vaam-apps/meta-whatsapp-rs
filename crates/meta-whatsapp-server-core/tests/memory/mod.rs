@@ -31,8 +31,8 @@ use meta_whatsapp_server_core::model::{
 };
 use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
-    RouteGuard, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, HeaderPage, HeaderQuery, NewEvent, Outbox,
+    RECEIVED_MEDIA_ROWS, ReceivedMedia, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult, listing,
@@ -722,6 +722,13 @@ impl Outbox for Events {
             },
         });
         Ok(Some(sequence))
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        let page = self
+            .page(&query.as_event_query(meta_whatsapp_server_core::events::MAX_PAGE_DATA_BYTES))
+            .await?;
+        Ok(HeaderPage::from_page(page))
     }
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
