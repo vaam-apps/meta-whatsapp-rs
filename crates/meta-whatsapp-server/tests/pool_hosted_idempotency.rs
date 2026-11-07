@@ -203,10 +203,15 @@ async fn the_pool_routes_do_not_share_a_fingerprint_and_a_refusal_releases_the_k
         400,
         json!({"error": {"message": "x", "type": "OAuthException", "code": 100, "fbtrace_id": "T"}}),
     );
-    let refused = h
+    let meta_refused = h
         .call(keyed(&route, &admin, "code-fix", &code_body("SMS")))
         .await;
-    assert_eq!(refused.code(), "invalid_parameter", "{}", refused.text);
+    assert_eq!(
+        meta_refused.code(),
+        "invalid_parameter",
+        "{}",
+        meta_refused.text
+    );
     h.graph.push_json(200, success());
     let fixed = h
         .call(keyed(&route, &admin, "code-fix", &code_body("SMS")))
@@ -216,7 +221,12 @@ async fn the_pool_routes_do_not_share_a_fingerprint_and_a_refusal_releases_the_k
 
     // A malformed id or body never touches the key.
     let invalid = h
-        .call(keyed(&format!("{POOL}/12%2F34/code"), &admin, "code-bad", &code_body("SMS")))
+        .call(keyed(
+            &format!("{POOL}/12%2F34/code"),
+            &admin,
+            "code-bad",
+            &code_body("SMS"),
+        ))
         .await;
     assert_eq!(invalid.code(), "invalid_request", "{}", invalid.text);
     let bad_body = h
@@ -230,7 +240,12 @@ async fn the_pool_routes_do_not_share_a_fingerprint_and_a_refusal_releases_the_k
     let forbidden = h
         .call(keyed(&route, &tenant, "has a space", &code_body("SMS")))
         .await;
-    assert_eq!(forbidden.status, StatusCode::FORBIDDEN, "{}", forbidden.text);
+    assert_eq!(
+        forbidden.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        forbidden.text
+    );
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -402,7 +417,12 @@ async fn the_hosted_claim_answers_the_gate_before_the_key() {
     let forbidden = h
         .call(keyed(HOSTED, &tenant, "has a space", &hosted_body(A, None)))
         .await;
-    assert_eq!(forbidden.status, StatusCode::FORBIDDEN, "{}", forbidden.text);
+    assert_eq!(
+        forbidden.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        forbidden.text
+    );
     let anonymous = h
         .call(
             Call::new(Method::POST, HOSTED)
@@ -421,9 +441,19 @@ async fn the_hosted_claim_answers_the_gate_before_the_key() {
         malformed.text
     );
     let unknown_field = h
-        .call(keyed(HOSTED, &admin, "k", &json!({"tenant_id": A, "extra": 1})))
+        .call(keyed(
+            HOSTED,
+            &admin,
+            "k",
+            &json!({"tenant_id": A, "extra": 1}),
+        ))
         .await;
-    assert_eq!(unknown_field.code(), "invalid_request", "{}", unknown_field.text);
+    assert_eq!(
+        unknown_field.code(),
+        "invalid_request",
+        "{}",
+        unknown_field.text
+    );
     assert!(h.graph.requests().is_empty());
     assert!(arrived(&h).await);
 

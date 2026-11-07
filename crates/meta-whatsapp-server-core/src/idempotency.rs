@@ -2134,7 +2134,10 @@ mod tests {
             claim(Some("123456"), "merchant-a"),
             claim(Some("654321"), "merchant-a")
         );
-        assert_ne!(claim(Some("123456"), "merchant-a"), claim(None, "merchant-a"));
+        assert_ne!(
+            claim(Some("123456"), "merchant-a"),
+            claim(None, "merchant-a")
+        );
         assert_eq!(
             hex::encode(
                 Fingerprint::add_pre_verified_number(
@@ -2145,7 +2148,9 @@ mod tests {
             "37bae751f17a79ec3c70dc60898fa8023265e05067f94cae092c2e0bf8d870dc"
         );
         assert_eq!(
-            hex::encode(Fingerprint::request_pre_verified_code("1972385232742999", &code).as_bytes()),
+            hex::encode(
+                Fingerprint::request_pre_verified_code("1972385232742999", &code).as_bytes()
+            ),
             "84034253ad4f9392363edfd5dc7f86656dca23c45c046f0f7168d874bf00b472"
         );
         assert_eq!(
