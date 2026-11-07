@@ -1267,7 +1267,7 @@ deactivation request.
 | --- | --- |
 | `POST /v1/admin/partners/business-verifications` | submit a customer business (`client_business_id`) with one to three `documents` (`file_name`, `content_base64`): PDF, JPEG or PNG, 5 MiB each, the content of the type the name says, all checked before any request (bodies up to 21 MiB). `201` with `verification_attempts` and `attempts_left`; never repeated after a timeout; the outcome arrives as an `account_update` event |
 | `GET /v1/admin/partners/business-verifications?client_business_id=&cursor=` | the submissions made, with Meta's `rejection_reasons` |
-| `POST`, `GET /v1/admin/partners/solutions` | create (`name`, `partner_app_id`, `owner_permissions`, `partner_permissions`) `201`; list (`role`, `limit`, `cursor`) |
+| `POST`, `GET /v1/admin/partners/solutions` | create (`name`, `partner_app_id`, `owner_permissions`, `partner_permissions`; takes an `Idempotency-Key`) `201`; list (`role`, `limit`, `cursor`) |
 | `GET /v1/admin/partners/solutions/{id}`, `…/partners` | a solution with its owner, permissions and partners (read it before accepting); its partners |
 | `GET /v1/admin/partners/client-businesses` | the businesses onboarded through the deployment's app |
 | `POST …/solutions/{id}/accept`, `…/reject` | legal acts, `204` |
@@ -1278,10 +1278,21 @@ deactivation request.
 client's assets, so no route, answer, log or audit event carries it
 (hosted Embedded Signup, above, is where the service uses a client's
 business token through a solution, and it stores it in the vault). The
-operator's changes are admin routes: no `Idempotency-Key`, and a retry
-after a `504` should read first (the library never replays them: a
-submission counts towards the customer's three). An `Idempotency-Key` on
-these is roadmap M5j2.
+operator's changes are admin routes and the library never replays them
+(a submission counts towards the customer's three). The two that create
+something, the business verification submission and the solution creation,
+take an `Idempotency-Key` (roadmap M5j2, design D290 to D294), **scoped to the
+admin key**: the same key string under a tenant's key, or under another
+admin key, is another record. Repeat a request after a `504` with the same
+key and body and you get the first answer back (`Idempotent-Replayed: true`),
+Meta asked once; the same key with another body is `422
+idempotency_key_reused`. The service keeps the answer (the receipt's counts,
+the new solution's id), never the request, so no document is stored. The
+gate still answers first: with `WA_SERVER_LEGAL_ACTS` off a submission is
+`403 feature_not_available` whatever its key. The other admin POSTs (accept,
+reject and the deactivation calls change a state Meta refuses to change
+twice, and the max-price agreement carries a token) take none: after a `504`,
+read the solution first.
 
 ### A tenant's WABA
 

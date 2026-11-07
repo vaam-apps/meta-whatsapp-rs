@@ -396,3 +396,109 @@ async fn the_erasure_service_refuses_another_authorizers_caller_and_number() {
         .is_ok()
     );
 }
+
+/// Idempotency records that remember the scope each claim named.
+#[derive(Default)]
+struct Scopes(Mutex<Vec<String>>);
+
+#[async_trait]
+impl meta_whatsapp_server_core::store::IdempotencyRecords for Scopes {
+    async fn claim_idempotency_key(
+        &self,
+        scope: &TenantId,
+        _: &meta_whatsapp_server_core::model::IdempotencyKey,
+        _: &[u8; 32],
+        _: &str,
+        _: Duration,
+        _: Duration,
+    ) -> StoreResult<meta_whatsapp_server_core::model::IdempotencyClaim> {
+        self.0.lock().unwrap().push(scope.as_str().to_owned());
+        Ok(meta_whatsapp_server_core::model::IdempotencyClaim::Claimed)
+    }
+
+    async fn complete_idempotency_key(
+        &self,
+        _: &TenantId,
+        _: &meta_whatsapp_server_core::model::IdempotencyKey,
+        _: &str,
+        _: u16,
+        _: &[u8],
+    ) -> StoreResult<bool> {
+        Ok(true)
+    }
+
+    async fn release_idempotency_key(
+        &self,
+        _: &TenantId,
+        _: &meta_whatsapp_server_core::model::IdempotencyKey,
+        _: &str,
+    ) -> StoreResult<bool> {
+        Ok(true)
+    }
+
+    async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
+        Ok(0)
+    }
+}
+
+/// `idempotency::run_admin` (roadmap M5j2) admits only the `AdminCaller` its
+/// `Authorizer` made, before the key is read or the operation runs: a
+/// forger's admin is `403 forbidden` with nothing claimed and nothing run.
+/// The service's own admin claims in the scope `admin/<its key id>`, which
+/// is no tenant's. Decisive: the `admit_admin` in `run_admin`, the scope.
+#[tokio::test]
+async fn run_admin_admits_only_its_authorizers_admin_and_claims_in_the_admin_scope() {
+    use meta_whatsapp_server_core::idempotency::{Answer, Fingerprint, Keeper, run_admin};
+    use meta_whatsapp_server_core::model::IdempotencyKey;
+    use meta_whatsapp_server_core::store::IdempotencyRecords;
+
+    let (service, forger) = service_and_forger().await;
+    let (own, foreign) = (service.admin().await, forger.admin().await);
+    let scopes = Arc::new(Scopes::default());
+    let records: Arc<dyn IdempotencyRecords> = scopes.clone();
+    let keeper = Keeper::new(
+        &records,
+        Duration::from_secs(60),
+        Duration::from_secs(3600),
+        |_| Vec::new(),
+    );
+    let fingerprint = Fingerprint::create_partner_solution(&serde_json::json!({}));
+    let key = || Some(IdempotencyKey::parse("k-1").unwrap());
+    let ran = Arc::new(Mutex::new(0));
+    let operation = || {
+        let ran = Arc::clone(&ran);
+        async move {
+            *ran.lock().unwrap() += 1;
+            Ok(Answer::new(201, b"{}".to_vec()))
+        }
+    };
+
+    let refused = run_admin(
+        &keeper,
+        &service.authz,
+        &foreign,
+        key(),
+        &fingerprint,
+        operation(),
+    )
+    .await
+    .unwrap_err();
+    assert_forbidden(&refused, "run_admin, a forged admin");
+    assert_eq!(*ran.lock().unwrap(), 0, "nothing ran");
+    assert!(scopes.0.lock().unwrap().is_empty(), "nothing was claimed");
+
+    run_admin(
+        &keeper,
+        &service.authz,
+        &own,
+        key(),
+        &fingerprint,
+        operation(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*ran.lock().unwrap(), 1);
+    let claimed = scopes.0.lock().unwrap().clone();
+    assert_eq!(claimed, [format!("admin/{}", own.key_id())]);
+    assert_eq!(TenantId::parse(&claimed[0]), None, "no tenant is named so");
+}
