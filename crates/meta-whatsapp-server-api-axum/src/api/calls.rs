@@ -29,8 +29,9 @@
 use std::collections::BTreeMap;
 
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::{Request, State};
+use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::calls::{
     self as domain, AcceptRequest, Announcement, Callee, Calls, ConnectRequest,
@@ -43,7 +44,7 @@ use utoipa::ToSchema;
 use super::common::{ApiJson, rfc3339};
 use super::templates::ApiQuery;
 use crate::auth::{Caller, OwnedCall, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;
 
@@ -665,6 +666,28 @@ pub(crate) async fn get_call_permissions(
     }))
 }
 
+/// The deployment's gate on the SIP password as an extractor, placed
+/// **before** the number's: with `WA_SERVER_CALL_SIP_CREDENTIALS` off the
+/// read is `403 feature_not_available` before the number is looked up and
+/// before the tenant's token is opened from the vault (the scope was
+/// checked by the route's guard, earlier still). The core gates again.
+pub(crate) struct SipCredentialsOn;
+
+impl FromRequestParts<Grant> for SipCredentialsOn {
+    type Rejection = ApiError;
+
+    fn from_request_parts(
+        _: &mut Parts,
+        state: &Grant,
+    ) -> impl Future<Output = Result<Self, ApiError>> + Send {
+        std::future::ready(if state.settings().call_sip_credentials {
+            Ok(Self)
+        } else {
+            Err(ApiError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
+        })
+    }
+}
+
 /// `GET /v1/numbers/{pn}/call-settings/sip-credentials`: the number's SIP
 /// servers with their passwords.
 #[utoipa::path(
@@ -691,6 +714,7 @@ pub(crate) async fn get_call_permissions(
 pub(crate) async fn get_call_sip_credentials(
     State(state): State<Grant>,
     caller: Caller,
+    _enabled: SipCredentialsOn,
     owned: OwnedNumber,
 ) -> Result<Response, ApiError> {
     let credentials = calls(&state, &caller, &owned)?.sip_credentials().await?;
