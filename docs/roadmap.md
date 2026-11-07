@@ -7479,11 +7479,11 @@ or WABA fails the family's own cross-tenant test).
     the four operation ids (`get_routing_roles`, `pass_thread`,
     `take_thread`, `release_thread`), the three audit actions, the paths
     and the schema names; no new setting or error code; no legal act.
-  - **Not done here:** the caller's own pass, take and release are not
-    recorded in the inbox's thread owner state (M5l2, D224); no call
+  - **Not done here:** the caller's own pass, take and release were not
+    recorded in the inbox's thread owner state (M5l2 does, D224); no call
     reports who owns a thread (Meta offers none); no call of these routes
     was run against Meta live.
-- [ ] **M5l2. Recording the service's own thread actions** (row 139): the
+- [x] **M5l2. Recording the service's own thread actions** (row 139): the
   inbox's reply guard reads this app as the owner after the service passed
   the thread, because Meta tells the caller nothing of its own pass, take
   or release and the service does not record them (D224).
@@ -7495,6 +7495,34 @@ or WABA fails the family's own cross-tenant test).
     recorded under the conversation the inbox sink would record a handover
     under. Needs the sink's key resolution (`follow_phone`) shared with the
     service, or a library method that takes the user as `Recipient`.
+  - **Landed** (*PR number to be added when it lands*): the library method.
+    `Inbox::conversation_of(&Recipient)` leads a phone number or `wa_id` where
+    `handover_key` leads a handover (the identity links, else a synced
+    contact's BSUID, else the phone number) and a BSUID along its changes;
+    `Inbox::record_thread_owner_of` and `record_release_of` record under it,
+    dated to the second so a handover webhook of the same second or later
+    wins and an older one does not. `server_core::routing::Routing` (now
+    built over the bundle's `ConversationStore` and clock) records a pass
+    (`another_app`, the target role, `escalation` when untargeted), a take
+    (`this_app`, `escalation`) and a release (`idle`) once Meta answered
+    success; a refusal, a timeout, a 5xx and a request the service refuses
+    record nothing (D391); a record the store cannot take is logged at `warn`
+    without the user and does not fail the action (D393). Tests: the facade's
+    `tests/inbox_events.rs` (the three scenarios on memory and live
+    Postgres) and `tests/routing.rs` of the binary (a reply after a pass is
+    `409 thread_owned_elsewhere` with no request, after a release it goes,
+    a phone-named pass is recorded under the BSUID, a timeout or refusal
+    records nothing, a later handover webhook wins over the record and an
+    older one does not). OpenAPI unchanged.
+  - **Decided:** nothing: D390 to D393 are an implementer's proposals, not
+    decided (the coordinator decides). Names pending the owner's
+    confirmation: `Inbox::conversation_of`, `record_thread_owner_of`,
+    `record_release_of`.
+  - **Not done here:** the failure arm of a record that cannot be stored is
+    not exercised by a test (the memory backend does not fail); a pass to a
+    role this very app holds is recorded as `another_app` (Meta refuses it
+    as a target that already owns the thread); no call of these routes was
+    run against Meta live.
 
 ## 5. Payments (last)
 

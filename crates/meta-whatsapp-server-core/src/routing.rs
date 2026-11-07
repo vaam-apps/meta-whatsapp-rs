@@ -43,20 +43,51 @@
 //! **A thread action is not idempotent at Meta and is never replayed**:
 //! the library does not retry it after a timeout, and the adapter keys the
 //! three routes by `Idempotency-Key`.
+//!
+//! **The service's own actions are recorded** (roadmap M5l2, D390 to
+//! D393): Meta tells the caller nothing of its own pass, take or release,
+//! so once Meta *answers* success the action is written to the inbox's
+//! thread owner state, through the same `ConversationStore` the webhook
+//! pipeline records into: a pass leaves [`ThreadOwner::AnotherApp`] with
+//! the target role (`escalation` for an untargeted one), a take
+//! [`ThreadOwner::ThisApp`] with `escalation`, a release
+//! [`ThreadOwner::Idle`]. The conversation is the one the inbox sink would
+//! record a handover for the same user under
+//! (`Inbox::conversation_of`: a phone number the inbox linked to a BSUID
+//! leads to the BSUID), so the inbox's reply guard reads it: after a pass a
+//! free-form reply is `409 thread_owned_elsewhere` with no request to
+//! Meta, after a release it goes to Meta's window check. The record is
+//! dated to the second, so a handover webhook of the same second or later
+//! wins over it and an older one does not.
+//! **A refusal, a timeout or any failure records nothing**: when the
+//! outcome is unknown (the audit event says `unknown`), a reply sent into
+//! a thread another app owns is refused by Meta, while a wrong record
+//! blocks a reply this app may send until the customer writes. A record
+//! that cannot be stored does not fail the action (it went through, and a
+//! retry would repeat it): it is logged at `warn` by action and kind, never
+//! by user.
 
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::thread_control::{
     METADATA_MAX_CHARS, Pass, RoutingRole, RoutingRoles, TargetRole, ThreadControl,
     ThreadControlResponse,
 };
+use std::sync::Arc;
+
+use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::ids::UserId;
 use meta_whatsapp_rs::core::recipient::Recipient;
+use meta_whatsapp_rs::core::store::{ConversationStore, ThreadOwner};
+use meta_whatsapp_rs::inbox::Inbox;
 
 use crate::audit::{Outcome, RoutingFacts, Subject, routing_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber};
 use crate::error::ServiceError;
 use crate::messages::is_e164;
 use crate::observe::Observer;
+
+/// The target of this module's log lines.
+const LOG_TARGET: &str = "meta_whatsapp_server::api::routing";
 
 /// The audit actions (docs/design/server.md, D58 and D221).
 const PASSED: &str = "thread_passed";
@@ -218,6 +249,9 @@ pub struct Routing<'a> {
     caller: &'a Caller,
     number: &'a OwnedNumber,
     observer: &'a dyn Observer,
+    /// The number's inbox, over the bundle's conversation store: where the
+    /// caller's own actions are recorded.
+    inbox: Inbox,
 }
 
 impl std::fmt::Debug for Routing<'_> {
@@ -232,8 +266,10 @@ impl std::fmt::Debug for Routing<'_> {
 impl<'a> Routing<'a> {
     /// The operations on `number` for `caller`, once `authz` admits both
     /// ([`Authorizer::admit`], [`Authorizer::admit_number`]) and `number`
-    /// was made from a binding of `caller`'s tenant. Failed Graph calls are
-    /// reported to nobody until [`Self::observed_by`].
+    /// was made from a binding of `caller`'s tenant, recording the
+    /// caller's own actions into `store` (the bundle's `ConversationStore`,
+    /// which the webhook pipeline records into) at `clock`'s time. Failed
+    /// Graph calls are reported to nobody until [`Self::observed_by`].
     ///
     /// # Errors
     ///
@@ -244,11 +280,13 @@ impl<'a> Routing<'a> {
         authz: &'a Authorizer,
         caller: &'a Caller,
         number: &'a OwnedNumber,
+        store: Arc<dyn ConversationStore>,
+        clock: Arc<dyn Clock>,
     ) -> Result<Self, ServiceError> {
         authz.admit(caller)?;
         authz.admit_number(number)?;
         if number.tenant() != caller.tenant() {
-            tracing::warn!("refused the routing services on another tenant's number");
+            tracing::warn!(target: LOG_TARGET, "refused the routing services on another tenant's number");
             return Err(ServiceError::not_found());
         }
         Ok(Self {
@@ -256,6 +294,12 @@ impl<'a> Routing<'a> {
             caller,
             number,
             observer: &(),
+            inbox: Inbox::new(
+                number.client().clone(),
+                number.phone_number_id().clone(),
+                store,
+            )
+            .with_clock(clock),
         })
     }
 
@@ -320,6 +364,26 @@ impl<'a> Routing<'a> {
         failed
     }
 
+    /// Record the owner of `user`'s thread after Meta answered success to
+    /// an action of the caller's. Never fails the action: it went through.
+    async fn record(
+        &self,
+        action: &'static str,
+        user: &Recipient,
+        owner: ThreadOwner,
+        role: Option<&str>,
+    ) {
+        let role = role.map(str::to_owned);
+        if let Err(error) = self.inbox.record_thread_owner_of(user, owner, role).await {
+            tracing::warn!(
+                target: LOG_TARGET,
+                action,
+                kind = ?error.kind(),
+                "the thread action went through, but the inbox's thread owner was not recorded"
+            );
+        }
+    }
+
     /// The routing roles the number's business holds: `GET
     /// /{pn}/routing_roles`.
     ///
@@ -347,6 +411,10 @@ impl<'a> Routing<'a> {
         match self.thread_control().pass(user, pass).await {
             Ok(response) => {
                 self.audit(PASSED, role, Outcome::Answered);
+                // Meta treats `escalation` as an untargeted pass.
+                let new_owner = role.unwrap_or("escalation");
+                self.record(PASSED, user, ThreadOwner::AnotherApp, Some(new_owner))
+                    .await;
                 Ok(Acted::from(response))
             }
             Err(error) => Err(self.action_failed(PASSED, role, &error).await),
@@ -365,6 +433,9 @@ impl<'a> Routing<'a> {
         match self.thread_control().take(user, note).await {
             Ok(response) => {
                 self.audit(TAKEN, None, Outcome::Answered);
+                // Only the escalation partner may take.
+                self.record(TAKEN, user, ThreadOwner::ThisApp, Some("escalation"))
+                    .await;
                 Ok(Acted::from(response))
             }
             Err(error) => Err(self.action_failed(TAKEN, None, &error).await),
@@ -381,6 +452,7 @@ impl<'a> Routing<'a> {
         match self.thread_control().release(user).await {
             Ok(response) => {
                 self.audit(RELEASED, None, Outcome::Answered);
+                self.record(RELEASED, user, ThreadOwner::Idle, None).await;
                 Ok(Acted::from(response))
             }
             Err(error) => Err(self.action_failed(RELEASED, None, &error).await),

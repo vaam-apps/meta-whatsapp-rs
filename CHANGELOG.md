@@ -303,6 +303,26 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
     with Meta's `use_case`, classifying Meta's calling error codes, the
     permission request message (a send).
 
+### Added (roadmap M5l2)
+
+- The service records its own thread actions in the inbox (design D390 to
+  D393, the coordinator's decisions of 2026-11-07, swappable): after Meta answers a pass,
+  a take or a release, `Routing` writes the owner (`another_app` with the
+  target role, `this_app` with `escalation`, `idle`) to the bundle's
+  conversation store, so a free-form reply after a pass is `409
+  thread_owned_elsewhere` with no request to Meta and after a release goes on
+  to Meta's window check. A refusal, a timeout or any failure records
+  nothing. Library: `Inbox::conversation_of` (a `Recipient` led to the
+  conversation `handover_key` leads a handover to, a BSUID along its
+  changes), `Inbox::record_thread_owner_of` and `Inbox::record_release_of`
+  (dated to the second, so a handover webhook of the same second or later
+  wins). `Routing::new` takes the conversation store and the clock. OpenAPI
+  unchanged. Names pending the owner's confirmation before the first release.
+  `ThreadControl::pass`, `take` and `release` now read a 200 whose body says
+  `"success": false` as an error (as every call that answers `success`
+  does), so it is never recorded; a failed record is logged at `warn` on
+  `meta_whatsapp_server::api::routing` by action and kind, never the user.
+
 ### Added (roadmap M5l)
 
 - The service's conversation routing (`meta_whatsapp_server_core::routing`,
@@ -317,7 +337,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   a timeout, and is an audit event (`thread_passed`, `thread_taken`,
   `thread_released`) holding neither the user nor the `metadata`, with Meta's
   texts withheld from its answer and logs. No call accepts terms. The caller's
-  own actions are not yet recorded in the inbox's thread owner state (M5l2).
+  own actions are recorded in the inbox's thread owner state by M5l2.
   OpenAPI is additive (four operations, six schemas, the scope, the tag); a
   server skill, `meta-whatsapp-rs-server-routing`. Names pending the owner's
   confirmation before the first release.
