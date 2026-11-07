@@ -533,6 +533,7 @@ async fn the_reseal_route_walks_every_tenants_endpoints() {
                 types: vec!["message_received".to_owned()],
                 secret: DataKeys::new(k1).seal(&old_id, &old_secret).unwrap(),
                 cursor: 0,
+                tenants: None,
                 now: datetime!(2026-11-06 10:00 UTC),
             },
             10,

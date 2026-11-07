@@ -2852,6 +2852,15 @@ pub async fn a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(back
     assert_eq!(listed(&tenant_key).await, std::slice::from_ref(&own.id));
     assert_eq!(listed(&narrow).await, std::slice::from_ref(&own.id));
     let id = shared.id.as_str();
+    // A delivery that exists, so that a refused retry is the key's reach
+    // and not a missing delivery.
+    let ping = rig
+        .endpoints
+        .open(&rig.authz, &wide)
+        .unwrap()
+        .test(id)
+        .await
+        .unwrap();
     for hidden in [&tenant_key, &narrow] {
         let open = rig.endpoints.open(&rig.authz, hidden).unwrap();
         let not_found = |code: String| assert_eq!(code, "not_found");
@@ -2880,7 +2889,7 @@ pub async fn a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(back
                 .to_owned(),
         );
         not_found(
-            open.retry(id, DeliveryId::generate(START).unwrap().as_str())
+            open.retry(id, ping.id.as_str())
                 .await
                 .unwrap_err()
                 .code()

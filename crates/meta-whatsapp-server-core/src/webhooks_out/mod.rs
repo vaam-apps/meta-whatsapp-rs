@@ -472,3 +472,62 @@ pub struct Delivery {
     /// When it was made.
     pub created_at: OffsetDateTime,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    fn endpoint(tenants: Option<&[&str]>) -> Endpoint {
+        let at = datetime!(2026-11-06 10:00 UTC);
+        Endpoint {
+            id: EndpointId::parse("whe_00000000000000000000000000000001").unwrap(),
+            tenant: TenantId::parse("owner").unwrap(),
+            tenants: tenants.map(|named| {
+                named
+                    .iter()
+                    .map(|t| TenantCursor {
+                        tenant: TenantId::parse(t).unwrap(),
+                        cursor: 7,
+                    })
+                    .collect()
+            }),
+            url: "https://hooks.example.com/".to_owned(),
+            types: vec!["message_received".to_owned()],
+            enabled: true,
+            disabled_reason: None,
+            secret: SealedSecret::from_stored("sealed"),
+            previous_secret: None,
+            previous_secret_until: None,
+            cursor: 3,
+            failing_since: None,
+            created_at: at,
+            updated_at: at,
+        }
+    }
+
+    /// An endpoint receives the tenants it names and no other's, its own
+    /// tenant's only when it names none (M2m, D343): the guard the
+    /// dispatcher applies to every delivery before it reads an event.
+    #[test]
+    fn an_endpoint_receives_its_named_tenants_only() {
+        let t = |id: &str| TenantId::parse(id).unwrap();
+        let own = endpoint(None);
+        assert!(own.receives(&t("owner")));
+        assert!(!own.receives(&t("a")));
+        assert_eq!(own.streams().len(), 1);
+        assert_eq!(own.streams()[0].cursor, 3, "its own cursor");
+
+        let named = endpoint(Some(&["a", "b"]));
+        assert!(named.receives(&t("a")) && named.receives(&t("b")));
+        assert!(!named.receives(&t("owner")), "not unless named");
+        assert!(!named.receives(&t("c")));
+        let streams = named.streams();
+        assert_eq!(streams.len(), 2);
+        assert!(streams.iter().all(|s| s.cursor == 7), "a cursor each");
+
+        let none = endpoint(Some(&[]));
+        assert!(!none.receives(&t("owner")) && !none.receives(&t("a")));
+        assert!(none.streams().is_empty(), "an empty set receives nothing");
+    }
+}

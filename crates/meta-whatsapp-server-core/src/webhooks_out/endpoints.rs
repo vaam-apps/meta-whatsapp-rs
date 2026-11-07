@@ -146,6 +146,21 @@ pub fn checked_tenants(tenants: &[String]) -> Result<Vec<TenantId>, ServiceError
     Ok(checked)
 }
 
+/// A creation's outcome as the service answers it. A named tenant deleted
+/// between the check and the insert answers as one that never existed or
+/// was not the key's to name, `403 forbidden` (never a `404`, which would
+/// tell a key which tenants exist).
+fn created_or_refused(outcome: CreateOutcome) -> Result<Endpoint, ServiceError> {
+    match outcome {
+        CreateOutcome::Created(endpoint) => Ok(*endpoint),
+        CreateOutcome::LimitReached => {
+            Err(ServiceError::new(ErrorCode::WEBHOOK_ENDPOINT_LIMIT_REACHED))
+        }
+        CreateOutcome::NoSuchTenant => Err(ServiceError::not_found()),
+        CreateOutcome::NamedTenantGone => Err(ServiceError::forbidden()),
+    }
+}
+
 /// An endpoint id from a path: one of another shape names nothing.
 fn endpoint_id(id: &str) -> Result<EndpointId, ServiceError> {
     EndpointId::parse(id).ok_or_else(ServiceError::not_found)
@@ -302,19 +317,9 @@ impl OpenEndpoints<'_> {
                 MAX_ENDPOINTS_PER_TENANT,
             )
             .await?;
-        match created {
-            CreateOutcome::Created(endpoint) => {
-                tracing::info!(target: "audit", tenant = %self.tenant, endpoint = %endpoint.id, "webhook_endpoint_created");
-                Ok((*endpoint, secret))
-            }
-            CreateOutcome::LimitReached => {
-                Err(ServiceError::new(ErrorCode::WEBHOOK_ENDPOINT_LIMIT_REACHED))
-            }
-            CreateOutcome::NoSuchTenant => Err(ServiceError::not_found()),
-            // Deleted between the check and the insert: as a tenant that
-            // does not exist, to the key that may not tell.
-            CreateOutcome::NamedTenantGone => Err(ServiceError::forbidden()),
-        }
+        let endpoint = created_or_refused(created)?;
+        tracing::info!(target: "audit", tenant = %self.tenant, endpoint = %endpoint.id, "webhook_endpoint_created");
+        Ok((endpoint, secret))
     }
 
     /// `tenants`, from a request, checked: only a platform key names any
@@ -576,6 +581,26 @@ impl OpenEndpoints<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A named tenant deleted during a creation answers `403`, the answer
+    /// for a tenant outside the key's set or missing (roadmap M2m), and
+    /// the other outcomes keep theirs.
+    #[test]
+    fn a_named_tenant_gone_answers_as_one_unnameable() {
+        let refused = |outcome| created_or_refused(outcome).unwrap_err();
+        assert_eq!(
+            refused(CreateOutcome::NamedTenantGone).code(),
+            ServiceError::forbidden().code()
+        );
+        assert_eq!(
+            refused(CreateOutcome::NoSuchTenant).code(),
+            ServiceError::not_found().code()
+        );
+        assert_eq!(
+            refused(CreateOutcome::LimitReached).code(),
+            ErrorCode::WEBHOOK_ENDPOINT_LIMIT_REACHED.as_str()
+        );
+    }
 
     /// Types are `KnownEventType`s, at least one, each once (all of them
     /// at most); anything a tenant

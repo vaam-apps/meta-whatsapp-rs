@@ -1080,6 +1080,7 @@ fn live_postgres_cli_webhooks_reseal() {
                         types: vec!["message_received".to_owned()],
                         secret: keys.seal(&id, &secret).unwrap(),
                         cursor: 0,
+                        tenants: None,
                         now,
                     },
                     10,
