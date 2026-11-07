@@ -375,7 +375,7 @@ impl GroupRecords {
     ///
     /// Each shard of the index is read, its records deleted, the shard
     /// deleted only if it did not change meanwhile (otherwise read again),
-    /// and its records deleted once more. Against [`Self::record`] (index,
+    /// and its records deleted once more. Against `record` (index,
     /// record, index again) that leaves no record behind that is not
     /// indexed; an event recorded for the number after the purge is a
     /// record again, indexed, which the next purge finds.
