@@ -421,7 +421,6 @@ impl AppState {
         .await;
     }
 
-    /// The tokenless Graph client.
     /// The workers a replica runs for the broadcasts (roadmap M5k): the
     /// binary spawns each one's `run_until`.
     ///
@@ -442,6 +441,7 @@ impl AppState {
             })
     }
 
+    /// The tokenless Graph client.
     pub(crate) fn client(&self) -> &Client {
         self.inner.authz.client()
     }

@@ -307,3 +307,93 @@ pub fn bodies(h: &Harness) -> Vec<Value> {
         .map(|r| r.json().unwrap())
         .collect()
 }
+
+// ─── A store that gives other senders their turn, and loses races ────────
+
+/// The bundle's `KvStore` with two faults a test switches on: every read
+/// first gives the other tasks their turn (so concurrent callers really
+/// interleave their read and their write), and every write to the shared
+/// pacer's record loses the compare-and-swap, as under contention.
+#[derive(Debug)]
+pub struct Chaos {
+    pub inner: Arc<dyn meta_whatsapp_rs::core::store::KvStore>,
+    pub yield_reads: bool,
+    pub lose_pacer: std::sync::atomic::AtomicBool,
+}
+
+impl Chaos {
+    fn pacer(&self, key: &meta_whatsapp_rs::core::store::StoreKey) -> bool {
+        key.namespace() == "wa.bot.pacer" && self.lose_pacer.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl meta_whatsapp_rs::core::store::KvStore for Chaos {
+    async fn get(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<
+        Option<meta_whatsapp_rs::core::store::Versioned>,
+        meta_whatsapp_rs::core::error::StorageError,
+    > {
+        if self.yield_reads {
+            tokio::task::yield_now().await;
+        }
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<u64, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        value: Vec<u8>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        if self.pacer(key) {
+            return Ok(None);
+        }
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: meta_whatsapp_rs::core::store::Expiry,
+    ) -> Result<Option<u64>, meta_whatsapp_rs::core::error::StorageError> {
+        if self.pacer(key) {
+            return Ok(None);
+        }
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(
+        &self,
+        key: &meta_whatsapp_rs::core::store::StoreKey,
+    ) -> Result<bool, meta_whatsapp_rs::core::error::StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// `stores` with its `KvStore` wrapped in a [`Chaos`].
+pub fn chaotic(stores: Stores, yield_reads: bool) -> (Stores, Arc<Chaos>) {
+    let chaos = Arc::new(Chaos {
+        inner: stores.kv.clone(),
+        yield_reads,
+        lose_pacer: std::sync::atomic::AtomicBool::new(false),
+    });
+    (
+        Stores {
+            kv: chaos.clone(),
+            ..stores
+        },
+        chaos,
+    )
+}

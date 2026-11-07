@@ -593,12 +593,18 @@ async fn a_throttled_person_waits_and_is_never_marked_failed() {
     work(&w.h).await;
     let view = status(&w, &id).await;
     assert_eq!(view["state"], "completed", "{view}");
-    assert_eq!((view["sent"].clone(), view["failed"].clone()), (json!(1), json!(0)));
+    assert_eq!(
+        (view["sent"].clone(), view["failed"].clone()),
+        (json!(1), json!(0))
+    );
     assert_eq!(view["failures"], json!({}));
     let times = w.controls.times();
     assert_eq!(times.len(), 3);
     assert!(times[1] - times[0] >= time::Duration::SECOND, "{times:?}");
-    assert!(times[2] - times[1] >= time::Duration::seconds(4), "{times:?}");
+    assert!(
+        times[2] - times[1] >= time::Duration::seconds(4),
+        "{times:?}"
+    );
 
     // Throughput (130429): five refusals in a row; the person is given
     // back to the job, not failed, and sent at its retry.
@@ -610,7 +616,11 @@ async fn a_throttled_person_waits_and_is_never_marked_failed() {
     w.h.graph.push_json(200, accepted(0));
     let before = w.h.graph.requests().len();
     work(&w.h).await;
-    assert_eq!(w.h.graph.requests().len() - before, 5, "five tries, no more");
+    assert_eq!(
+        w.h.graph.requests().len() - before,
+        5,
+        "five tries, no more"
+    );
     let view = status(&w, &id).await;
     assert_eq!(view["failed"], 0, "{view}");
     assert_eq!(view["failures"], json!({}), "{view}");
@@ -626,29 +636,73 @@ async fn a_throttled_person_waits_and_is_never_marked_failed() {
 }
 
 /// The tenant's limit holds under concurrent creates: with room for two,
-/// six creates at once queue exactly two. Decisive: `reserve`'s
-/// compare-and-swap (a plain read-then-write admits more).
+/// six creates at once queue exactly two, though every read of the store
+/// lets the others in between a create's read and its write. Decisive:
+/// `reserve`'s compare-and-swap (a plain read-then-write admits more).
 #[tokio::test]
 async fn concurrent_creates_never_pass_the_limit() {
-    let w = world(BroadcastSettings {
-        max_concurrent: 2,
-        ..rate(20)
-    })
-    .await;
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let controls = Controls::new(Arc::new(clock.clone()));
+    let (stores, _) = chaotic(Stores::memory(), true);
+    let h = replica(
+        stores,
+        &clock,
+        &controls,
+        BroadcastSettings {
+            max_concurrent: 2,
+            ..rate(20)
+        },
+    );
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Broadcasts]).await;
     let body = broadcast(people(1));
-    let replies = futures::future::join_all(
-        (0..6).map(|_| w.h.call(create(&w.key, PN, &body))),
-    )
-    .await;
-    let accepted = replies
-        .iter()
-        .filter(|r| r.status == StatusCode::ACCEPTED)
-        .count();
-    let busy = replies
-        .iter()
-        .filter(|r| r.status == StatusCode::TOO_MANY_REQUESTS)
-        .count();
-    assert_eq!((accepted, busy), (2, 4), "{:?}", replies.iter().map(|r| &r.text).collect::<Vec<_>>());
+    let replies = futures::future::join_all((0..6).map(|_| h.call(create(&key, PN, &body)))).await;
+    let count = |status| replies.iter().filter(|r| r.status == status).count();
+    assert_eq!(
+        (
+            count(StatusCode::ACCEPTED),
+            count(StatusCode::TOO_MANY_REQUESTS)
+        ),
+        (2, 4),
+        "{:?}",
+        replies.iter().map(|r| &r.text).collect::<Vec<_>>()
+    );
+}
+
+/// The shared budget fails closed: while every booking of the number's
+/// record loses its compare-and-swap, past the bound nothing is sent, no
+/// person is marked failed, and the broadcast waits for its retry, then
+/// sends once the contention ends. Decisive: `KvRateLimiter::contention`'s
+/// bound, a limiter error leaving the person unsent.
+#[tokio::test]
+async fn a_budget_that_cannot_be_booked_sends_nothing_and_fails_nobody() {
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let controls = Controls::new(Arc::new(clock.clone()));
+    let (stores, chaos) = chaotic(Stores::memory(), false);
+    let h = replica(stores, &clock, &controls, rate(20));
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Broadcasts]).await;
+    let reply = h.call(create(&key, PN, &broadcast(people(2)))).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    script(&h, 2);
+    chaos.lose_pacer.store(true, Ordering::SeqCst);
+    work(&h).await;
+    assert!(h.graph.requests().is_empty(), "sent without a booked slot");
+    let view = h.call(read(&key, PN, &id)).await.json();
+    assert_eq!(
+        (view["failed"].clone(), view["sent"].clone()),
+        (json!(0), json!(0))
+    );
+    assert_eq!(view["queued"], 2, "{view}");
+    chaos.lose_pacer.store(false, Ordering::SeqCst);
+    clock.advance(Duration::from_secs(120));
+    work(&h).await;
+    let view = h.call(read(&key, PN, &id)).await.json();
+    assert_eq!(view["state"], "completed", "{view}");
+    assert_eq!(view["sent"], 2);
 }
 
 /// An `Idempotency-Key` is for one number's broadcast: the same key and
@@ -663,7 +717,12 @@ async fn a_key_is_not_replayed_on_another_number() {
     let first = w.h.call(on(PN)).await;
     assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.text);
     let other = w.h.call(on(PN2)).await;
-    assert_eq!(other.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", other.text);
+    assert_eq!(
+        other.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        other.text
+    );
     assert_eq!(other.code(), "idempotency_key_reused");
     script(&w.h, 2);
     work(&w.h).await;
