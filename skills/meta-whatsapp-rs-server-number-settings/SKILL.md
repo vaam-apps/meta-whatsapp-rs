@@ -146,7 +146,7 @@ contact ids and components' texts are in no log line.
 
 ## What meta-whatsapp-rs does not do
 
-Not offered: a number's `webhook_url` and connection status (the service
+Not offered: a number's webhook URL setter and connection status (the service
 owns its events), the WABA-level callback override, bot details, calling
 settings, the coexistence data sync. No call of these
 routes was run against Meta live.

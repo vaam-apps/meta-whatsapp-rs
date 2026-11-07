@@ -2,9 +2,9 @@
 
 > **Verified against meta-whatsapp-rs 6802f4d141d61d8f77e4afbe7b72f15c5f34f155 (2026-11-07).** Source: `docs/design/server.md` D440 to D445 and `tests/webhook_override.rs`.
 
-The routes are in [../SKILL.md](../SKILL.md); the calls are the
-`wabaHealth`, `webhookOverride`, `setWebhookOverride` and
-`clearWebhookOverride` functions of [../examples/number-settings.ts](../examples/number-settings.ts).
+The routes are in [../SKILL.md](../SKILL.md); the calls are the functions
+wabaHealth, webhookOverride, setWebhookOverride and clearWebhookOverride of
+[../examples/number-settings.ts](../examples/number-settings.ts).
 
 ## A WABA's health
 
@@ -29,8 +29,8 @@ for that number then go quiet. So:
   resolves to allowed (never a private, loopback, link-local or metadata
   address unless the operator listed its range). Refused: `422` on `url`,
   nothing sent, whatever the reason. At most 200 characters; `verify_token`
-  (yours, the one Meta echoes to verify the URL) must not be empty. `409
-  webhooks_not_configured` when the deployment has no allow-list at all.
+  (yours, the one Meta echoes to verify the URL) must not be empty. With no
+  allow-list at all the answer is `409 webhooks_not_configured`.
 - The token and the URL are in no log, audit event, error or answer, and
   Meta's error texts are withheld. The set is audited (webhook_override_set)
   and so is a refused one, as a warning (webhook_override_refused, with its
