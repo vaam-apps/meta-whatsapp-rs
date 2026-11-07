@@ -1,7 +1,8 @@
 //! The dispatcher (design §2.4 and §4.4): on every replica, a loop that
 //!
 //! 1. **fans out** the outbox to each enabled endpoint: its tenant's
-//!    events after its cursor, of its types, one delivery each, the cursor
+//!    events after its cursor (one per tenant it names, when a platform key
+//!    made it with several: roadmap M2m), of its types, one delivery each, the cursor
 //!    moved in the same step ([`WebhookStore::fan_out`]: once, whatever
 //!    replicas race);
 //! 2. **claims** due deliveries under a lease ([`WebhookStore::claim`]:
@@ -52,7 +53,7 @@ use super::store::{
 };
 use super::{
     AttemptError, DELIVERY_TIMEOUT, Delivery, DeliveryId, Endpoint, EndpointId,
-    MAX_DELIVERED_DATA_BYTES, MAX_RESPONSE_BYTES, PING,
+    MAX_DELIVERED_DATA_BYTES, MAX_RESPONSE_BYTES, PING, TenantCursor,
 };
 use crate::backend::Backend;
 use crate::model::TenantId;
@@ -430,31 +431,40 @@ impl Dispatcher {
         let endpoints = self.store.active_endpoints().await?;
         let mut tenants = Vec::new();
         for endpoint in endpoints {
-            if !tenants.contains(&endpoint.tenant) {
-                tenants.push(endpoint.tenant.clone());
-            }
-            if let Err(error) = self.fan_out_to(&endpoint).await {
-                tracing::warn!(error = %error, endpoint = %endpoint.id, "fanning events out to a webhook endpoint failed");
+            // An endpoint of several tenants (roadmap M2m) has a stream,
+            // and a cursor, for each: one tenant's events never ride on
+            // another's page.
+            for stream in endpoint.streams() {
+                if !tenants.contains(&stream.tenant) {
+                    tenants.push(stream.tenant.clone());
+                }
+                if let Err(error) = self.fan_out_to(&endpoint, &stream).await {
+                    tracing::warn!(error = %error, endpoint = %endpoint.id, "fanning events out to a webhook endpoint failed");
+                }
             }
         }
         Ok(tenants)
     }
 
-    async fn fan_out_to(&self, endpoint: &Endpoint) -> crate::store::StoreResult<()> {
+    async fn fan_out_to(
+        &self,
+        endpoint: &Endpoint,
+        stream: &TenantCursor,
+    ) -> crate::store::StoreResult<()> {
         let page = self
             .outbox
             .headers_after(&HeaderQuery {
-                tenant: endpoint.tenant.clone(),
-                after: Some(endpoint.cursor),
+                tenant: stream.tenant.clone(),
+                after: Some(stream.cursor),
                 types: Some(endpoint.types.clone()),
                 limit: self.out.dispatch.fan_out_page.max(1),
             })
             .await?;
         let to = match page.headers.last() {
             Some(last) if page.more => last.sequence,
-            _ => page.high_water.max(endpoint.cursor),
+            _ => page.high_water.max(stream.cursor),
         };
-        if to == endpoint.cursor && page.headers.is_empty() {
+        if to == stream.cursor && page.headers.is_empty() {
             return Ok(());
         }
         let now = self.clock.now();
@@ -462,7 +472,7 @@ impl Dispatcher {
         let mut deliveries = Vec::with_capacity(page.headers.len());
         for event in page.headers {
             // An outbox page is the tenant's own stream; checked again.
-            if event.tenant.as_ref() != Some(&endpoint.tenant) {
+            if event.tenant.as_ref() != Some(&stream.tenant) {
                 continue;
             }
             let Some(id) = DeliveryId::generate(now) else {
@@ -482,7 +492,7 @@ impl Dispatcher {
         // `false`: another replica moved the cursor first; its deliveries
         // stand.
         self.store
-            .fan_out(&endpoint.id, endpoint.cursor, to, &deliveries)
+            .fan_out(&endpoint.id, &stream.tenant, stream.cursor, to, &deliveries)
             .await?;
         Ok(())
     }
@@ -511,12 +521,12 @@ impl Dispatcher {
                 return;
             }
             for claimed in claimed {
-                in_flight.start(&claimed.endpoint.id, &claimed.endpoint.tenant);
+                in_flight.start(&claimed.endpoint.id, &claimed.delivery.tenant);
                 let this = self.clone();
                 tasks.spawn(async move {
                     let ended = Ended {
                         endpoint: claimed.endpoint.id.clone(),
-                        tenant: claimed.endpoint.tenant.clone(),
+                        tenant: claimed.delivery.tenant.clone(),
                     };
                     this.attempt(claimed).await;
                     ended
@@ -617,15 +627,22 @@ impl Dispatcher {
         endpoint: &Endpoint,
         now: OffsetDateTime,
     ) -> Result<u16, AttemptError> {
-        // A delivery carries its endpoint's tenant's event only.
-        if delivery.tenant != endpoint.tenant || delivery.endpoint != endpoint.id {
+        // A delivery carries the event of a tenant its endpoint receives
+        // only (its own tenant's, or one it names: roadmap M2m); a ping
+        // is its endpoint's tenant's.
+        let tenant_ok = if delivery.event_id.is_some() {
+            endpoint.receives(&delivery.tenant)
+        } else {
+            delivery.tenant == endpoint.tenant
+        };
+        if !tenant_ok || delivery.endpoint != endpoint.id {
             tracing::error!(delivery = %delivery.id, "a webhook delivery names another tenant than its endpoint");
             return Err(AttemptError::EventGone);
         }
         let (webhook_id, body) = match &delivery.event_id {
-            Some(event_id) => match self.outbox.get(&endpoint.tenant, event_id).await {
-                Ok(Some(event)) if event.tenant.as_ref() == Some(&endpoint.tenant) => {
-                    let body = event_body(&endpoint.tenant, &event);
+            Some(event_id) => match self.outbox.get(&delivery.tenant, event_id).await {
+                Ok(Some(event)) if event.tenant.as_ref() == Some(&delivery.tenant) => {
+                    let body = event_body(&delivery.tenant, &event);
                     (event.id, body)
                 }
                 Ok(_) => return Err(AttemptError::EventGone),

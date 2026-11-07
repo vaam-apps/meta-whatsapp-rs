@@ -25,6 +25,12 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   method (`HeaderPage::from_page` answers it from `page`, reading the
   data).
 
+### Added
+
+- A webhook endpoint made with a platform key may name `tenants` (one to
+  ten): it receives those tenants' events, each delivery read in its own
+  tenant's stream (roadmap M2m; migration 11).
+
 ### Added (roadmap M2i)
 
 - **Re-sealing the webhook secrets** (roadmap M2i; choices D320-D324,
