@@ -15,6 +15,7 @@
 //! | `POST /v1/numbers/{pn}/official-business-account` | `POST /{pn}/official_business_account` | yes; audited |
 //! | `GET`, `PUT /v1/numbers/{pn}/compliance-info` | `GET`, `POST /{pn}/business_compliance_info` | no; the `PUT` a legal act |
 //! | `GET /v1/numbers/{pn}/health-status` | `GET /{pn}?fields=health_status` | no |
+//! | `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override` | `GET /{pn}?fields=webhook_configuration`, `POST /{pn}` `{"webhook_configuration": …}` | no; the `PUT` off unless the deployment enables it |
 //! | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | `GET /{pn}?fields=conversational_automation`, `POST /{pn}/conversational_automation` | no |
 //! | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | `DELETE /{pn}/contact_book` | no; audited, scope `erasure` |
 //!
@@ -30,8 +31,9 @@ use meta_whatsapp_rs::client::phone_numbers::{
     ObaApplication,
 };
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
+use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::number_settings::{
     ClientKey, NumberSettings, ObaView, SettingChange, SettingsView,
@@ -42,7 +44,7 @@ use utoipa::ToSchema;
 
 use super::common::ApiJson;
 use crate::auth::{Caller, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;
 
@@ -54,7 +56,11 @@ fn service<'a>(
     Ok(
         NumberSettings::new(state.authz(), caller, owned.capability(state))?
             .observed_by(state.metrics())
-            .with_legal_acts(state.settings().legal_acts),
+            .with_legal_acts(state.settings().legal_acts)
+            .with_webhook_override(
+                state.settings().number_webhook_override,
+                state.settings().webhooks_out.as_ref(),
+            ),
     )
 }
 
@@ -1001,6 +1007,187 @@ pub(crate) async fn get_health_status(
 ) -> Result<Json<HealthStatusView>, ApiError> {
     let status = service(&state, &caller, &owned)?.health_status().await?;
     Ok(Json(HealthStatusView::from(status)))
+}
+
+/// A WABA's health status: whether messages can be sent through it, with
+/// the nodes the tenant owns or already holds (its WABA, its numbers, its
+/// templates, the business portfolio and the app). Another tenant's
+/// entity ids are never in it (roadmap M5c6, design D440).
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = WabaHealthStatus)]
+pub struct WabaHealthStatusView {
+    /// The overall status Meta computed: `BLOCKED` if any node is blocked,
+    /// else `LIMITED` if any is limited, else `AVAILABLE`.
+    #[schema(required = true)]
+    pub can_send_message: Option<String>,
+    /// The nodes the tenant may see.
+    pub entities: Vec<HealthEntityView>,
+}
+
+impl From<HealthStatus> for WabaHealthStatusView {
+    fn from(status: HealthStatus) -> Self {
+        let HealthStatusView {
+            can_send_message,
+            entities,
+        } = HealthStatusView::from(status);
+        Self {
+            can_send_message,
+            entities,
+        }
+    }
+}
+
+// ─── Webhook override ────────────────────────────────────────────────────
+
+/// A number's webhook override, as the tenant set it. The WABA's override
+/// and the app's callback URL are never answered.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = WebhookOverride)]
+pub struct WebhookOverrideView {
+    /// The URL Meta delivers this number's supported webhooks to instead
+    /// of the service; `null` when the number has none.
+    #[schema(required = true)]
+    pub url: Option<String>,
+}
+
+/// An override to set.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = SetWebhookOverride)]
+pub struct WebhookOverrideBody {
+    /// Where Meta delivers the number's supported webhooks: `https`, 1 to
+    /// 200 characters (Meta's page), a destination the deployment's webhook
+    /// allow-list admits, as a webhook endpoint's is.
+    pub url: String,
+    /// The token Meta echoes when it verifies the URL (the same handshake
+    /// as the app's callback). A secret: never answered, logged or audited.
+    #[schema(value_type = String, format = Password)]
+    pub verify_token: meta_whatsapp_rs::core::secret::VerifyToken,
+}
+
+/// The deployment's gate on setting a webhook override as an extractor,
+/// placed **before** the number's: with `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`
+/// off the set is `403 feature_not_available` before the number is looked
+/// up and before the tenant's token is opened from the vault. The core
+/// gates (and audits the refusal) again.
+pub(crate) struct WebhookOverrideOn;
+
+impl FromRequestParts<Grant> for WebhookOverrideOn {
+    type Rejection = ApiError;
+
+    fn from_request_parts(
+        _: &mut Parts,
+        state: &Grant,
+    ) -> impl Future<Output = Result<Self, ApiError>> + Send {
+        std::future::ready(if state.settings().number_webhook_override {
+            Ok(Self)
+        } else {
+            Err(ApiError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
+        })
+    }
+}
+
+/// `GET /v1/numbers/{pn}/webhook-override`: the URL the number's webhooks
+/// go to instead of the service, if any.
+#[utoipa::path(
+    get,
+    path = "/v1/numbers/{pn}/webhook-override",
+    tag = "numbers",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The number's own override, `null` when it has none", body = WebhookOverrideView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_webhook_override(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedNumber,
+) -> Result<Json<WebhookOverrideView>, ApiError> {
+    let url = service(&state, &caller, &owned)?.webhook_override().await?;
+    Ok(Json(WebhookOverrideView { url }))
+}
+
+/// `PUT /v1/numbers/{pn}/webhook-override`: make Meta deliver the number's
+/// supported webhooks (`messages`, `calls`, `history`, …) to the tenant's
+/// URL instead of the service. Off unless the deployment enables it.
+#[utoipa::path(
+    put,
+    path = "/v1/numbers/{pn}/webhook-override",
+    tag = "numbers",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    request_body = WebhookOverrideBody,
+    responses(
+        (status = 204, description = "The override is set. Audited as `webhook_override_set` (who and which number, never the URL or the token)"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, `feature_not_available` (the deployment has not enabled overrides, `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`: nothing was asked of Meta), or Meta's refusal (its texts are withheld)", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`webhooks_not_configured` (no allow-list to check the URL against), `number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `url` (not `https`, over 200 characters, credentials in it, not listed, an address it resolves to not allowed, or unresolvable: as a webhook endpoint's) or `verify_token` (empty) or `body`: nothing was sent", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed (for one, it could not verify the URL): see `may_have_been_sent`", body = ErrorBody),
+        (status = 504, description = "`timeout`: the override may have been set (`GET …/webhook-override`)", body = ErrorBody),
+    )
+)]
+pub(crate) async fn set_webhook_override(
+    State(state): State<Grant>,
+    caller: Caller,
+    _enabled: WebhookOverrideOn,
+    owned: OwnedNumber,
+    ApiJson(body): ApiJson<WebhookOverrideBody>,
+) -> Result<StatusCode, ApiError> {
+    service(&state, &caller, &owned)?
+        .set_webhook_override(&body.url, body.verify_token)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /v1/numbers/{pn}/webhook-override`: remove the number's own
+/// override, so Meta delivers its webhooks to the service again. Always
+/// allowed to the number's owner, whatever the deployment's setting.
+#[utoipa::path(
+    delete,
+    path = "/v1/numbers/{pn}/webhook-override",
+    tag = "numbers",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 204, description = "The override is cleared (also when there was none). Audited as `webhook_override_cleared`"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
+        (status = 504, description = "`timeout`: read the override", body = ErrorBody),
+    )
+)]
+pub(crate) async fn clear_webhook_override(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedNumber,
+) -> Result<StatusCode, ApiError> {
+    service(&state, &caller, &owned)?
+        .clear_webhook_override()
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── Conversational components ───────────────────────────────────────────

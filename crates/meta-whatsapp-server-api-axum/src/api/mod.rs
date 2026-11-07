@@ -245,6 +245,13 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
             number_settings::set_compliance_info
         ))
         .routes(routes!(number_settings::get_health_status))
+        // Roadmap M5c6.
+        .routes(routes!(numbers::get_waba_health_status))
+        .routes(routes!(
+            number_settings::get_webhook_override,
+            number_settings::set_webhook_override,
+            number_settings::clear_webhook_override
+        ))
         .routes(routes!(
             number_settings::get_conversational_components,
             number_settings::set_conversational_components

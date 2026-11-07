@@ -174,6 +174,16 @@ pub struct Settings {
     /// feature_not_available` and nothing is asked of Meta, whichever key
     /// asks; on, it still takes a key holding the scope `call_credentials`.
     pub call_sip_credentials: bool,
+    /// `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` (roadmap M5c6, design D441,
+    /// pending the owner's confirmation before the first release): whether
+    /// a key holding the scope `numbers` may make Meta deliver one of its
+    /// numbers' webhooks to a URL of its own instead of the service
+    /// (`PUT /v1/numbers/{pn}/webhook-override`). Off (the default), it is
+    /// `403 feature_not_available` and nothing is asked of Meta; on, the
+    /// URL is still checked as a webhook endpoint's is, against
+    /// [`Self::webhooks_out`]'s allow-list. Clearing an override is never
+    /// gated by it.
+    pub number_webhook_override: bool,
 }
 
 impl Default for Settings {
@@ -200,6 +210,7 @@ impl Default for Settings {
             legal_acts: false,
             send_messaging_account_id: true,
             call_sip_credentials: false,
+            number_webhook_override: false,
         }
     }
 }

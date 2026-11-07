@@ -24,6 +24,7 @@
 
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::business_profile::{Profile, ProfileField, ProfileUpdate, Vertical};
+use meta_whatsapp_rs::client::common::{HealthEntityType, HealthStatus};
 use meta_whatsapp_rs::client::phone_numbers::PhoneNumberInfo;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -458,6 +459,73 @@ impl<'a> Waba<'a> {
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
         self
+    }
+
+    /// The WABA's health status (`GET /{waba_id}?fields=health_status`,
+    /// roadmap M5c6, design D440), for `caller`, whose tenant must be the
+    /// WABA's: another's is `404 not_found` **before** anything is asked of
+    /// Meta (the capability was made for the WABA's tenant; this checks it
+    /// is the caller's, so a capability handed to the wrong caller reads
+    /// nothing).
+    ///
+    /// Meta answers every node a message through the WABA involves; the
+    /// answer keeps what the tenant owns or already holds, and drops what
+    /// it might not: an entity of the WABA is kept for this WABA only, a
+    /// phone number for a number bound to the caller's tenant only (a
+    /// record read each), a template, the business portfolio and the app
+    /// as Meta names them, and an entity of a type this version does not
+    /// know is dropped (it could be anyone's). The overall
+    /// `can_send_message` is Meta's and carries no id.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` for a WABA that is not `caller`'s; `403 forbidden`
+    /// for a `caller` another [`Authorizer`] made; Meta's refusal or
+    /// failure, with its `details`; `503` from the records.
+    pub async fn health_status(&self, caller: &Caller) -> Result<HealthStatus, ServiceError> {
+        self.authz.admit(caller)?;
+        if caller.tenant() != self.owned.tenant() {
+            return Err(ServiceError::not_found());
+        }
+        let status = self
+            .owned
+            .client()
+            .waba(self.owned.waba_id().clone())
+            .health_status()
+            .await;
+        let mut status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                let api = self.owned.failed(self.authz, &error).await;
+                if error.graph().is_some() {
+                    self.observer.graph_error(api.code());
+                }
+                return Err(api.with_details(&error));
+            }
+        };
+        let mut kept = Vec::with_capacity(status.entities.len());
+        for entity in std::mem::take(&mut status.entities) {
+            let keep = match &entity.entity_type {
+                HealthEntityType::Waba => entity.id == self.owned.waba_id().as_str(),
+                HealthEntityType::PhoneNumber => match PhoneNumberId::new(&entity.id) {
+                    Ok(pn) => match self.authz.tenant_number(caller, &pn).await {
+                        Ok(()) => true,
+                        Err(refused) if refused.code() == "not_found" => false,
+                        Err(other) => return Err(other),
+                    },
+                    Err(_) => false,
+                },
+                HealthEntityType::MessageTemplate
+                | HealthEntityType::Business
+                | HealthEntityType::App => true,
+                _ => false,
+            };
+            if keep {
+                kept.push(entity);
+            }
+        }
+        status.entities = kept;
+        Ok(status)
     }
 
     /// Disconnect the WABA: unsubscribe the app from it with its token;

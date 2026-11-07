@@ -12,6 +12,7 @@
 //! | [`NumberSettings::compliance_info`], [`NumberSettings::set_compliance_info`] | `GET`, `POST /{pn}/business_compliance_info` |
 //! | [`NumberSettings::health_status`] | `GET /{pn}?fields=health_status` |
 //! | [`NumberSettings::delete_contact_book_entry`] | `DELETE /{pn}/contact_book` |
+//! | [`NumberSettings::webhook_override`], [`NumberSettings::set_webhook_override`], [`NumberSettings::clear_webhook_override`] | `GET /{pn}?fields=webhook_configuration`, `POST /{pn}` `{"webhook_configuration": …}` (roadmap M5c6) |
 //! | [`NumberSettings::conversational_components`], [`NumberSettings::set_conversational_components`] | `GET /{pn}?fields=conversational_automation`, `POST /{pn}/conversational_automation` |
 //!
 //! **One setting per change.** The library sets one value per Graph call
@@ -42,6 +43,23 @@
 //! the tenant performs explicitly under the scope `erasure`, audited,
 //! never automatic): both are audited and reach Meta with the setting off.
 //!
+//! **The webhook override** (roadmap M5c6, design D441 to D444). Setting a
+//! number's override makes Meta deliver that number's `messages`, `calls`,
+//! `history`, … to the tenant's URL instead of the service, which hides
+//! them from the service's inbox and events. So setting one is off until
+//! the deployment enables it (`WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, default
+//! `off`; [`NumberSettings::with_webhook_override`]): off, `403
+//! feature_not_available` with nothing asked of Meta; on, the URL goes
+//! through the **same check as a webhook endpoint's**
+//! ([`crate::webhooks_out::destination::pin`] with the deployment's
+//! allow-list and resolver) before anything is sent, and the set is audited
+//! (`webhook_override_set`, never the URL or the token). A refusal is
+//! audited too (`webhook_override_refused`, which rule, never what was
+//! asked). **Clearing is never gated**: the number's owner (and an
+//! operator acting through a platform key) can always restore delivery to
+//! the service. Reading says whether the number has an override and its
+//! URL, and never the WABA's or the app's callback.
+//!
 //! **Bounds.** Meta's documented limits are the library's (a username of 3
 //! to 35 characters, 5 to 10 supporting links, 2 to 128 characters of
 //! entity name, at most 4 ice breakers, 30 commands, …). Where Meta states
@@ -61,10 +79,12 @@ use meta_whatsapp_rs::client::phone_numbers::{
     ConversationalAutomationConfig, DataLocalizationRegion, ObaApplication, SearchVisibility,
     TransferAction, validate_username,
 };
+use meta_whatsapp_rs::client::waba::CallbackOverride;
 use meta_whatsapp_rs::client::{Client, RetryPolicy};
 use meta_whatsapp_rs::core::ids::UserId;
+use meta_whatsapp_rs::core::secret::VerifyToken;
 
-use crate::audit::{Outcome, Subject, number_setting_audit};
+use crate::audit::{Outcome, Subject, number_setting_audit, number_setting_refused_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber};
 use crate::display_names::is_invisible_or_bidi;
 use crate::error::{ErrorCode, ServiceError};
@@ -72,6 +92,8 @@ use crate::numbers::{EMAIL_MAX_CHARS, profile_email, profile_website};
 use crate::observe::Observer;
 use crate::operation::{AdminOperation, Operation};
 use crate::request::wire;
+use crate::webhooks_out::destination::{Refusal, pin};
+use crate::webhooks_out::dispatch::WebhooksOut;
 
 /// Whether `operation` is a legal act: off until the deployment sets
 /// `WA_SERVER_LEGAL_ACTS=on` (design D192). The one predicate; adding an
@@ -143,6 +165,15 @@ pub const COMPLIANCE_INFO_SET: &str = "compliance_info_set";
 pub const CONTACT_BOOK_ENTRY_DELETED: &str = "contact_book_entry_deleted";
 /// The audit action of [`NumberSettings::set_conversational_components`].
 pub const CONVERSATIONAL_COMPONENTS_SET: &str = "conversational_components_set";
+/// The audit action of [`NumberSettings::set_webhook_override`] (roadmap
+/// M5c6; pending the owner's confirmation before the first release).
+pub const WEBHOOK_OVERRIDE_SET: &str = "webhook_override_set";
+/// The audit action of [`NumberSettings::clear_webhook_override`].
+pub const WEBHOOK_OVERRIDE_CLEARED: &str = "webhook_override_cleared";
+/// The audit action of a [`NumberSettings::set_webhook_override`] refused
+/// before anything was sent: its reason is `disabled`, `not_configured`,
+/// `shape`, `unresolved` or `destination`.
+pub const WEBHOOK_OVERRIDE_REFUSED: &str = "webhook_override_refused";
 
 /// The fields [`NumberSettings::compliance_info`] asks Meta for: the
 /// ones of the page's `BusinessComplianceInfo`.
@@ -441,6 +472,10 @@ pub struct NumberSettings<'a> {
     number: &'a OwnedNumber,
     observer: &'a dyn Observer,
     legal_acts: bool,
+    /// `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, and the deployment's webhooks
+    /// out, whose allow-list and resolver check the override's URL.
+    webhook_override: bool,
+    webhooks_out: Option<&'a WebhooksOut>,
 }
 
 impl fmt::Debug for NumberSettings<'_> {
@@ -448,6 +483,7 @@ impl fmt::Debug for NumberSettings<'_> {
         f.debug_struct("NumberSettings")
             .field("number", self.number)
             .field("legal_acts", &self.legal_acts)
+            .field("webhook_override", &self.webhook_override)
             .finish_non_exhaustive()
     }
 }
@@ -473,6 +509,8 @@ impl<'a> NumberSettings<'a> {
             number,
             observer: &(),
             legal_acts: false,
+            webhook_override: false,
+            webhooks_out: None,
         })
     }
 
@@ -488,6 +526,21 @@ impl<'a> NumberSettings<'a> {
     #[must_use]
     pub fn with_legal_acts(mut self, enabled: bool) -> Self {
         self.legal_acts = enabled;
+        self
+    }
+
+    /// Whether the deployment lets a number's webhook override be set
+    /// (the setting `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, off by default),
+    /// and the webhooks out whose allow-list and resolver check its URL
+    /// (`None`: the deployment has none, so no URL is admitted).
+    #[must_use]
+    pub fn with_webhook_override(
+        mut self,
+        enabled: bool,
+        webhooks_out: Option<&'a WebhooksOut>,
+    ) -> Self {
+        self.webhook_override = enabled;
+        self.webhooks_out = webhooks_out;
         self
     }
 
@@ -874,6 +927,106 @@ impl<'a> NumberSettings<'a> {
             .configure_conversational_automation(config)
             .await;
         self.changed(CONVERSATIONAL_COMPONENTS_SET, None, false, result)
+            .await
+    }
+
+    // ─── Webhook override ────────────────────────────────────────────────
+
+    fn refused(&self, reason: &'static str) {
+        number_setting_refused_audit(
+            WEBHOOK_OVERRIDE_REFUSED,
+            self.caller.key_id(),
+            &Subject {
+                tenant: Some(self.caller.tenant().as_str()),
+                waba_id: Some(self.number.waba_id().as_str()),
+                phone_number_id: Some(self.number.phone_number_id().as_str()),
+                ..Subject::default()
+            },
+            reason,
+        );
+    }
+
+    /// The URL Meta delivers this number's webhooks to instead of the
+    /// service's, if the number has one of its own (`GET /{pn}?fields=
+    /// webhook_configuration`). The WABA's override and the app's callback
+    /// URL that Meta's answer also carries are dropped. Not gated by the
+    /// setting: the owner can always see what is set.
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure, with its `details`.
+    pub async fn webhook_override(&self) -> Result<Option<String>, ServiceError> {
+        let info = self
+            .read(self.phone().get(&["webhook_configuration"]).await)
+            .await?;
+        Ok(info
+            .webhook_configuration
+            .and_then(|configuration| configuration.phone_number)
+            .filter(|url| !url.is_empty()))
+    }
+
+    /// Make Meta deliver this number's supported webhooks to `url` instead
+    /// of the service, verified with `verify_token` (design D441 to D444).
+    /// In this order, each refusing before anything is sent: the deployment
+    /// has enabled it ([`Self::with_webhook_override`]), `409
+    /// webhooks_not_configured` without webhooks out, the shape (`url` 1 to
+    /// 200 characters, as Meta's page says, and `verify_token` not empty),
+    /// and the destination, **checked as a webhook endpoint's is**
+    /// ([`pin`]: `https`, no credentials, listed, every address it resolves
+    /// to allowed). Audited as [`WEBHOOK_OVERRIDE_SET`] when Meta answered
+    /// or may have; a refusal as [`WEBHOOK_OVERRIDE_REFUSED`]. Meta's texts
+    /// of a failed call stay out of the answer and the logs (they may
+    /// quote what was sent).
+    ///
+    /// # Errors
+    ///
+    /// `403 feature_not_available` with the setting off; `409
+    /// webhooks_not_configured`; `422 invalid_request` on `url` or
+    /// `verify_token`; Meta's refusal or failure, without its texts.
+    pub async fn set_webhook_override(
+        &self,
+        url: &str,
+        verify_token: VerifyToken,
+    ) -> Result<(), ServiceError> {
+        if !self.webhook_override {
+            self.refused("disabled");
+            return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
+        }
+        let Some(out) = self.webhooks_out else {
+            self.refused("not_configured");
+            return Err(ServiceError::new(ErrorCode::WEBHOOKS_NOT_CONFIGURED));
+        };
+        if verify_token.expose_secret().is_empty() {
+            self.refused("shape");
+            return Err(ServiceError::invalid("verify_token"));
+        }
+        let callback = CallbackOverride::new(url, verify_token);
+        if callback.validate().is_err() {
+            self.refused("shape");
+            return Err(ServiceError::invalid("url"));
+        }
+        if let Err(refusal) = pin(&out.policy, out.resolver.as_ref(), url).await {
+            self.refused(match refusal {
+                Refusal::Unresolved => "unresolved",
+                _ => "destination",
+            });
+            return Err(ServiceError::invalid("url"));
+        }
+        let result = self.phone().set_webhook_override(&callback).await;
+        self.changed(WEBHOOK_OVERRIDE_SET, None, true, result).await
+    }
+
+    /// Remove this number's override, so Meta delivers its webhooks to the
+    /// WABA's override or the app's callback (the service's) again. **Never
+    /// gated**: not by the setting, not by the allow-list. Audited as
+    /// [`WEBHOOK_OVERRIDE_CLEARED`].
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure, with its `details`.
+    pub async fn clear_webhook_override(&self) -> Result<(), ServiceError> {
+        let result = self.phone().clear_webhook_override().await;
+        self.changed(WEBHOOK_OVERRIDE_CLEARED, None, false, result)
             .await
     }
 }
