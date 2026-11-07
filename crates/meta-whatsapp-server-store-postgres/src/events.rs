@@ -73,8 +73,8 @@ use time::OffsetDateTime;
 
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
-    RouteGuard, StoredEvent,
+    EventHeader, EventPage, EventQuery, GuardedBinding, HeaderPage, HeaderQuery, NewEvent, Outbox,
+    RECEIVED_MEDIA_ROWS, ReceivedMedia, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 
@@ -383,6 +383,63 @@ impl Outbox for PgEventStore {
         }
         Ok(EventPage {
             events,
+            more,
+            purged_through,
+            high_water,
+        })
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        // Roadmap M2l. One statement (one snapshot with the bounds), and
+        // only the columns a header names: `data` (a jsonb, stored out of
+        // line once large) is never selected, so its pages are not read.
+        // One row more than `limit` tells `more`; the scan streams over
+        // the primary key's order and the `LIMIT` stops it.
+        let rows = sqlx::query(
+            "WITH bounds AS ( \
+               SELECT COALESCE(max(purged_through), 0) AS purged_through, \
+                      COALESCE(max(last_sequence), 0) AS high_water \
+               FROM wa_server_event_streams WHERE stream = $1 \
+             ), page AS ( \
+               SELECT e.sequence, e.id, e.tenant_id, e.event_type \
+               FROM wa_server_events e, bounds b \
+               WHERE e.stream = $1 AND e.sequence > COALESCE($2::bigint, b.purged_through) \
+                 AND ($3::text[] IS NULL OR e.event_type = ANY($3)) \
+               ORDER BY e.sequence LIMIT $4 + 1 \
+             ) \
+             SELECT b.purged_through, b.high_water, \
+                    p.sequence, p.id, p.tenant_id, p.event_type \
+             FROM bounds b LEFT JOIN page p ON true \
+             ORDER BY p.sequence",
+        )
+        .bind(query.tenant.as_str())
+        .bind(query.after)
+        .bind(query.types.as_deref())
+        .bind(i64_of(query.limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let first = rows.first().ok_or_else(|| corrupt("purged_through"))?;
+        let purged_through: i64 = get(first, "purged_through")?;
+        let high_water: i64 = get(first, "high_water")?;
+        let mut headers = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let Some(sequence) = get::<Option<i64>>(row, "sequence")? else {
+                continue;
+            };
+            headers.push(EventHeader {
+                sequence,
+                id: get(row, "id")?,
+                tenant: get::<Option<String>>(row, "tenant_id")?
+                    .map(|t| TenantId::parse(&t).ok_or_else(|| corrupt("tenant_id")))
+                    .transpose()?,
+                event_type: get(row, "event_type")?,
+            });
+        }
+        let more = headers.len() > query.limit;
+        headers.truncate(query.limit);
+        Ok(HeaderPage {
+            headers,
             more,
             purged_through,
             high_water,

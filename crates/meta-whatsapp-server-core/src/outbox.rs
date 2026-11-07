@@ -572,6 +572,90 @@ pub struct EventPage {
     pub high_water: i64,
 }
 
+/// Which of a tenant's events [`Outbox::headers_after`] asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderQuery {
+    /// The tenant. Operator-only rows (no tenant) never match.
+    pub tenant: TenantId,
+    /// Events after this sequence of the tenant's stream; `None` starts at
+    /// the oldest retained.
+    pub after: Option<i64>,
+    /// Only these types; `None` for every type.
+    pub types: Option<Vec<String>>,
+    /// At most this many headers.
+    pub limit: usize,
+}
+
+impl HeaderQuery {
+    /// The [`EventQuery`] of the same rows with their data, within
+    /// `max_bytes`: for a test double or a wrapper that has only
+    /// [`Outbox::page`] to answer from.
+    #[must_use]
+    pub fn as_event_query(&self, max_bytes: usize) -> EventQuery {
+        EventQuery {
+            tenant: self.tenant.clone(),
+            after: self.after,
+            types: self.types.clone(),
+            phone_number_id: None,
+            limit: self.limit,
+            max_bytes,
+        }
+    }
+}
+
+/// An event without its data: what a webhook fan-out needs to record a
+/// delivery (roadmap M2l).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventHeader {
+    /// Its sequence in its stream.
+    pub sequence: i64,
+    /// Its public id.
+    pub id: String,
+    /// The tenant it belongs to; `None` for an operator-only row.
+    pub tenant: Option<TenantId>,
+    /// Its type.
+    pub event_type: String,
+}
+
+/// [`Outbox::headers_after`]'s rows and the stream's bounds, read at one
+/// instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderPage {
+    /// The matching events after the cursor, in sequence order: at most
+    /// `limit`.
+    pub headers: Vec<EventHeader>,
+    /// Whether more matching events follow the last one.
+    pub more: bool,
+    /// As [`EventPage::purged_through`].
+    pub purged_through: i64,
+    /// As [`EventPage::high_water`].
+    pub high_water: i64,
+}
+
+impl HeaderPage {
+    /// The headers of a full page, for a test double or a wrapper that has
+    /// only [`Outbox::page`] to answer from (it reads the data this port
+    /// method exists to spare).
+    #[must_use]
+    pub fn from_page(page: EventPage) -> Self {
+        Self {
+            headers: page
+                .events
+                .into_iter()
+                .map(|event| EventHeader {
+                    sequence: event.sequence,
+                    id: event.id,
+                    tenant: event.tenant,
+                    event_type: event.event_type,
+                })
+                .collect(),
+            more: page.more,
+            purged_through: page.purged_through,
+            high_water: page.high_water,
+        }
+    }
+}
+
 /// The event outbox.
 #[async_trait]
 pub trait Outbox: Send + Sync + 'static {
@@ -608,6 +692,23 @@ pub trait Outbox: Send + Sync + 'static {
     /// A tenant's events after the query's cursor, and its stream's bounds,
     /// from one consistent read.
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage>;
+
+    /// The rows [`Outbox::page`] would answer for a query of the same
+    /// tenant, cursor, types and `limit` (no phone number, no byte
+    /// budget), as headers: sequence, id, tenant and type, **never their
+    /// data** (roadmap M2l; design D106). The webhook fan-out learns what
+    /// to record from it without reading a page's data (up to 8 MiB); the
+    /// delivery attempt reads the full event later by its id.
+    ///
+    /// A backend selects only those fields (Postgres: the columns, which
+    /// leaves the `data` column's out-of-line storage unread; MongoDB: a
+    /// projection excluding `data`), in one consistent read with the
+    /// stream's bounds, as [`Outbox::page`].
+    ///
+    /// # Errors
+    ///
+    /// The library's `StorageError`.
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage>;
 
     /// The event of id `id` in `tenant`'s stream, if it is stored there
     /// (`GET /v1/events/{id}`, roadmap M2b): never another tenant's event
