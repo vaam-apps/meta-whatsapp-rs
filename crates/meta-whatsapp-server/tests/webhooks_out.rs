@@ -1118,6 +1118,33 @@ async fn a_platform_keys_endpoint_receives_the_tenants_it_names() {
     }
     let listed_a = h.call(Call::get("/v1/webhook-endpoints").key(&key_a)).await;
     assert!(listed_a.json()["data"].as_array().unwrap().is_empty());
+    // A rotation and a ping reach it through the platform key, with the
+    // set it was checked against (the conformance suite proves what a
+    // stale set stops; here, that the service passes the set at all).
+    let rotated = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/webhook-endpoints/{id}/rotate-secret"),
+            )
+            .key(&platform)
+            .tenant(A),
+        )
+        .await;
+    assert_eq!(rotated.status, StatusCode::OK, "{}", rotated.text);
+    let pinged = h
+        .call(
+            Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test"))
+                .key(&platform)
+                .tenant(A),
+        )
+        .await;
+    assert_eq!(
+        (pinged.status, pinged.json()["type"].as_str()),
+        (StatusCode::ACCEPTED, Some("ping")),
+        "{}",
+        pinged.text
+    );
     // A change of the set (the conformance suite proves what it stops).
     let patched = h
         .call(
