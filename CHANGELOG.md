@@ -12,6 +12,18 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5f3)
+
+- **The group records go with the binding** (roadmap M5f3; D380-D382,
+  proposed): a per-number index beside `wa.server.group`
+  (`wa.server.group.index`, hashed shards, no `KvStore` change) lets the
+  service purge a number's records when its WABA is unbound (a tenant's
+  disconnection, a tenant's deletion, the operator's unbind, Embedded
+  Signup's offboarding), and `DELETE
+  /v1/admin/numbers/{phone_number_id}/group-records` purges one number's
+  on the operator's request (audited `group_records_purged`; OpenAPI
+  additive).
+
 ### Changed (roadmap M2l)
 
 - **The webhook fan-out reads events' ids, not their data** (roadmap

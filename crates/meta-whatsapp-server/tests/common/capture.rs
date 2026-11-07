@@ -1007,6 +1007,16 @@ async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
         secrets.push(rotated.json()["secret"].as_str().unwrap().to_owned());
     }
     reseal_webhook_secrets(h, admin, configured).await;
+    let purged = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                "/v1/admin/numbers/106540352242922/group-records",
+            )
+            .key(admin),
+        )
+        .await;
+    assert_eq!(purged.status.as_u16(), 200, "{}", purged.text);
     let pinged = h
         .call(Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test")).key(&key))
         .await;
