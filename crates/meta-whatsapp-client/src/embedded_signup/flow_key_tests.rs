@@ -225,3 +225,37 @@ async fn the_key_is_in_no_debug_or_error_text() {
     let error = vault.flow_key(&w, "t").await.unwrap_err();
     assert!(!format!("{error} {error:?}").contains(&body_of(PKCS8)));
 }
+
+/// The record's name and layout are stable identifiers (docs/architecture.md,
+/// § Stable identifiers): a record written today must open after any
+/// rename. The literals spell their `w` as `\x77` so a search-and-replace
+/// cannot rewrite them with the code.
+#[tokio::test]
+async fn the_store_key_and_the_sealed_layout_are_pinned() {
+    let kv = kv();
+    let vault = vault(&kv);
+    let w = waba("100");
+    vault
+        .store_flow_key(&w, "tenant-a", &pem(PKCS8))
+        .await
+        .unwrap();
+    let key = flow_key_of(&w);
+    assert_eq!(key.namespace(), "\x77a.token");
+    assert_eq!(key.key(), "flow-key/100");
+    let stored = kv.get(&key).await.unwrap().unwrap();
+    let record: serde_json::Value = serde_json::from_slice(&stored.value).unwrap();
+    let mut fields: Vec<&str> = record
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["ciphertext", "kid", "nonce", "v"]);
+    let blob: SealedBlob = serde_json::from_value(record).unwrap();
+    let plain = vault.open_blob(&key, &blob).unwrap();
+    let plain: serde_json::Value = serde_json::from_slice(&plain).unwrap();
+    assert_eq!(plain["owner"], "tenant-a");
+    assert_eq!(plain["private_key_pem"], PKCS8);
+    assert_eq!(plain.as_object().unwrap().len(), 2);
+}

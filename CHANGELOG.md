@@ -14,6 +14,20 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added
 
+- **A Flow key per tenant** (roadmap M5d2, first slice; proposals D370 to
+  D374, to be decided by the coordinator): the library's
+  `TokenVault::store_flow_key`, `flow_key`, `delete_flow_key` and
+  `holds_flow_key` (a sealed vault record `flow-key/<WABA_ID>` naming its
+  owner, re-sealed by `TokenVault::rotate`); `PUT`, `GET` and `DELETE
+  /v1/wabas/{waba_id}/flow-key` (scope `flows`; the `PUT` takes an
+  `Idempotency-Key` over the public half's digest; audited as
+  `flow_key_set` and `flow_key_deleted`; additive to the OpenAPI document);
+  the Flows data endpoint decrypts with the tenant's own key first, the
+  deployment's only if the new `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK`
+  (`allow` by default, or `deny`) allows it, and the endpoint no longer
+  depends on `WA_SERVER_FLOWS_PRIVATE_KEY`. The record's name, the setting,
+  the route, the operation ids and the two audit actions are pending the
+  owner's confirmation before the first release. No migration.
 - A webhook endpoint made with a platform key may name `tenants` (one to
   ten): it receives those tenants' events, each delivery read in its own
   tenant's stream (roadmap M2m; migration 11).
