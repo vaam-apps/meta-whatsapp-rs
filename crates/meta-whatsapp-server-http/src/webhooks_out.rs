@@ -1453,9 +1453,20 @@ mod tests {
         let resolver = Answer::new("127.0.0.1");
         let policy = loopback();
         let port = addr.port();
-        for host in ["receiver.test", "Receiver.TEST", "receiver.test.", "RECEIVER.test."] {
+        for host in [
+            "receiver.test",
+            "Receiver.TEST",
+            "receiver.test.",
+            "RECEIVER.test.",
+        ] {
             assert_eq!(
-                deliver(&sender, &policy, &resolver, &format!("http://{host}:{port}/")).await,
+                deliver(
+                    &sender,
+                    &policy,
+                    &resolver,
+                    &format!("http://{host}:{port}/")
+                )
+                .await,
                 Ok(Ok(204)),
                 "{host}"
             );
@@ -1500,10 +1511,7 @@ mod tests {
     #[tokio::test]
     async fn an_answer_that_closes_the_connection_is_not_pooled() {
         let cases: [(&[u8], usize); 3] = [
-            (
-                b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n",
-                0,
-            ),
+            (b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n", 0),
             (b"HTTP/1.0 200 OK\r\ncontent-length: 0\r\n\r\n", 0),
             (b"HTTP/1.1 204 No Content\r\n\r\n", 1),
         ];
