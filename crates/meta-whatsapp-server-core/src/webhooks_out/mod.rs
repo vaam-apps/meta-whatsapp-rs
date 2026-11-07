@@ -34,8 +34,10 @@
 //!
 //! **What is not built** (the design's §4.4 names them): `"*"` for
 //! `tenants`, a data key rotation walk (a previous key still opens what it
-//! sealed; M2i), and a connection pool to the receivers (each attempt
-//! opens its own connection to the address it checked; M2j).
+//! sealed; M2i). The sender's connection pool to the receivers (roadmap
+//! M2j) is the HTTP crate's: it is handed the address each attempt's own
+//! check pinned and reuses a connection for that address and host name
+//! only.
 
 use std::fmt;
 use std::time::Duration;

@@ -967,6 +967,68 @@ fn webhooks_out_read_a_data_key_an_allow_list_and_a_window() {
     }
 }
 
+/// Roadmap M2j: the sender's connection pool. Unset, the defaults (30 s
+/// idle, 2 per destination, 64 destinations); each variable sets its own
+/// bound; `WA_SERVER_WEBHOOK_POOL=off` is `PoolSettings::off()` whatever
+/// the other three say. Decisive: each setting read into its field, and
+/// `off` turning the pool off.
+#[test]
+fn webhooks_out_pool_settings() {
+    use meta_whatsapp_server_http::webhooks_out::PoolSettings;
+    use std::time::Duration;
+    let unset = Config::from_env(&production()).unwrap();
+    assert_eq!(unset.webhooks.pool, PoolSettings::default());
+    assert_eq!(
+        (
+            unset.webhooks.pool.idle_timeout,
+            unset.webhooks.pool.max_idle_per_key,
+            unset.webhooks.pool.max_keys
+        ),
+        (Duration::from_secs(30), 2, 64)
+    );
+    let set = Config::from_env(
+        &production()
+            .set("WA_SERVER_WEBHOOK_POOL", "on")
+            .set("WA_SERVER_WEBHOOK_POOL_IDLE", "10s")
+            .set("WA_SERVER_WEBHOOK_POOL_PER_DESTINATION", "5")
+            .set("WA_SERVER_WEBHOOK_POOL_DESTINATIONS", "7"),
+    )
+    .unwrap();
+    assert_eq!(
+        set.webhooks.pool,
+        PoolSettings {
+            idle_timeout: Duration::from_secs(10),
+            max_idle_per_key: 5,
+            max_keys: 7,
+        }
+    );
+    let off = Config::from_env(
+        &production()
+            .set("WA_SERVER_WEBHOOK_POOL", "off")
+            .set("WA_SERVER_WEBHOOK_POOL_IDLE", "10s"),
+    )
+    .unwrap();
+    assert_eq!(off.webhooks.pool, PoolSettings::off());
+    assert!(!off.webhooks.pool.enabled());
+    for (name, value) in [
+        ("WA_SERVER_WEBHOOK_POOL", "yes"),
+        ("WA_SERVER_WEBHOOK_POOL_IDLE", "0s"),
+        ("WA_SERVER_WEBHOOK_POOL_IDLE", "soon"),
+        ("WA_SERVER_WEBHOOK_POOL_PER_DESTINATION", "0"),
+        ("WA_SERVER_WEBHOOK_POOL_DESTINATIONS", "many"),
+    ] {
+        let error = refused(&production().set(name, value));
+        assert!(
+            matches!(error, ConfigError::Invalid { .. }),
+            "{name}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{name}: the value is quoted"
+        );
+    }
+}
+
 /// Roadmap M5c1: `WA_SERVER_MEDIA_CONVERTER`. Unset or `none`, no
 /// converter (an upload that asks for one is refused); `ffmpeg` sets the
 /// library's converter in a build with the `ffmpeg` feature and is refused

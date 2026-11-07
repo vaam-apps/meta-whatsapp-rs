@@ -47,8 +47,8 @@ prometheus-client.workspace = true
 # the address the destination check pinned, over TCP, then TLS on an
 # explicit aws-lc-rs provider (never the process default) with the
 # platform's trust store, as the library's transports do, and speaks
-# HTTP/1.1 through hyper's client connection: no pool, no resolver of its
-# own, no redirect followed. All already in the tree (reqwest's, sqlx's).
+# HTTP/1.1 through hyper's client connection: a pool of its own (roadmap
+# M2j), no resolver of its own, no redirect followed. All already in the tree (reqwest's, sqlx's).
 async-trait.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
