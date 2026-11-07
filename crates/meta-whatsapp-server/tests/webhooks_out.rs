@@ -901,3 +901,118 @@ async fn a_retry_in_backoff_does_not_age_the_backlog() {
     assert_eq!(gauge(&metrics, PENDING), 1);
     assert!((1..3_600).contains(&age), "{age}: {metrics}");
 }
+
+/// Roadmap M2m over HTTP: `tenants` on `POST /v1/webhook-endpoints` is a
+/// platform key's. A tenant key's is `422` on `tenants`; a platform key
+/// acting as A and naming B receives B's events (Meta's webhook through
+/// `/webhooks/meta`) and not A's own, and the answers list `tenants`; a
+/// tenant it may not name is `403 forbidden`; A's tenant key and B's find
+/// the endpoint missing, the platform key reads and deletes it.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn a_platform_keys_endpoint_receives_the_tenants_it_names() {
+    let (h, dispatcher) = harness().await;
+    h.connect(B, EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-B")
+        .await;
+    let key_a = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let key_b = h.tenant_key(B, &[Scope::Webhooks]).await;
+    let platform = h
+        .platform_key(
+            meta_whatsapp_server::model::AllowedTenants::Only(vec![
+                meta_whatsapp_server::model::TenantId::parse(A).unwrap(),
+                meta_whatsapp_server::model::TenantId::parse(B).unwrap(),
+            ]),
+            &[Scope::Webhooks],
+        )
+        .await;
+    let (addr, got) = receiver().await;
+    let url = format!("http://{addr}/hook");
+    let post = |key: &str, tenants: Value| {
+        let call = Call::new(Method::POST, "/v1/webhook-endpoints")
+            .key(key)
+            .json(&json!({"url": url, "types": ["message_received"], "tenants": tenants}));
+        if key == platform {
+            call.tenant(A)
+        } else {
+            call
+        }
+    };
+    // A tenant key may not name tenants, not even its own.
+    let reply = h.call(post(&key_a, json!([A]))).await;
+    assert_eq!(
+        (reply.status, reply.json()["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("tenants")),
+        "{}",
+        reply.text
+    );
+    // A platform key's: only those it may name, one to ten.
+    for (tenants, status, field) in [
+        (json!([B, "tenant-c"]), StatusCode::FORBIDDEN, None),
+        (json!([]), StatusCode::UNPROCESSABLE_ENTITY, Some("tenants")),
+        (json!("*"), StatusCode::UNPROCESSABLE_ENTITY, Some("body")),
+    ] {
+        let reply = h.call(post(&platform, tenants.clone())).await;
+        assert_eq!(
+            (reply.status, reply.json()["error"]["field"].as_str()),
+            (status, field),
+            "{tenants}: {}",
+            reply.text
+        );
+    }
+    let reply = h.call(post(&platform, json!([B]))).await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
+    let created = reply.json();
+    assert_eq!(created["tenants"], json!([B]));
+    let secret = EndpointSecret::parse(created["secret"].as_str().unwrap()).unwrap();
+    let id = created["id"].as_str().unwrap();
+    // B's number, B's event: delivered, as B's.
+    assert_eq!(h.webhook(&example_text()).await.status, StatusCode::OK);
+    assert_eq!(round(&dispatcher).await, 1);
+    let received = got.lock().unwrap().clone();
+    assert_eq!(received.len(), 1);
+    check(&received[0], &secret).unwrap();
+    let body: Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(body["tenant_id"], B);
+    assert_eq!(body["phone_number_id"], EXAMPLE_PN);
+    // Read through the platform key, as A's; hidden from A's and B's keys.
+    let read = h
+        .call(
+            Call::get(format!("/v1/webhook-endpoints/{id}"))
+                .key(&platform)
+                .tenant(A),
+        )
+        .await;
+    assert_eq!(read.status, StatusCode::OK, "{}", read.text);
+    assert_eq!(read.json()["tenants"], json!([B]));
+    let listed = h
+        .call(Call::get("/v1/webhook-endpoints").key(&platform).tenant(A))
+        .await;
+    assert_eq!(listed.json()["data"][0]["tenants"], json!([B]));
+    for key in [&key_a, &key_b] {
+        let reply = h
+            .call(Call::get(format!("/v1/webhook-endpoints/{id}")).key(key))
+            .await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text);
+    }
+    let listed_a = h.call(Call::get("/v1/webhook-endpoints").key(&key_a)).await;
+    assert!(listed_a.json()["data"].as_array().unwrap().is_empty());
+    // A change of the set (the conformance suite proves what it stops).
+    let patched = h
+        .call(
+            Call::new(Method::PATCH, format!("/v1/webhook-endpoints/{id}"))
+                .key(&platform)
+                .tenant(A)
+                .json(&json!({"tenants": [A]})),
+        )
+        .await;
+    assert_eq!(patched.status, StatusCode::OK, "{}", patched.text);
+    assert_eq!(patched.json()["tenants"], json!([A]));
+    let deleted = h
+        .call(
+            Call::new(Method::DELETE, format!("/v1/webhook-endpoints/{id}"))
+                .key(&platform)
+                .tenant(A),
+        )
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+}

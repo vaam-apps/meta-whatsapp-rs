@@ -42,11 +42,12 @@ use async_trait::async_trait;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::clock::{Clock, ManualClock};
+use meta_whatsapp_rs::core::ids::WabaId;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use time::OffsetDateTime;
 use time::macros::datetime;
 
-use super::outbox::{bind, row};
+use super::outbox::{bind, row, waba_of};
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
@@ -3028,6 +3029,17 @@ pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
     // A is deleted: it leaves the endpoint, and its pending delivery.
     let a2 = event_for(backend, &a, &digits[0]).await;
     rig.dispatcher.fan_out().await.unwrap();
+    // (A tenant with a WABA is not deleted: the operator unbinds it first.)
+    let unbind = |pn: String| async move {
+        assert!(
+            backend
+                .records()
+                .unbind_waba(&WabaId::new(waba_of(&pn)).unwrap())
+                .await
+                .unwrap()
+        );
+    };
+    unbind(digits[0].clone()).await;
     assert_eq!(
         records.delete_tenant(&tenant(&a)).await.unwrap(),
         DeleteTenantOutcome::Deleted
@@ -3043,7 +3055,7 @@ pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
     assert_eq!(round(&rig).await, 0, "A's pending delivery went with it");
     // The same id again is a new tenant, not a named one.
     records.create_tenant(&tenant(&a), "").await.unwrap();
-    let a3 = event_for(backend, &a, &digits[0]).await;
+    let a3 = event_for(backend, &a, &super::unique_digits()).await;
     let b3 = event_for(backend, &b, &digits[1]).await;
     assert_eq!(round(&rig).await, 1, "B's only");
     assert_eq!(
@@ -3055,6 +3067,7 @@ pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
         left.id
     );
     // All gone: nothing, and not the owner's events either.
+    unbind(digits[1].clone()).await;
     assert_eq!(
         records.delete_tenant(&tenant(&b)).await.unwrap(),
         DeleteTenantOutcome::Deleted
