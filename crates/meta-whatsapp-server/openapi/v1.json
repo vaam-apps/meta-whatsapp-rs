@@ -28509,7 +28509,7 @@
           {
             "name": "WA-Tenant",
             "in": "header",
-            "description": "The tenant a platform key acts as: the endpoint is that tenant's",
+            "description": "The tenant a platform key acts as: the endpoint is that tenant's (and receives its events, unless `tenants` names others)",
             "required": false,
             "schema": {
               "type": [
@@ -28551,7 +28551,7 @@
             }
           },
           "403": {
-            "description": "`forbidden` (no `webhooks` scope), `tenant_suspended`",
+            "description": "`forbidden` (no `webhooks` scope; or a tenant in `tenants` the platform key may not name, or that does not exist), `tenant_suspended`",
             "content": {
               "application/json": {
                 "schema": {
@@ -28571,7 +28571,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `url` (not `https`, credentials in it, not in the allow-list, or its host resolving to an address the list does not admit), `types` (none, or one a tenant never receives) or `body`",
+            "description": "`invalid_request` on `url` (not `https`, credentials in it, not in the allow-list, or its host resolving to an address the list does not admit), `types` (none, or one a tenant never receives), `tenants` (from a tenant key; empty, over 10, or not a tenant id) or `body`",
             "content": {
               "application/json": {
                 "schema": {
@@ -28907,7 +28907,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `url`, `types` or `body`, as on a creation",
+            "description": "`invalid_request` on `url`, `types`, `tenants` (also for an endpoint made without) or `body`, as on a creation",
             "content": {
               "application/json": {
                 "schema": {
@@ -32282,6 +32282,16 @@
           "types"
         ],
         "properties": {
+          "tenants": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The tenants whose events it receives, instead of the `WA-Tenant`'s\nown: a **platform key's** only (`422` on `tenants` from a tenant\nkey), one to ten tenant ids, each once, each one the key may name\nand that exists (`403 forbidden` otherwise, alike for both). Every\ndelivery carries one tenant's event, read in that tenant's own\nstream; a tenant deleted later leaves the endpoint (its events\nstop), and the endpoint does not receive the `WA-Tenant`'s unless\nit is named. Absent: the `WA-Tenant`'s own events."
+          },
           "types": {
             "type": "array",
             "items": {
@@ -40108,6 +40118,16 @@
             ],
             "description": "Off stops deliveries (they wait); on resumes them, from where the\nendpoint stopped, within the outbox's retention, and clears the\nservice's `disabled_reason`."
           },
+          "tenants": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "New tenants, replacing those of an endpoint made with `tenants`\n(same rules as on a creation; `422` on `tenants` for an endpoint\nmade without): one kept keeps its place in its stream, one added\nreceives from now on, one left out stops at once, its pending\ndeliveries deleted."
+          },
           "types": {
             "type": [
               "array",
@@ -40602,6 +40622,16 @@
             ],
             "format": "date-time",
             "description": "Until when the secret before the last rotation signs too (RFC\n3339); `null` without one."
+          },
+          "tenants": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The tenants whose events it receives, when it was made with\n`tenants`; absent otherwise (it receives the `WA-Tenant`'s own)."
           },
           "types": {
             "type": "array",

@@ -109,8 +109,8 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::flows_endpoint::VaultFlowKeys;
 use crate::keys::PresentedKey;
 use crate::model::{
-    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding, NumberStatus, PageRequest,
-    Scope, TenantId, TenantStatus, VaultEntry, WabaBinding,
+    AllowedTenants, ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding,
+    NumberStatus, PageRequest, Scope, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use crate::number_events::{NumberEvent, NumberEvents};
 use crate::store::{RecordStore, StoreResult};
@@ -350,6 +350,8 @@ impl Issuer {
 pub struct Caller {
     key_id: String,
     tenant: TenantId,
+    /// The tenants a platform key may name; `None` for a tenant key.
+    platform: Option<AllowedTenants>,
     issuer: Issuer,
 }
 
@@ -358,11 +360,20 @@ impl std::fmt::Debug for Caller {
         f.debug_struct("Caller")
             .field("key_id", &self.key_id)
             .field("tenant", &self.tenant)
+            .field("platform", &self.platform.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl Caller {
+    /// The tenants its key may name (`WA-Tenant`, and the bodies that
+    /// name tenants: webhook endpoints' `tenants`, roadmap M2m), when it
+    /// is a platform key; `None` for a tenant key. As [`Self::tenant`]
+    /// says, trust it once [`Authorizer::admit`] accepted the [`Caller`].
+    pub fn platform_allowed(&self) -> Option<&AllowedTenants> {
+        self.platform.as_ref()
+    }
+
     /// The tenant it acts as, as its maker says: act on it only once
     /// [`Authorizer::admit`] accepted the [`Caller`].
     pub fn tenant(&self) -> &TenantId {
@@ -782,11 +793,45 @@ impl Authorizer {
         if !key.scopes.contains(&scope) {
             return Err(ServiceError::forbidden());
         }
+        let platform = match &key.owner {
+            KeyOwner::Platform(allowed) => Some(allowed.clone()),
+            _ => None,
+        };
         Ok(Caller {
             key_id: key.key_id,
             tenant,
+            platform,
             issuer: self.issuer.clone(),
         })
+    }
+
+    /// The tenants a platform key's request names in its body (roadmap
+    /// M2m: a webhook endpoint's `tenants`), each one the key may name
+    /// and one that exists, as the `WA-Tenant` header is checked (step
+    /// 2): a tenant outside the key's set and a missing one answer alike,
+    /// `403 forbidden`, which says nothing of tenants outside the set. A
+    /// suspended tenant passes (it may be named; its deliveries wait).
+    ///
+    /// # Errors
+    ///
+    /// `403 forbidden` for a [`Caller`] another [`Authorizer`] made, a
+    /// tenant key's (it names no one but its own tenant), or a tenant it
+    /// may not name or that does not exist; the records' failure.
+    pub async fn name_tenants(
+        &self,
+        caller: &Caller,
+        tenants: &[TenantId],
+    ) -> Result<(), ServiceError> {
+        self.admit(caller)?;
+        let Some(allowed) = caller.platform_allowed() else {
+            return Err(ServiceError::forbidden());
+        };
+        for tenant in tenants {
+            if !allowed.allows(tenant) || self.records.tenant(tenant).await?.is_none() {
+                return Err(ServiceError::forbidden());
+            }
+        }
+        Ok(())
     }
 
     /// Step 1 for `/v1/admin`, with an admin key, else `403 forbidden`.

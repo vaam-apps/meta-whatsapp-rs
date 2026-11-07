@@ -22,6 +22,12 @@
 //!   a rotation, one after its 24 hours; an event over 256 KiB delivered
 //!   truncated and read whole by its tenant alone; each delivery its own
 //!   tenant's event only.
+//! - **A platform key's endpoint of several tenants** (roadmap M2m): it
+//!   receives the named tenants' events and no other's, each delivery its
+//!   own tenant's event; `tenants` is `422` from a tenant key and checked
+//!   against the key's set (`403`); only a key that may name them all
+//!   reaches it; a change of the set keeps, adds and drops by tenant; a
+//!   deleted tenant leaves it (never widened, a suspended one waits).
 //! - **A re-seal is a compare-and-set** (roadmap M2i): the sealed secrets
 //!   are replaced only while both are the values read, and nothing else of
 //!   the row changes; every endpoint of every tenant, enabled or not, is
@@ -44,23 +50,25 @@ use async_trait::async_trait;
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::clock::{Clock, ManualClock};
+use meta_whatsapp_rs::core::ids::WabaId;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use time::OffsetDateTime;
 use time::macros::datetime;
 
-use super::outbox::{bind, row};
+use super::outbox::{bind, row, waba_of};
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
 use crate::model::{
-    DeleteTenantOutcome, KeyOwner, MAX_PAGE_SIZE, PageRequest, Scope, TenantId, TenantStatus,
+    AllowedTenants, DeleteTenantOutcome, KeyOwner, MAX_PAGE_SIZE, PageRequest, Scope, TenantId,
+    TenantStatus,
 };
 use crate::outbox::NewEvent;
 use crate::webhooks_out::destination::{DestinationPolicy, ResolveError, Resolver};
 use crate::webhooks_out::dispatch::{
     DispatchSettings, Dispatcher, SendError, SendRequest, Sender, WebhooksOut,
 };
-use crate::webhooks_out::endpoints::{CreateEndpoint, WebhookEndpoints};
+use crate::webhooks_out::endpoints::{CreateEndpoint, UpdateEndpoint, WebhookEndpoints};
 use crate::webhooks_out::reseal::{ResealReport, reseal_batch, reseal_secrets};
 use crate::webhooks_out::schedule::{Jitter, RetrySchedule};
 use crate::webhooks_out::seal::{DataKey, DataKeys};
@@ -90,6 +98,12 @@ pub async fn run(backend: &dyn Backend) {
     a_large_event_is_delivered_truncated(backend).await;
     two_dispatchers_send_each_event_once(backend).await;
     a_slow_endpoint_does_not_starve_another(backend).await;
+    a_platform_endpoint_receives_its_named_tenants_only(backend).await;
+    tenants_are_a_platform_keys_and_checked(backend).await;
+    a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(backend).await;
+    a_platform_endpoint_changes_its_tenants(backend).await;
+    a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(backend).await;
+    a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set_checked(backend).await;
     every_endpoint_is_listed_to_the_walk(backend).await;
     a_reseal_is_a_compare_and_set(backend).await;
     resealing_lets_the_old_key_go(backend).await;
@@ -123,6 +137,7 @@ fn new_endpoint(tenant_id: &str, cursor: i64) -> NewEndpoint {
         types: vec!["message_received".to_owned()],
         secret: sealed(1),
         cursor,
+        tenants: None,
         now: START,
     }
 }
@@ -350,6 +365,8 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
                 url: Some("https://hooks.example.com/other".to_owned()),
                 types: Some(vec!["status_updated".to_owned()]),
                 enabled: Some(false),
+                tenants: None,
+                reached_through: None,
             },
             START + time::Duration::seconds(1),
         )
@@ -419,7 +436,13 @@ pub async fn a_fan_out_moves_its_cursor_once(backend: &dyn Backend) {
     };
     assert!(
         !store
-            .fan_out(&endpoint.id, 5, 6, &[delivery("evt_1", 1, START)])
+            .fan_out(
+                &endpoint.id,
+                &endpoint.tenant,
+                5,
+                6,
+                &[delivery("evt_1", 1, START)]
+            )
             .await
             .unwrap(),
         "not its cursor"
@@ -437,6 +460,7 @@ pub async fn a_fan_out_moves_its_cursor_once(backend: &dyn Backend) {
         store
             .fan_out(
                 &endpoint.id,
+                &endpoint.tenant,
                 0,
                 2,
                 &[delivery("evt_1", 1, START), delivery("evt_2", 2, START)]
@@ -446,7 +470,13 @@ pub async fn a_fan_out_moves_its_cursor_once(backend: &dyn Backend) {
     );
     assert!(
         store
-            .fan_out(&endpoint.id, 2, 3, &[delivery("evt_2", 2, START)])
+            .fan_out(
+                &endpoint.id,
+                &endpoint.tenant,
+                2,
+                3,
+                &[delivery("evt_2", 2, START)]
+            )
             .await
             .unwrap(),
         "a duplicate is skipped, the cursor moves"
@@ -475,8 +505,8 @@ pub async fn a_fan_out_moves_its_cursor_once(backend: &dyn Backend) {
     // Two racing from one cursor: one wins.
     let (x, y) = ([delivery("evt_3", 3, START)], [delivery("evt_3", 3, START)]);
     let (one, two) = tokio::join!(
-        store.fan_out(&endpoint.id, 3, 4, &x),
-        store.fan_out(&endpoint.id, 3, 4, &y),
+        store.fan_out(&endpoint.id, &endpoint.tenant, 3, 4, &x),
+        store.fan_out(&endpoint.id, &endpoint.tenant, 3, 4, &y),
     );
     assert_eq!(
         u8::from(one.unwrap()) + u8::from(two.unwrap()),
@@ -525,6 +555,7 @@ pub async fn a_claim_is_exclusive_until_its_lease_ends(backend: &dyn Backend) {
         store
             .fan_out(
                 &ea1.id,
+                &ea1.tenant,
                 0,
                 2,
                 &[delivery("evt_a1", 1, early), delivery("evt_a2", 2, at)]
@@ -536,6 +567,7 @@ pub async fn a_claim_is_exclusive_until_its_lease_ends(backend: &dyn Backend) {
         store
             .fan_out(
                 &ea2.id,
+                &ea2.tenant,
                 0,
                 1,
                 &[delivery("evt_a3", 3, early - time::Duration::seconds(1))]
@@ -545,7 +577,7 @@ pub async fn a_claim_is_exclusive_until_its_lease_ends(backend: &dyn Backend) {
     );
     assert!(
         store
-            .fan_out(&eb.id, 0, 1, &[delivery("evt_b1", 1, at)])
+            .fan_out(&eb.id, &eb.tenant, 0, 1, &[delivery("evt_b1", 1, at)])
             .await
             .unwrap()
     );
@@ -684,7 +716,13 @@ pub async fn a_claim_is_exclusive_until_its_lease_ends(backend: &dyn Backend) {
         let e = created(store.as_ref(), &new_endpoint(&c, 0)).await;
         let n = super::unique();
         store
-            .fan_out(&e.id, 0, 1, &[delivery(&format!("evt_{n}"), 1, at)])
+            .fan_out(
+                &e.id,
+                &e.tenant,
+                0,
+                1,
+                &[delivery(&format!("evt_{n}"), 1, at)],
+            )
             .await
             .unwrap();
         ids.push(e.id);
@@ -725,6 +763,7 @@ pub async fn a_settlement_records_its_attempt(backend: &dyn Backend) {
     store
         .fan_out(
             &endpoint.id,
+            &endpoint.tenant,
             0,
             3,
             &[
@@ -1023,6 +1062,7 @@ pub async fn the_pending_backlog_is_counted(backend: &dyn Backend) {
     store
         .fan_out(
             &endpoint.id,
+            &endpoint.tenant,
             0,
             3,
             &[
@@ -1157,6 +1197,7 @@ pub async fn deliveries_go_with_their_endpoint_and_tenant(backend: &dyn Backend)
     store
         .fan_out(
             &kept.id,
+            &kept.tenant,
             0,
             2,
             &[delivery("evt_k1", 1, at), delivery("evt_k2", 2, at)],
@@ -1164,7 +1205,13 @@ pub async fn deliveries_go_with_their_endpoint_and_tenant(backend: &dyn Backend)
         .await
         .unwrap();
     store
-        .fan_out(&dropped.id, 0, 1, &[delivery("evt_d1", 1, at)])
+        .fan_out(
+            &dropped.id,
+            &dropped.tenant,
+            0,
+            1,
+            &[delivery("evt_d1", 1, at)],
+        )
         .await
         .unwrap();
     assert!(
@@ -1540,6 +1587,7 @@ fn create(url: &str, types: &[&str]) -> CreateEndpoint {
     CreateEndpoint {
         url: url.to_owned(),
         types: types.iter().map(|t| (*t).to_owned()).collect(),
+        tenants: None,
     }
 }
 
@@ -1759,9 +1807,9 @@ pub async fn a_delivery_is_signed_and_carries_its_tenants_events_only(backend: &
         open_b
             .update(
                 ea.id.as_str(),
-                EndpointChange {
+                UpdateEndpoint {
                     url: Some("https://b.example.net/x".to_owned()),
-                    ..EndpointChange::default()
+                    ..UpdateEndpoint::default()
                 }
             )
             .await
@@ -2004,9 +2052,9 @@ pub async fn the_retry_schedule_under_a_fake_clock(backend: &dyn Backend) {
     // Turned on, retried by hand: delivered.
     open.update(
         endpoint.id.as_str(),
-        EndpointChange {
+        UpdateEndpoint {
             enabled: Some(true),
-            ..EndpointChange::default()
+            ..UpdateEndpoint::default()
         },
     )
     .await
@@ -2148,9 +2196,9 @@ pub async fn a_destination_is_refused_at_creation_and_at_delivery(backend: &dyn 
     let changed = open
         .update(
             endpoint.id.as_str(),
-            EndpointChange {
+            UpdateEndpoint {
                 url: Some("https://evil.example.org/".to_owned()),
-                ..EndpointChange::default()
+                ..UpdateEndpoint::default()
             },
         )
         .await
@@ -2436,6 +2484,903 @@ pub async fn a_slow_endpoint_does_not_starve_another(backend: &dyn Backend) {
         running.is_finished(),
         "the loop stops once its attempts end"
     );
+}
+
+// ─── Roadmap M2m: the tenants of a platform key's endpoint ────────────────
+
+/// A caller with scope `webhooks` acting as `acting` (created) through a
+/// platform key that may name `allowed`.
+async fn platform_caller(
+    backend: &dyn Backend,
+    authz: &Authorizer,
+    acting: &str,
+    allowed: AllowedTenants,
+) -> Caller {
+    let _ = backend
+        .records()
+        .create_tenant(&tenant(acting), "")
+        .await
+        .unwrap();
+    let key = mint(
+        backend.records().as_ref(),
+        KeyOwner::Platform(allowed),
+        vec![Scope::Webhooks],
+        String::new(),
+        None,
+    )
+    .await
+    .unwrap()
+    .0;
+    authz
+        .tenant_caller(
+            Some(&format!("Bearer {}", key.expose_key())),
+            Some(acting.as_bytes()),
+            Scope::Webhooks,
+        )
+        .await
+        .unwrap()
+}
+
+fn only(tenants: &[&str]) -> AllowedTenants {
+    AllowedTenants::Only(tenants.iter().map(|t| tenant(t)).collect())
+}
+
+fn naming(url: &str, tenants: &[&str]) -> CreateEndpoint {
+    CreateEndpoint {
+        tenants: Some(tenants.iter().map(|t| (*t).to_owned()).collect()),
+        ..create(url, &["message_received"])
+    }
+}
+
+fn page(limit: usize) -> PageRequest {
+    PageRequest { after: None, limit }
+}
+
+/// The `webhook-id`s a host got, sorted.
+fn got(rig: &Rig, host: &str) -> Vec<String> {
+    let mut ids: Vec<String> = rig
+        .sender
+        .sent_to(host)
+        .iter()
+        .map(|r| r.header("webhook-id").unwrap().to_owned())
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn sorted(events: &[&NewEvent]) -> Vec<String> {
+    let mut ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
+    ids.sort();
+    ids
+}
+
+/// M2m, the decisive case: a platform key's endpoint naming A and B
+/// receives A's and B's events and none of C's (nor the events of the
+/// tenant it was made as, which it did not name, nor those before its
+/// creation); each delivery is its own tenant's event, read in that
+/// tenant's stream; a store fan-out for a tenant the endpoint does not
+/// name records nothing.
+pub async fn a_platform_endpoint_receives_its_named_tenants_only(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let rig = rig(backend, RetrySchedule::default(), fast_settings());
+    let (x, a, b, c) = (
+        unique_tenant("wh-pl-x"),
+        unique_tenant("wh-pl-a"),
+        unique_tenant("wh-pl-b"),
+        unique_tenant("wh-pl-c"),
+    );
+    let digits: Vec<String> = (0..4).map(|_| super::unique_digits()).collect();
+    for t in [&a, &b, &c] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let platform = platform_caller(backend, &rig.authz, &x, only(&[&x, &a, &b])).await;
+    let before = event_for(backend, &a, &digits[0]).await;
+    let (endpoint, secret) = rig
+        .endpoints
+        .open(&rig.authz, &platform)
+        .unwrap()
+        .create(naming(
+            "https://a.example.net/hook",
+            // A repeated tenant is one.
+            &[&a, &b, &a],
+        ))
+        .await
+        .unwrap();
+    assert!(secret.expose().starts_with("whsec_"));
+    assert_eq!(endpoint.tenant, tenant(&x), "the WA-Tenant's endpoint");
+    let named: Vec<&TenantId> = endpoint
+        .tenants
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|t| &t.tenant)
+        .collect();
+    assert_eq!(named, [&tenant(&a), &tenant(&b)]);
+    let read = rig
+        .endpoints
+        .open(&rig.authz, &platform)
+        .unwrap()
+        .get(endpoint.id.as_str())
+        .await
+        .unwrap();
+    assert_eq!(read.tenants, endpoint.tenants, "stored with its tenants");
+    let a1 = event_for(backend, &a, &digits[0]).await;
+    let b1 = event_for(backend, &b, &digits[1]).await;
+    let _c1 = event_for(backend, &c, &digits[2]).await;
+    let _x1 = event_for(backend, &x, &digits[3]).await;
+    let a2 = event_for(backend, &a, &digits[0]).await;
+    assert_eq!(round(&rig).await, 3, "A's two and B's one");
+    assert_eq!(round(&rig).await, 0);
+    assert_eq!(
+        got(&rig, "a.example.net"),
+        sorted(&[&a1, &b1, &a2]),
+        "A's and B's events: not C's, not the owner's, not before the creation ({})",
+        before.id
+    );
+    for request in rig.sender.sent_to("a.example.net") {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let id = request.header("webhook-id").unwrap();
+        let tenant_id = if id == b1.id { &b } else { &a };
+        assert_eq!(body["id"], id);
+        assert_eq!(
+            body["tenant_id"],
+            tenant_id.as_str(),
+            "each delivery its own tenant's event"
+        );
+        assert!(body["data"].is_object());
+        verify(
+            &secret,
+            id,
+            request.header("webhook-timestamp").unwrap(),
+            request.header("webhook-signature").unwrap(),
+            &request.body,
+            START.unix_timestamp(),
+        )
+        .unwrap();
+    }
+    // The store: a tenant the endpoint does not name has no stream in it,
+    // however the cursor reads; a named one moves on its own cursor only.
+    let store = backend.webhooks();
+    for other in [&c, &x] {
+        assert!(
+            !store
+                .fan_out(
+                    &endpoint.id,
+                    &tenant(other),
+                    0,
+                    1,
+                    &[delivery("evt_other", 1, START)]
+                )
+                .await
+                .unwrap(),
+            "not a tenant of the endpoint"
+        );
+    }
+    let ids: Vec<String> = rig
+        .endpoints
+        .open(&rig.authz, &platform)
+        .unwrap()
+        .deliveries(endpoint.id.as_str(), &page(10))
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|d| d.tenant.to_string())
+        .collect();
+    assert_eq!(ids.len(), 3, "nothing recorded for C or the owner");
+    assert!(!ids.contains(&c) && !ids.contains(&x));
+    let live = store
+        .active_endpoints()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.id == endpoint.id)
+        .unwrap();
+    let cursors: Vec<(String, bool)> = live
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| (t.tenant.to_string(), t.cursor > 0))
+        .collect();
+    assert_eq!(cursors, [(a.clone(), true), (b.clone(), true)]);
+    assert_eq!(live.cursor, 0, "the endpoint's own cursor stays unused");
+}
+
+/// M2m: `tenants` is a platform key's. From a tenant key it is `422` on
+/// `tenants`; from a platform key, an empty list, more than ten, or an id
+/// of no tenant's shape is `422` too; a tenant outside the key's set and
+/// one that does not exist answer alike, `403`; none of them makes an
+/// endpoint.
+pub async fn tenants_are_a_platform_keys_and_checked(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let rig = rig(backend, RetrySchedule::default(), fast_settings());
+    let (x, a, c) = (
+        unique_tenant("wh-tv-x"),
+        unique_tenant("wh-tv-a"),
+        unique_tenant("wh-tv-c"),
+    );
+    for t in [&a, &c] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let tenant_key = caller(backend, &rig.authz, &x).await;
+    let narrow = platform_caller(backend, &rig.authz, &x, only(&[&x, &a])).await;
+    let wide = platform_caller(backend, &rig.authz, &x, AllowedTenants::All).await;
+    let url = "https://a.example.net/hook";
+    let refused = |caller: &Caller, request: CreateEndpoint| {
+        let rig = &rig;
+        let caller = caller.clone();
+        async move {
+            let error = rig
+                .endpoints
+                .open(&rig.authz, &caller)
+                .unwrap()
+                .create(request)
+                .await
+                .unwrap_err();
+            (error.code().to_owned(), error.field().map(str::to_owned))
+        }
+    };
+    let invalid = ("invalid_request".to_owned(), Some("tenants".to_owned()));
+    let forbidden = ("forbidden".to_owned(), None);
+    assert_eq!(
+        refused(&tenant_key, naming(url, &[&x])).await,
+        invalid,
+        "a tenant key may not name tenants, not even its own"
+    );
+    assert_eq!(refused(&wide, naming(url, &[])).await, invalid, "none");
+    let eleven: Vec<String> = (0..11).map(|n| format!("t{n}")).collect();
+    let eleven: Vec<&str> = eleven.iter().map(String::as_str).collect();
+    assert_eq!(refused(&wide, naming(url, &eleven)).await, invalid, "11");
+    assert_eq!(
+        refused(&wide, naming(url, &["not a tenant!"])).await,
+        invalid
+    );
+    assert_eq!(
+        refused(&narrow, naming(url, &[&a, &c])).await,
+        forbidden,
+        "C is outside the key's set"
+    );
+    assert_eq!(
+        refused(&wide, naming(url, &[&a, "no-such-tenant-m2m"])).await,
+        forbidden,
+        "a tenant that does not exist answers as one outside the set"
+    );
+    assert_eq!(
+        refused(&narrow, naming(url, &["no-such-tenant-m2m"])).await,
+        forbidden
+    );
+    for caller in [&tenant_key, &narrow, &wide] {
+        assert!(
+            rig.endpoints
+                .open(&rig.authz, caller)
+                .unwrap()
+                .list(&page(10))
+                .await
+                .unwrap()
+                .items
+                .is_empty(),
+            "none was made"
+        );
+    }
+    // Ten tenants are the most, each of which the key may name.
+    let ten: Vec<String> = (0..10)
+        .map(|n| unique_tenant(&format!("wh-tv{n}")))
+        .collect();
+    for t in &ten {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let ten: Vec<&str> = ten.iter().map(String::as_str).collect();
+    let (made, _) = rig
+        .endpoints
+        .open(&rig.authz, &wide)
+        .unwrap()
+        .create(naming(url, &ten))
+        .await
+        .unwrap();
+    assert_eq!(made.tenants.unwrap().len(), 10);
+}
+
+/// M2m: an endpoint of several tenants is its `WA-Tenant`'s, reached only
+/// through a platform key that may name every tenant it receives. The
+/// owner's tenant key, and a platform key of a narrower set, find it
+/// missing everywhere (to change its URL is to read those tenants'
+/// events); the tenant's own endpoints stay the tenant key's.
+pub async fn a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let rig = rig(backend, RetrySchedule::default(), fast_settings());
+    let (x, a, b) = (
+        unique_tenant("wh-pr-x"),
+        unique_tenant("wh-pr-a"),
+        unique_tenant("wh-pr-b"),
+    );
+    for t in [&a, &b] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let tenant_key = caller(backend, &rig.authz, &x).await;
+    let narrow = platform_caller(backend, &rig.authz, &x, only(&[&x, &a])).await;
+    let wide = platform_caller(backend, &rig.authz, &x, only(&[&x, &a, &b])).await;
+    let (shared, _) = rig
+        .endpoints
+        .open(&rig.authz, &wide)
+        .unwrap()
+        .create(naming("https://a.example.net/hook", &[&a, &b]))
+        .await
+        .unwrap();
+    let (own, _) = rig
+        .endpoints
+        .open(&rig.authz, &tenant_key)
+        .unwrap()
+        .create(create("https://b.example.net/hook", &["message_received"]))
+        .await
+        .unwrap();
+    assert_eq!(own.tenants, None);
+    let listed = |caller: &Caller| {
+        let rig = &rig;
+        let caller = caller.clone();
+        async move {
+            rig.endpoints
+                .open(&rig.authz, &caller)
+                .unwrap()
+                .list(&page(10))
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    let mut both = vec![shared.id.clone(), own.id.clone()];
+    both.sort();
+    assert_eq!(listed(&wide).await, both);
+    assert_eq!(listed(&tenant_key).await, std::slice::from_ref(&own.id));
+    assert_eq!(listed(&narrow).await, std::slice::from_ref(&own.id));
+    let id = shared.id.as_str();
+    // A delivery that exists, so that a refused retry is the key's reach
+    // and not a missing delivery.
+    let ping = rig
+        .endpoints
+        .open(&rig.authz, &wide)
+        .unwrap()
+        .test(id)
+        .await
+        .unwrap();
+    for hidden in [&tenant_key, &narrow] {
+        let open = rig.endpoints.open(&rig.authz, hidden).unwrap();
+        let not_found = |code: String| assert_eq!(code, "not_found");
+        not_found(open.get(id).await.unwrap_err().code().to_owned());
+        not_found(
+            open.update(
+                id,
+                UpdateEndpoint {
+                    url: Some("https://b.example.net/steal".to_owned()),
+                    ..UpdateEndpoint::default()
+                },
+            )
+            .await
+            .unwrap_err()
+            .code()
+            .to_owned(),
+        );
+        not_found(open.delete(id).await.unwrap_err().code().to_owned());
+        not_found(open.rotate_secret(id).await.unwrap_err().code().to_owned());
+        not_found(open.test(id).await.unwrap_err().code().to_owned());
+        not_found(
+            open.deliveries(id, &page(10))
+                .await
+                .unwrap_err()
+                .code()
+                .to_owned(),
+        );
+        not_found(
+            open.retry(id, ping.id.as_str())
+                .await
+                .unwrap_err()
+                .code()
+                .to_owned(),
+        );
+    }
+    // Untouched, and the key that may name them all reaches it.
+    let open = rig.endpoints.open(&rig.authz, &wide).unwrap();
+    assert_eq!(open.get(id).await.unwrap().url, shared.url);
+    open.test(id).await.unwrap();
+    open.rotate_secret(id).await.unwrap();
+    // An endpoint of its tenant's own events never takes a set, and one
+    // of several tenants never loses it.
+    let own_open = rig.endpoints.open(&rig.authz, &wide).unwrap();
+    let error = own_open
+        .update(
+            own.id.as_str(),
+            UpdateEndpoint {
+                tenants: Some(vec![a.clone()]),
+                ..UpdateEndpoint::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.code(), error.field()),
+        ("invalid_request", Some("tenants"))
+    );
+    let error = open
+        .update(
+            id,
+            UpdateEndpoint {
+                tenants: Some(Vec::new()),
+                ..UpdateEndpoint::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.code(), error.field()),
+        ("invalid_request", Some("tenants"))
+    );
+    open.delete(id).await.unwrap();
+}
+
+/// M2m: a change of `tenants` replaces the set. A tenant kept keeps its
+/// place in its stream (an event not yet fanned out is still delivered);
+/// one added receives from the change on; one left out stops at once, its
+/// pending deliveries deleted; the key must be able to name each.
+pub async fn a_platform_endpoint_changes_its_tenants(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let rig = rig(backend, RetrySchedule::default(), fast_settings());
+    let (x, a, b, c) = (
+        unique_tenant("wh-pu-x"),
+        unique_tenant("wh-pu-a"),
+        unique_tenant("wh-pu-b"),
+        unique_tenant("wh-pu-c"),
+    );
+    let digits: Vec<String> = (0..3).map(|_| super::unique_digits()).collect();
+    for t in [&a, &b, &c] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let wide = platform_caller(backend, &rig.authz, &x, AllowedTenants::All).await;
+    let narrow = platform_caller(backend, &rig.authz, &x, only(&[&x, &a, &b])).await;
+    let open = rig.endpoints.open(&rig.authz, &wide).unwrap();
+    let (endpoint, _) = open
+        .create(naming("https://a.example.net/hook", &[&a, &b]))
+        .await
+        .unwrap();
+    // A's event is fanned out (pending), B's is not yet; C's precedes the
+    // change.
+    let a1 = event_for(backend, &a, &digits[0]).await;
+    rig.dispatcher.fan_out().await.unwrap();
+    let b1 = event_for(backend, &b, &digits[1]).await;
+    let _c0 = event_for(backend, &c, &digits[2]).await;
+    let id = endpoint.id.as_str();
+    let error = rig
+        .endpoints
+        .open(&rig.authz, &narrow)
+        .unwrap()
+        .update(
+            id,
+            UpdateEndpoint {
+                tenants: Some(vec![b.clone(), c.clone()]),
+                ..UpdateEndpoint::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        "forbidden",
+        "C is outside the narrow key's set"
+    );
+    let changed = open
+        .update(
+            id,
+            UpdateEndpoint {
+                tenants: Some(vec![b.clone(), c.clone(), b.clone()]),
+                ..UpdateEndpoint::default()
+            },
+        )
+        .await
+        .unwrap();
+    let names: Vec<String> = changed
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| t.tenant.to_string())
+        .collect();
+    assert_eq!(names, [b.clone(), c.clone()]);
+    let c1 = event_for(backend, &c, &digits[2]).await;
+    let a2 = event_for(backend, &a, &digits[0]).await;
+    assert_eq!(
+        round(&rig).await,
+        2,
+        "B's kept place, and C from the change"
+    );
+    assert_eq!(
+        got(&rig, "a.example.net"),
+        sorted(&[&b1, &c1]),
+        "not A's (pending or later), not C's before the change ({}, {})",
+        a1.id,
+        a2.id
+    );
+    let listed = open.deliveries(id, &page(10)).await.unwrap().items;
+    assert_eq!(listed.len(), 2, "A's pending delivery went with A");
+}
+
+/// M2m: a named tenant that is deleted leaves the endpoint, with its
+/// deliveries, and a tenant created later under the same id does not
+/// rejoin it; one that is suspended has its deliveries wait; when every
+/// named tenant is gone the endpoint receives nothing, and not the events
+/// of the tenant it was made as.
+pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
+    backend: &dyn Backend,
+) {
+    drain(backend.webhooks().as_ref()).await;
+    let rig = rig(backend, RetrySchedule::default(), fast_settings());
+    let (x, a, b) = (
+        unique_tenant("wh-pd-x"),
+        unique_tenant("wh-pd-a"),
+        unique_tenant("wh-pd-b"),
+    );
+    let digits: Vec<String> = (0..3).map(|_| super::unique_digits()).collect();
+    for t in [&a, &b] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let wide = platform_caller(backend, &rig.authz, &x, AllowedTenants::All).await;
+    let open = rig.endpoints.open(&rig.authz, &wide).unwrap();
+    let (endpoint, _) = open
+        .create(naming("https://a.example.net/hook", &[&a, &b]))
+        .await
+        .unwrap();
+    let a1 = event_for(backend, &a, &digits[0]).await;
+    let b1 = event_for(backend, &b, &digits[1]).await;
+    assert_eq!(round(&rig).await, 2);
+    // A suspended tenant's deliveries wait, and go when it is active.
+    let records = backend.records();
+    records
+        .update_tenant(&tenant(&b), None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap();
+    let b2 = event_for(backend, &b, &digits[1]).await;
+    assert_eq!(round(&rig).await, 0, "suspended: waits");
+    records
+        .update_tenant(&tenant(&b), None, Some(TenantStatus::Active))
+        .await
+        .unwrap();
+    assert_eq!(round(&rig).await, 1);
+    // A is deleted: it leaves the endpoint, and its pending delivery.
+    let a2 = event_for(backend, &a, &digits[0]).await;
+    rig.dispatcher.fan_out().await.unwrap();
+    // (A tenant with a WABA is not deleted: the operator unbinds it first.)
+    let unbind = |pn: String| async move {
+        assert!(
+            backend
+                .records()
+                .unbind_waba(&WabaId::new(waba_of(&pn)).unwrap())
+                .await
+                .unwrap()
+        );
+    };
+    unbind(digits[0].clone()).await;
+    assert_eq!(
+        records.delete_tenant(&tenant(&a)).await.unwrap(),
+        DeleteTenantOutcome::Deleted
+    );
+    let left = open.get(endpoint.id.as_str()).await.unwrap();
+    let names: Vec<String> = left
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| t.tenant.to_string())
+        .collect();
+    assert_eq!(names, std::slice::from_ref(&b), "B only: never widened");
+    assert_eq!(round(&rig).await, 0, "A's pending delivery went with it");
+    // The same id again is a new tenant, not a named one.
+    records.create_tenant(&tenant(&a), "").await.unwrap();
+    let a3 = event_for(backend, &a, &super::unique_digits()).await;
+    let b3 = event_for(backend, &b, &digits[1]).await;
+    assert_eq!(round(&rig).await, 1, "B's only");
+    assert_eq!(
+        got(&rig, "a.example.net"),
+        sorted(&[&a1, &b1, &b2, &b3]),
+        "{} and {} never ({})",
+        a2.id,
+        a3.id,
+        left.id
+    );
+    // All gone: nothing, and not the owner's events either.
+    unbind(digits[1].clone()).await;
+    assert_eq!(
+        records.delete_tenant(&tenant(&b)).await.unwrap(),
+        DeleteTenantOutcome::Deleted
+    );
+    let left = open.get(endpoint.id.as_str()).await.unwrap();
+    assert_eq!(left.tenants, Some(Vec::new()), "still an endpoint of none");
+    let x1 = event_for(backend, &x, &digits[2]).await;
+    assert_eq!(round(&rig).await, 0);
+    assert!(!got(&rig, "a.example.net").contains(&x1.id));
+}
+
+/// M2m at the store (D342, D344, D347): a change applies only while the
+/// endpoint's set is the one the caller was checked against (a set moved
+/// meanwhile answers as a missing endpoint, the URL untouched); a tenant
+/// kept keeps its cursor and its pending delivery, one dropped loses its
+/// pending delivery, one added starts at the cursor given; a fan-out is
+/// for a tenant the endpoint receives, from that tenant's cursor; a named
+/// tenant that does not exist refuses the creation.
+pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set_checked(
+    backend: &dyn Backend,
+) {
+    use crate::webhooks_out::TenantCursor;
+    let store = backend.webhooks();
+    drain(store.as_ref()).await;
+    let (x, a, b, c, gone) = (
+        unique_tenant("wh-ps-x"),
+        unique_tenant("wh-ps-a"),
+        unique_tenant("wh-ps-b"),
+        unique_tenant("wh-ps-c"),
+        unique_tenant("wh-ps-g"),
+    );
+    for t in [&x, &a, &b, &c] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let cursor = |t: &str, n: i64| TenantCursor {
+        tenant: tenant(t),
+        cursor: n,
+    };
+    // A named tenant that does not exist: nothing is created.
+    let mut refused = new_endpoint(&x, 0);
+    refused.tenants = Some(vec![cursor(&a, 1), cursor(&gone, 1)]);
+    assert!(matches!(
+        store.create_endpoint(&refused, 10).await.unwrap(),
+        CreateOutcome::NamedTenantGone
+    ));
+    assert!(
+        store
+            .endpoint(&tenant(&x), &refused.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut named = new_endpoint(&x, 0);
+    named.tenants = Some(vec![cursor(&a, 10), cursor(&b, 20)]);
+    let endpoint = created(store.as_ref(), &named).await;
+    let own = created(store.as_ref(), &new_endpoint(&x, 0)).await;
+    // The walk of M2i lists it with its named tenants, as any read does.
+    let mut after = None;
+    let mut seen = None;
+    loop {
+        let listed = store
+            .all_endpoints(&PageRequest { after, limit: 100 })
+            .await
+            .unwrap();
+        if let Some(found) = listed.items.into_iter().find(|e| e.id == endpoint.id) {
+            seen = Some(found);
+        }
+        match listed.next_after {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(seen.expect("listed").tenants, endpoint.tenants);
+    let at = START;
+    // A fan-out names a tenant of the endpoint and that tenant's cursor.
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&c), 10, 11, &[])
+            .await
+            .unwrap(),
+        "C is not one it receives, though 10 is A's cursor"
+    );
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&b), 10, 11, &[])
+            .await
+            .unwrap(),
+        "10 is A's cursor, not B's"
+    );
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&x), 0, 1, &[])
+            .await
+            .unwrap(),
+        "the owner is not named: its endpoint cursor is not a stream of this one"
+    );
+    assert!(
+        store
+            .fan_out(
+                &endpoint.id,
+                &tenant(&a),
+                10,
+                11,
+                &[delivery("evt-ps-a1", 11, at)]
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .fan_out(
+                &endpoint.id,
+                &tenant(&b),
+                20,
+                21,
+                &[delivery("evt-ps-b1", 21, at)]
+            )
+            .await
+            .unwrap()
+    );
+    let pending = |tenants: Vec<crate::webhooks_out::Delivery>| {
+        let mut ids: Vec<String> = tenants
+            .iter()
+            .map(|d| format!("{}:{}", d.tenant, d.event_id.clone().unwrap_or_default()))
+            .collect();
+        ids.sort();
+        ids
+    };
+    let listed = |store: std::sync::Arc<dyn WebhookStore>, id: EndpointId| {
+        let owner = tenant(&x);
+        async move {
+            store
+                .deliveries(&owner, &id, &page(50))
+                .await
+                .unwrap()
+                .unwrap()
+                .items
+        }
+    };
+    let change =
+        |through: Option<Vec<&str>>, url: &str, set: Option<Vec<TenantCursor>>| EndpointChange {
+            url: Some(url.to_owned()),
+            tenants: set,
+            reached_through: through.map(|t| t.into_iter().map(tenant).collect()),
+            ..EndpointChange::default()
+        };
+    let now = START;
+    // The set moved meanwhile, or the caller was checked against another:
+    // nothing changes.
+    for stale in [
+        None,
+        Some(vec![a.as_str()]),
+        Some(vec![a.as_str(), b.as_str(), c.as_str()]),
+        Some(vec![a.as_str(), c.as_str()]),
+    ] {
+        assert!(
+            store
+                .update_endpoint(
+                    &tenant(&x),
+                    &endpoint.id,
+                    &change(stale.clone(), "https://evil.example.net/hook", None),
+                    now
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "{stale:?}"
+        );
+    }
+    assert!(
+        store
+            .update_endpoint(
+                &tenant(&x),
+                &own.id,
+                &change(
+                    Some(vec![a.as_str()]),
+                    "https://evil.example.net/hook",
+                    None
+                ),
+                now
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "an endpoint without a set is not one with it"
+    );
+    let untouched = store
+        .endpoint(&tenant(&x), &endpoint.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(untouched.url, "https://hooks.example.com/wa");
+    assert_eq!(
+        store
+            .endpoint(&tenant(&x), &own.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://hooks.example.com/wa"
+    );
+    // The set as checked (in another order): applied. A kept (its cursor
+    // as it is, whatever the change gives), B dropped, C added at 5.
+    let changed = store
+        .update_endpoint(
+            &tenant(&x),
+            &endpoint.id,
+            &change(
+                Some(vec![b.as_str(), a.as_str()]),
+                "https://ok.example.net/hook",
+                Some(vec![cursor(&a, 999), cursor(&c, 5)]),
+            ),
+            now,
+        )
+        .await
+        .unwrap()
+        .expect("the set is the one checked");
+    assert_eq!(changed.url, "https://ok.example.net/hook");
+    let mut set: Vec<(String, i64)> = changed
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| (t.tenant.to_string(), t.cursor))
+        .collect();
+    set.sort();
+    let mut want = vec![(a.clone(), 11), (c.clone(), 5)];
+    want.sort();
+    assert_eq!(set, want, "A keeps its cursor, C starts at the one given");
+    assert_eq!(
+        pending(listed(store.clone(), endpoint.id.clone()).await),
+        [format!("{a}:evt-ps-a1")],
+        "B's pending delivery went with B; A's stays"
+    );
+    // A tenant deleted meanwhile is left out of a change, never added.
+    let with_gone = store
+        .update_endpoint(
+            &tenant(&x),
+            &endpoint.id,
+            &change(
+                Some(vec![a.as_str(), c.as_str()]),
+                "https://ok.example.net/hook",
+                Some(vec![cursor(&a, 0), cursor(&gone, 0)]),
+            ),
+            now,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let left: Vec<String> = with_gone
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| t.tenant.to_string())
+        .collect();
+    assert_eq!(left, std::slice::from_ref(&a), "{gone} does not exist");
+    // And the endpoint without a set takes its own change.
+    let own_changed = store
+        .update_endpoint(
+            &tenant(&x),
+            &own.id,
+            &change(None, "https://ok.example.net/own", None),
+            now,
+        )
+        .await
+        .unwrap()
+        .expect("no set expected, none held");
+    assert_eq!(own_changed.url, "https://ok.example.net/own");
 }
 
 // ─── Re-sealing the secrets (roadmap M2i) ────────────────────────────────
