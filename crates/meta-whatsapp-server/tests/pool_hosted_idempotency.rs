@@ -476,3 +476,43 @@ async fn the_hosted_claim_answers_the_gate_before_the_key() {
         .await;
     assert_eq!(second.code(), "not_found", "{}", second.text);
 }
+
+/// No PIN, token or key lands in the logs of a keyed claim, its replay and
+/// a keyed code request (the stored answer is checked by the claim's test).
+#[tokio::test]
+async fn the_keyed_claim_and_code_request_log_no_pin_or_token() {
+    use common::capture::{Captured, Secrets, subscriber};
+    let captured = Captured::default();
+    let _guard = tracing::subscriber::set_default(subscriber(&captured));
+    let h = both();
+    let admin = h.admin_key().await;
+    h.tenant(A).await;
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    script_hosted(&h);
+    let body = hosted_body(A, Some(PIN));
+    let first = h.call(keyed(HOSTED, &admin, "claim-log", &body)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+    let again = h.call(keyed(HOSTED, &admin, "claim-log", &body)).await;
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    h.graph.push_error(|| TransportError::Timeout);
+    let code = h
+        .call(keyed(
+            &format!("{POOL}/{PRE_VERIFIED}/code"),
+            &admin,
+            "code-log",
+            &code_body("SMS"),
+        ))
+        .await;
+    assert_eq!(code.status, StatusCode::GATEWAY_TIMEOUT, "{}", code.text);
+    let secrets = Secrets::new(
+        "pool and hosted",
+        vec![
+            PIN.to_owned(),
+            TOKEN.to_owned(),
+            HOSTED_TOKEN.to_owned(),
+            POOL_TOKEN.to_owned(),
+            admin.clone(),
+        ],
+    );
+    assert_eq!(secrets.leaks(&captured.text()), None);
+}
