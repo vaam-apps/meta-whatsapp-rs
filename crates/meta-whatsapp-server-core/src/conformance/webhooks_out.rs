@@ -3305,13 +3305,13 @@ pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set
         .await
         .unwrap()
         .unwrap();
-    let names: Vec<String> = with_gone
+    let left: Vec<String> = with_gone
         .tenants
         .unwrap()
         .iter()
         .map(|t| t.tenant.to_string())
         .collect();
-    assert_eq!(names, [a.clone()], "{gone} does not exist");
+    assert_eq!(left, std::slice::from_ref(&a), "{gone} does not exist");
     // And the endpoint without a set takes its own change.
     let own_changed = store
         .update_endpoint(
