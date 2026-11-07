@@ -56,7 +56,7 @@
 //! punctuation a stray value could close.
 
 use meta_whatsapp_rs::Error;
-use meta_whatsapp_rs::RetryPolicy;
+
 use meta_whatsapp_rs::client::analytics::Granularity;
 use meta_whatsapp_rs::client::analytics::{
     AnalyticsTime, CallAnalytics, CallAnalyticsQuery, CallDataPoint, ConversationAnalytics,
@@ -73,7 +73,7 @@ use time::{Date, Duration, Month, OffsetDateTime, Time};
 use crate::audit::{AnalyticsFacts, Outcome, Subject, analytics_audit};
 use crate::authz::{Authorizer, Caller, OwnedWaba};
 use crate::error::{ErrorCode, ServiceError};
-use crate::number_settings::is_legal_act;
+use crate::number_settings::{is_legal_act, legal_client};
 use crate::observe::Observer;
 use crate::operation::Operation;
 use crate::request::{graph_id, typed_graph_id, wire};
@@ -1269,7 +1269,7 @@ impl<'a> Analytics<'a> {
         // The library marks the confirmation replayable (confirming twice
         // is harmless to Meta), but it is an act the business directs and
         // cannot undo: exactly one request, whatever the failure.
-        let once = self.waba.client().clone().with_retry(RetryPolicy::NONE);
+        let once = legal_client(self.waba.client());
         match once
             .analytics(self.waba.waba_id().clone())
             .enable_template_insights()

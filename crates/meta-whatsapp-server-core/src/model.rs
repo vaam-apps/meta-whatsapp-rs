@@ -32,6 +32,16 @@ impl TenantId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The namespace of an admin key's idempotency records (roadmap
+    /// M5j2, design D290): `admin/<key id>`. The `/` is outside the
+    /// charset of [`Self::parse`], so no tenant can be named so and an
+    /// admin key's record can never be a tenant's, or the other way
+    /// round. Crate-private: only [`crate::idempotency::run_admin`], for
+    /// an [`crate::authz::AdminCaller`] the authorizer made, names one.
+    pub(crate) fn admin_scope(key_id: &str) -> Self {
+        Self(format!("admin/{key_id}"))
+    }
 }
 
 impl fmt::Display for TenantId {
@@ -1058,6 +1068,19 @@ mod tests {
         );
         assert_eq!(VaultEntry::parse("token", "1"), None, "another kind");
         assert_eq!(VaultEntry::parse("\x77aba", "../1"), None, "not an id");
+    }
+
+    /// An admin key's idempotency scope (roadmap M5j2, D290) is a name no
+    /// tenant id can be: `TenantId::parse` never returns it, whatever the
+    /// key's id, and it is `admin/` and the id, a stored name pinned here
+    /// (docs/architecture.md, § Stable identifiers). Decisive: the `/`.
+    #[test]
+    fn the_admin_scope_is_a_name_no_tenant_can_be() {
+        for id in ["abc", "merchant-42", "", "wak_0123456789abcdefg"] {
+            let scope = TenantId::admin_scope(id);
+            assert_eq!(scope.as_str(), format!("admin/{id}"));
+            assert_eq!(TenantId::parse(scope.as_str()), None, "{id}");
+        }
     }
 
     /// The stored layout of a tenant's OTP settings (roadmap M3c): its

@@ -137,13 +137,17 @@ export async function migrationIntent(
 
 // The operator's side, with an admin key: a customer's documents for
 // partner-led business verification (a legal act: the deployment must have
-// turned the legal acts on), base64 in the body.
+// turned the legal acts on), base64 in the body. The `Idempotency-Key` is
+// per submission you mean to make: a retry after a 504 is answered from the
+// kept answer, never a second submission of the customer's three.
 export async function submitVerification(
   admin: WhatsApp,
   customerBusinessId: string,
   documents: { file_name: string; content_base64: string }[],
+  reference: string,
 ): Promise<number | null> {
   const { data, error } = await admin.POST("/v1/admin/partners/business-verifications", {
+    params: { header: { "Idempotency-Key": reference } },
     body: { client_business_id: customerBusinessId, documents },
   });
   if (error) {

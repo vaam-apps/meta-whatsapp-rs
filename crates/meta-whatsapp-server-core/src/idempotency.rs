@@ -7,6 +7,8 @@
 //! `meta_whatsapp_server::idempotency`).
 //!
 //! The key is **scoped to the tenant**: two tenants may use the same one.
+//! An operator's key ([`run_admin`], roadmap M5j2) is scoped to its admin
+//! key, in a namespace no tenant can be named: `admin/<key id>`.
 //! A request carrying one:
 //!
 //! 1. is checked locally first (body, recipient, limits): a request that
@@ -47,14 +49,14 @@ use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use sha2::{Digest, Sha256};
 
-use crate::authz::{Authorizer, Caller};
+use crate::authz::{AdminCaller, Authorizer, Caller};
 use crate::error::{ErrorCode, ServiceError};
 use crate::media::{Conversion, Upload, convert_name};
 use crate::model::{
     IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState, TenantId,
 };
 use crate::observe::Observer;
-use crate::operation::Operation;
+use crate::operation::{AdminOperation, Operation};
 use crate::otp::OtpKeys;
 use crate::store::IdempotencyRecords;
 use crate::uploads::NewUpload;
@@ -90,6 +92,7 @@ use crate::uploads::NewUpload;
 /// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
+/// | `submit_business_verification`, `create_partner_solution` ([`Self::submit_business_verification`], [`Self::create_partner_solution`]; roadmap M5j2) | the JSON body, canonical as above; the operator's, so under [`run_admin`]: the admin key's id is the records' scope, not an input |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -484,6 +487,33 @@ impl Fingerprint {
     /// (roadmap M5d; no legacy fingerprint).
     pub fn create_flow(waba: &WabaId, body: &serde_json::Value) -> Self {
         Self::json(Operation::CreateFlow, &[("waba_id", waba.as_str())], body)
+    }
+
+    /// `submit_business_verification` with the JSON body the request
+    /// carried (roadmap M5j2; no legacy fingerprint). The body holds the
+    /// documents: the fingerprint is a hash of it, as every body's, and
+    /// the documents are stored nowhere.
+    pub fn submit_business_verification(body: &serde_json::Value) -> Self {
+        Self::admin_json(AdminOperation::SubmitBusinessVerification.id(), body)
+    }
+
+    /// `create_partner_solution` with the JSON body the request carried
+    /// (roadmap M5j2; no legacy fingerprint). Not a legal act, so not an
+    /// [`AdminOperation`]: the id is the route's `operationId`.
+    pub fn create_partner_solution(body: &serde_json::Value) -> Self {
+        Self::admin_json("create_partner_solution", body)
+    }
+
+    /// An operator's operation by id, with a JSON body. Another kind than
+    /// a tenant's ([`Self::json`]), so that no admin fingerprint equals a
+    /// tenant's whatever the ids are. The admin key is in the records'
+    /// scope ([`run_admin`]), not in the digest.
+    fn admin_json(operation: &str, body: &serde_json::Value) -> Self {
+        let mut hasher = Sha256::new();
+        framed(&mut hasher, b"admin-json");
+        framed(&mut hasher, operation.as_bytes());
+        canonical(&mut hasher, body);
+        Self::of(hasher.finalize().into())
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -1083,12 +1113,65 @@ where
     F: Future<Output = Result<Answer, ServiceError>>,
 {
     authz.admit(caller)?;
+    Box::pin(run_scoped(
+        keeper,
+        caller.tenant(),
+        key,
+        fingerprint,
+        operation,
+    ))
+    .await
+}
+
+/// [`run`] for an operator: `operation` for `admin` under `key`, in the
+/// records of the admin key's own namespace (roadmap M5j2, design D290):
+/// the stored name is `admin/<key id>` (`TenantId::admin_scope`, crate-private), which
+/// no tenant id can spell, so an admin key's record is never a tenant's
+/// and a tenant's never an admin key's, with the same key string; two
+/// admin keys do not share theirs either. `admin` must be one `authz`
+/// made. Everything else is [`run`]'s: the fingerprint ([`Fingerprint`]'s
+/// admin constructors: the operation and the canonical body, never the
+/// request's path), the kept answers (the adapter's answer only, never the
+/// request: a submission's documents are in no record), the settling and
+/// the cut request.
+///
+/// # Errors
+///
+/// `admin` another [`Authorizer`] made: `403 forbidden`, before the key is
+/// read. As [`run`] otherwise.
+pub async fn run_admin<F>(
+    keeper: &Keeper<'_>,
+    authz: &Authorizer,
+    admin: &AdminCaller,
+    key: Option<IdempotencyKey>,
+    fingerprint: &Fingerprint,
+    operation: F,
+) -> Result<Answer, ServiceError>
+where
+    F: Future<Output = Result<Answer, ServiceError>>,
+{
+    authz.admit_admin(admin)?;
+    let scope = TenantId::admin_scope(admin.key_id());
+    Box::pin(run_scoped(keeper, &scope, key, fingerprint, operation)).await
+}
+
+/// [`run`] and [`run_admin`] after their admission, in `scope`'s records.
+async fn run_scoped<F>(
+    keeper: &Keeper<'_>,
+    scope: &TenantId,
+    key: Option<IdempotencyKey>,
+    fingerprint: &Fingerprint,
+    operation: F,
+) -> Result<Answer, ServiceError>
+where
+    F: Future<Output = Result<Answer, ServiceError>>,
+{
     let Some(key) = key else {
         return operation.await;
     };
     let admission = claim(
         keeper.records,
-        caller.tenant(),
+        scope,
         key,
         fingerprint,
         keeper.lease,
@@ -1914,6 +1997,50 @@ mod tests {
         assert_ne!(
             Fingerprint::create_flow(&waba("1"), &body),
             Fingerprint::create_template(&waba("1"), &body)
+        );
+    }
+
+    /// Roadmap M5j2's operator fingerprints are the operation and the body's
+    /// canonical form, of a kind of their own. Decisive: the operation id
+    /// (dropped, the two routes share one for one body), the body (dropped,
+    /// any body replays), and the `admin-json` kind (the pinned digests).
+    #[test]
+    fn the_operator_fingerprints_are_per_body_operation_and_kind() {
+        let body = serde_json::json!({"name": "x", "partner_app_id": "1"});
+        let other = serde_json::json!({"name": "y", "partner_app_id": "1"});
+        let reordered = serde_json::json!({"partner_app_id": "1", "name": "x"});
+        assert_eq!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::create_partner_solution(&reordered)
+        );
+        assert_ne!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::create_partner_solution(&other)
+        );
+        assert_ne!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::submit_business_verification(&body)
+        );
+        assert_ne!(
+            Fingerprint::submit_business_verification(&body),
+            Fingerprint::submit_business_verification(&other)
+        );
+        // Pinned, derived apart from the code as `fingerprints_are_pinned`
+        // is (kind `admin-json`, the operation's id, no parameters, the
+        // canonical body): the kind and the id are stored in no record but
+        // decide which requests share a key's record.
+        let pinned = serde_json::json!({
+            "name": "x",
+            "partner_app_id": "1",
+            "owner_permissions": ["MESSAGING"],
+        });
+        assert_eq!(
+            hex::encode(Fingerprint::create_partner_solution(&pinned).as_bytes()),
+            "5176d82d503b69851b68b3addf4de70e8ee123334ac434c462b06ec51fe5f1eb"
+        );
+        assert_eq!(
+            hex::encode(Fingerprint::submit_business_verification(&pinned).as_bytes()),
+            "25f1ffc279026c81159aff939cd6fdf2466aa85a8c719d195b60c61c9e84a53a"
         );
     }
 

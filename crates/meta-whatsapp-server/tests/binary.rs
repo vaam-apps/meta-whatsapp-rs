@@ -1463,9 +1463,10 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
             (6, "signup", true, checksum(6)),
             (7, "received media", true, checksum(7)),
             (8, "erasure", true, checksum(8)),
-            (9, "webhooks out", true, checksum(9))
+            (9, "webhooks out", true, checksum(9)),
+            (10, "admin idempotency", true, checksum(10))
         ],
-        "migrations 4 to 9, once each"
+        "migrations 4 to 10, once each"
     );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);
