@@ -55,6 +55,16 @@ impl std::fmt::Debug for WebhookEndpoints {
     }
 }
 
+/// The webhooks-out backlog ([`WebhookEndpoints::backlog`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backlog {
+    /// The deliveries pending.
+    pub pending: u64,
+    /// Whole seconds since the oldest pending delivery that is due fell
+    /// due; `0` when none is due.
+    pub oldest_due_age_seconds: u64,
+}
+
 /// The services opened for one admitted caller, on its tenant.
 #[derive(Debug)]
 pub struct OpenEndpoints<'a> {
@@ -113,6 +123,29 @@ impl WebhookEndpoints {
             clock,
             out,
         }
+    }
+
+    /// The backlog of deliveries, every tenant's, for the
+    /// `wa_server_webhooks_out_*` metrics (roadmap M2k); `None` without a
+    /// deployment (no dispatcher runs, so nothing waits). Counts only: it
+    /// names no endpoint, URL or tenant, so it needs no admitted caller.
+    ///
+    /// # Errors
+    ///
+    /// The store's.
+    pub async fn backlog(&self) -> crate::store::StoreResult<Option<Backlog>> {
+        if self.out.is_none() {
+            return Ok(None);
+        }
+        let now = self.clock.now();
+        let pending = self.store.pending(now).await?;
+        let age = pending.oldest_due.map_or(0, |due| {
+            u64::try_from((now - due).whole_seconds()).unwrap_or(0)
+        });
+        Ok(Some(Backlog {
+            pending: pending.count,
+            oldest_due_age_seconds: age,
+        }))
     }
 
     /// The deployment's webhooks out, if set up.
