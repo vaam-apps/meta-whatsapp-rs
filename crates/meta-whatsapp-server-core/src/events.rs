@@ -748,6 +748,13 @@ mod tests {
             panic!("the outbox was written")
         }
 
+        async fn headers_after(
+            &self,
+            _: &crate::outbox::HeaderQuery,
+        ) -> StoreResult<crate::outbox::HeaderPage> {
+            panic!("the outbox was read")
+        }
+
         async fn page(&self, _: &EventQuery) -> StoreResult<crate::outbox::EventPage> {
             panic!("the outbox was read")
         }

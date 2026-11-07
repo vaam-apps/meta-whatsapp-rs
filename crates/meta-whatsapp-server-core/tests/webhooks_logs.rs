@@ -30,7 +30,9 @@ use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::inbound::{Inbound, LOG_TARGET, Pipeline, Refused};
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::notify::EventNotifier;
-use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox};
+use meta_whatsapp_server_core::outbox::{
+    EventPage, EventQuery, HeaderPage, HeaderQuery, NewEvent, Outbox,
+};
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
 };
@@ -128,6 +130,9 @@ impl Outbox for BrokenOutbox {
         Err(StorageError::Backend(anyhow::anyhow!(
             "the log test's outbox failure"
         )))
+    }
+    async fn headers_after(&self, _: &HeaderQuery) -> StoreResult<HeaderPage> {
+        unimplemented!("the pipeline does not poll")
     }
     async fn page(&self, _: &EventQuery) -> StoreResult<EventPage> {
         unimplemented!("the pipeline does not poll")

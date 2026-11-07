@@ -14,7 +14,8 @@ use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use crate::backend::Backend;
 use crate::model::TenantId;
 use crate::outbox::{
-    AfterMove, DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard,
+    AfterMove, DedupWindow, EventPage, EventQuery, GuardedBinding, HeaderQuery, NewEvent, Outbox,
+    RouteGuard,
 };
 use crate::store::RecordStore;
 
@@ -342,6 +343,159 @@ pub async fn filters(backend: &dyn Backend) {
     let page = store.page(&q).await.unwrap();
     assert!(page.events.is_empty() && !page.more);
     assert_eq!(page.high_water, 3);
+}
+
+/// [`Outbox::headers_after`] (roadmap M2l) answers a page's rows without
+/// their data: the same sequences, ids, tenants and types as
+/// [`Outbox::page`] for the same tenant, cursor, types and limit, in
+/// order, at most the limit with `more` when more follow, the stream's
+/// bounds as a page's, never another tenant's rows nor an operator-only
+/// one, and large rows as any other.
+pub async fn headers(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-h", "71").await;
+    bind(records.as_ref(), "suite-i", "72").await;
+    let headers_of = |after: Option<i64>, types: Option<Vec<&str>>, limit: usize| HeaderQuery {
+        tenant: tenant("suite-h"),
+        after,
+        types: types.map(|t| t.into_iter().map(str::to_owned).collect()),
+        limit,
+    };
+    // An empty stream: no rows, no bounds.
+    let none = store
+        .headers_after(&headers_of(None, None, 10))
+        .await
+        .unwrap();
+    assert!(none.headers.is_empty() && !none.more);
+    assert_eq!((none.purged_through, none.high_water), (0, 0));
+
+    let big = NewEvent {
+        data: format!("{{\"pad\":\"{}\"}}", "x".repeat(256 * 1024)),
+        ..row(Some("suite-h"), "history_synced", "71", None)
+    };
+    store
+        .insert(&row(Some("suite-h"), "message_received", "71", None))
+        .await
+        .unwrap()
+        .unwrap();
+    store.insert(&big).await.unwrap().unwrap();
+    store
+        .insert(&row(None, "unknown", "71", None))
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .insert(&row(Some("suite-i"), "message_received", "72", None))
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .insert(&row(Some("suite-h"), "status_updated", "71", None))
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .insert(&row(Some("suite-h"), "message_received", "71", None))
+        .await
+        .unwrap()
+        .unwrap();
+
+    // The same rows as a page, without their data.
+    let page = store.page(&query("suite-h", None, 10)).await.unwrap();
+    let all = store
+        .headers_after(&headers_of(None, None, 10))
+        .await
+        .unwrap();
+    assert_eq!(all.headers.len(), 4, "only suite-h's rows");
+    assert_eq!(all.headers.len(), page.events.len());
+    for (header, event) in all.headers.iter().zip(&page.events) {
+        assert_eq!(header.sequence, event.sequence);
+        assert_eq!(header.id, event.id);
+        assert_eq!(header.tenant, event.tenant);
+        assert_eq!(header.tenant, Some(tenant("suite-h")));
+        assert_eq!(header.event_type, event.event_type);
+    }
+    assert_eq!(
+        all.headers.iter().map(|h| h.sequence).collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    assert!(!all.more);
+    assert_eq!((all.purged_through, all.high_water), (0, 4));
+    assert_eq!(
+        all.headers[1].event_type, "history_synced",
+        "the large row is a row like the others"
+    );
+
+    // At most the limit, `more` when more follow, and after the cursor.
+    let two = store
+        .headers_after(&headers_of(None, None, 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        two.headers.iter().map(|h| h.sequence).collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(two.more);
+    assert_eq!(two.high_water, 4, "the stream's, not the page's");
+    let rest = store
+        .headers_after(&headers_of(Some(2), None, 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        rest.headers.iter().map(|h| h.sequence).collect::<Vec<_>>(),
+        [3, 4]
+    );
+    assert!(!rest.more, "exactly the limit left is not more");
+    let past = store
+        .headers_after(&headers_of(Some(4), None, 2))
+        .await
+        .unwrap();
+    assert!(past.headers.is_empty() && !past.more);
+    assert_eq!(past.high_water, 4);
+
+    // Types narrow it, and the bounds stay the stream's.
+    let typed = store
+        .headers_after(&headers_of(None, Some(vec!["message_received"]), 10))
+        .await
+        .unwrap();
+    assert_eq!(
+        typed.headers.iter().map(|h| h.sequence).collect::<Vec<_>>(),
+        [1, 4]
+    );
+    assert_eq!(typed.high_water, 4);
+    let typed = store
+        .headers_after(&headers_of(
+            None,
+            Some(vec!["message_received", "status_updated"]),
+            2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        typed.headers.iter().map(|h| h.sequence).collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert!(typed.more);
+    let nothing = store
+        .headers_after(&headers_of(None, Some(vec!["call_updated"]), 10))
+        .await
+        .unwrap();
+    assert!(nothing.headers.is_empty() && !nothing.more);
+    assert_eq!(nothing.high_water, 4);
+
+    // The other tenant's stream is its own.
+    let theirs = store
+        .headers_after(&HeaderQuery {
+            tenant: tenant("suite-i"),
+            ..headers_of(None, None, 10)
+        })
+        .await
+        .unwrap();
+    assert_eq!(theirs.headers.len(), 1);
+    assert_eq!(theirs.headers[0].tenant, Some(tenant("suite-i")));
+    assert_eq!(theirs.high_water, 1);
 }
 
 /// The time between the older and the newer rows of the purge cases.
@@ -790,6 +944,7 @@ pub async fn run(backend: &dyn Backend) {
     dedup(backend).await;
     dedup_window(backend).await;
     filters(backend).await;
+    headers(backend).await;
     purge_is_per_stream(backend).await;
     purge(backend).await;
     purge_keeps_a_taken_key(backend).await;

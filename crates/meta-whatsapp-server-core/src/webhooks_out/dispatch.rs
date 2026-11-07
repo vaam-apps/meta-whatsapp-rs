@@ -55,10 +55,9 @@ use super::{
     MAX_DELIVERED_DATA_BYTES, MAX_RESPONSE_BYTES, PING,
 };
 use crate::backend::Backend;
-use crate::events::MAX_PAGE_DATA_BYTES;
 use crate::model::TenantId;
 use crate::notify::{EventNotifier, Subscription};
-use crate::outbox::{EventQuery, Outbox, StoredEvent};
+use crate::outbox::{HeaderQuery, Outbox, StoredEvent};
 
 /// The envelope's version (the HTTP envelope's `api_version`).
 pub const ENVELOPE_VERSION: &str = "v1";
@@ -419,7 +418,8 @@ impl Dispatcher {
 
     /// One fan-out round: each enabled endpoint's tenant's events after
     /// its cursor, of its types, up to [`DispatchSettings::fan_out_page`],
-    /// recorded as deliveries, the cursor moved. The tenants with an
+    /// recorded as deliveries, the cursor moved; read as headers, never their
+    /// data (roadmap M2l). The tenants with an
     /// enabled endpoint.
     ///
     /// # Errors
@@ -443,26 +443,24 @@ impl Dispatcher {
     async fn fan_out_to(&self, endpoint: &Endpoint) -> crate::store::StoreResult<()> {
         let page = self
             .outbox
-            .page(&EventQuery {
+            .headers_after(&HeaderQuery {
                 tenant: endpoint.tenant.clone(),
                 after: Some(endpoint.cursor),
                 types: Some(endpoint.types.clone()),
-                phone_number_id: None,
                 limit: self.out.dispatch.fan_out_page.max(1),
-                max_bytes: MAX_PAGE_DATA_BYTES,
             })
             .await?;
-        let to = match page.events.last() {
+        let to = match page.headers.last() {
             Some(last) if page.more => last.sequence,
             _ => page.high_water.max(endpoint.cursor),
         };
-        if to == endpoint.cursor && page.events.is_empty() {
+        if to == endpoint.cursor && page.headers.is_empty() {
             return Ok(());
         }
         let now = self.clock.now();
         let give_up_at = self.out.schedule.give_up_at(now);
-        let mut deliveries = Vec::with_capacity(page.events.len());
-        for event in page.events {
+        let mut deliveries = Vec::with_capacity(page.headers.len());
+        for event in page.headers {
             // An outbox page is the tenant's own stream; checked again.
             if event.tenant.as_ref() != Some(&endpoint.tenant) {
                 continue;
