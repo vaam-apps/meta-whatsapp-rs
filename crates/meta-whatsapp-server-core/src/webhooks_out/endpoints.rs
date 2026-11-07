@@ -391,6 +391,15 @@ impl OpenEndpoints<'_> {
         }
     }
 
+    /// The tenants `endpoint` names, as the store is to find them still
+    /// when it writes (D342): what the key was checked against.
+    fn through(endpoint: &Endpoint) -> Option<Vec<TenantId>> {
+        endpoint
+            .tenants
+            .as_ref()
+            .map(|named| named.iter().map(|t| t.tenant.clone()).collect())
+    }
+
     /// The caller's tenant's endpoint `id`, if the key reaches it: `404`
     /// otherwise, alike for another tenant's, a missing one and one the
     /// key does not reach.
@@ -456,10 +465,7 @@ impl OpenEndpoints<'_> {
             tenants,
             // Written only while the set the key was checked against is
             // still the endpoint's (D342).
-            reached_through: found
-                .tenants
-                .as_ref()
-                .map(|named| named.iter().map(|t| t.tenant.clone()).collect()),
+            reached_through: Self::through(&found),
         };
         let updated = self
             .store()
@@ -477,8 +483,13 @@ impl OpenEndpoints<'_> {
     /// `404` as [`Self::get`].
     pub async fn delete(&self, id: &str) -> Result<(), ServiceError> {
         let id = endpoint_id(id)?;
-        self.reached(&id).await?;
-        if !self.store().delete_endpoint(self.tenant, &id).await? {
+        let found = self.reached(&id).await?;
+        let through = Self::through(&found);
+        if !self
+            .store()
+            .delete_endpoint(self.tenant, &id, through.as_deref())
+            .await?
+        {
             return Err(ServiceError::not_found());
         }
         tracing::info!(target: "audit", tenant = %self.tenant, endpoint = %id, "webhook_endpoint_deleted");
@@ -496,7 +507,8 @@ impl OpenEndpoints<'_> {
         id: &str,
     ) -> Result<(Endpoint, EndpointSecret), ServiceError> {
         let id = endpoint_id(id)?;
-        self.reached(&id).await?;
+        let found = self.reached(&id).await?;
+        let through = Self::through(&found);
         let secret = EndpointSecret::generate().ok_or_else(ServiceError::internal)?;
         let sealed = self
             .out
@@ -509,7 +521,7 @@ impl OpenEndpoints<'_> {
             .unwrap_or(now);
         let rotated = self
             .store()
-            .rotate_secret(self.tenant, &id, &sealed, until, now)
+            .rotate_secret(self.tenant, &id, &sealed, until, now, through.as_deref())
             .await?
             .ok_or_else(ServiceError::not_found)?;
         tracing::info!(target: "audit", tenant = %self.tenant, endpoint = %id, "webhook_secret_rotated");
@@ -524,7 +536,8 @@ impl OpenEndpoints<'_> {
     /// `404` as [`Self::get`].
     pub async fn test(&self, id: &str) -> Result<Delivery, ServiceError> {
         let id = endpoint_id(id)?;
-        self.reached(&id).await?;
+        let found = self.reached(&id).await?;
+        let through = Self::through(&found);
         let now = self.endpoints.clock.now();
         let delivery = NewDelivery {
             id: DeliveryId::generate(now).ok_or_else(ServiceError::internal)?,
@@ -535,7 +548,7 @@ impl OpenEndpoints<'_> {
             give_up_at: now,
         };
         self.store()
-            .insert_delivery(self.tenant, &id, &delivery)
+            .insert_delivery(self.tenant, &id, &delivery, through.as_deref())
             .await?
             .ok_or_else(ServiceError::not_found)
     }

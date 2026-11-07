@@ -1359,3 +1359,161 @@ async fn live_postgres_two_hundred_streams_at_a_hundred_events_a_second_hold_bou
     assert!(load.peak_buffered_bytes <= load.streams * load.budget_per_stream);
     backend.close().await;
 }
+
+/// One of `live_postgres_a_set_changed_under_the_row_lock_refuses_the_call_that_waited`'s
+/// calls, made with `through` as the set it was checked against: whether
+/// it went through.
+async fn call_through_set(
+    store: &meta_whatsapp_server_store_postgres::PgWebhookStore,
+    op: &str,
+    owner: &meta_whatsapp_server_core::model::TenantId,
+    id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+    through: &[meta_whatsapp_server_core::model::TenantId],
+    new_secret: &meta_whatsapp_server_core::webhooks_out::SealedSecret,
+    now: time::OffsetDateTime,
+) -> meta_whatsapp_server_core::store::StoreResult<bool> {
+    use meta_whatsapp_server_core::webhooks_out::DeliveryId;
+    use meta_whatsapp_server_core::webhooks_out::store::{
+        EndpointChange, NewDelivery, WebhookStore as _,
+    };
+    match op {
+        "change" => store
+            .update_endpoint(
+                owner,
+                id,
+                &EndpointChange {
+                    enabled: Some(false),
+                    reached_through: Some(through.to_vec()),
+                    ..EndpointChange::default()
+                },
+                now,
+            )
+            .await
+            .map(|done| done.is_some()),
+        "rotation" => store
+            .rotate_secret(
+                owner,
+                id,
+                new_secret,
+                now + time::Duration::hours(24),
+                now,
+                Some(through),
+            )
+            .await
+            .map(|done| done.is_some()),
+        "ping" => store
+            .insert_delivery(
+                owner,
+                id,
+                &NewDelivery {
+                    id: DeliveryId::generate(now).unwrap(),
+                    event_id: None,
+                    sequence: None,
+                    event_type: "ping".to_owned(),
+                    created_at: now,
+                    give_up_at: now,
+                },
+                Some(through),
+            )
+            .await
+            .map(|done| done.is_some()),
+        _ => store.delete_endpoint(owner, id, Some(through)).await,
+    }
+}
+
+/// Roadmap M2m, D342: a change, a rotation, a ping and a deletion of a
+/// platform endpoint read its set of named tenants under the endpoint's
+/// row lock, so a set changed by a session that holds the row (and commits
+/// after the call began) is the set the call sees: it is refused as a
+/// missing endpoint and writes nothing. The holder removes a tenant from
+/// the set and holds the row; each call, made with the set before, has to
+/// wait for it (a call that read the set unlocked would finish at once and
+/// succeed), then answers as missing. Decisive: `FOR UPDATE` in
+/// `lock_if_reached`; the check itself is the conformance suite's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_set_changed_under_the_row_lock_refuses_the_call_that_waited() {
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    use meta_whatsapp_server_core::webhooks_out::store::{
+        CreateOutcome, NewEndpoint, WebhookStore as _,
+    };
+    use meta_whatsapp_server_core::webhooks_out::{EndpointId, SealedSecret, TenantCursor};
+    use meta_whatsapp_server_store_postgres::PgWebhookStore;
+    use std::time::Duration;
+    use time::OffsetDateTime;
+
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(6).await;
+    migrate(&pool).await.unwrap();
+    let records = PgStore::new(pool.clone());
+    let store = std::sync::Arc::new(PgWebhookStore::new(pool.clone()));
+    let tenant = |id: &str| TenantId::parse(id).unwrap();
+    let (owner, a, b) = (tenant("lock-owner"), tenant("lock-a"), tenant("lock-b"));
+    for t in [&owner, &a, &b] {
+        records.create_tenant(t, "").await.unwrap().unwrap();
+    }
+    let now = OffsetDateTime::now_utc();
+    let both = vec![a.clone(), b.clone()];
+    let cursor = |t: &TenantId| TenantCursor {
+        tenant: t.clone(),
+        cursor: 1,
+    };
+    let sealed = |n: u8| SealedSecret::from_stored(format!("v1.k1.sealed-{n}"));
+    let holder_pool = db.pool(1).await;
+    for op in ["change", "rotation", "ping", "deletion"] {
+        let id = EndpointId::generate().unwrap();
+        let made = store
+            .create_endpoint(
+                &NewEndpoint {
+                    id: id.clone(),
+                    tenant: owner.clone(),
+                    url: "https://hooks.example.com/wa".to_owned(),
+                    types: vec!["message_received".to_owned()],
+                    secret: sealed(1),
+                    cursor: 0,
+                    tenants: Some(vec![cursor(&a), cursor(&b)]),
+                    now,
+                },
+                10,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(made, CreateOutcome::Created(_)), "{op}");
+        let mut holder = holder_pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM wa_server_webhook_endpoints WHERE id = $1 FOR UPDATE")
+            .bind(id.as_str())
+            .execute(&mut *holder)
+            .await
+            .unwrap();
+        sqlx::query(
+            "DELETE FROM wa_server_webhook_endpoint_tenants \
+             WHERE endpoint_id = $1 AND tenant_id = $2",
+        )
+        .bind(id.as_str())
+        .bind(b.as_str())
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+        let call = {
+            let (store, owner, id, both) = (store.clone(), owner.clone(), id.clone(), both.clone());
+            let new_secret = sealed(2);
+            tokio::spawn(async move {
+                call_through_set(&store, op, &owner, &id, &both, &new_secret, now).await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !call.is_finished(),
+            "the {op} did not wait for the endpoint's row"
+        );
+        holder.commit().await.unwrap();
+        assert!(
+            !call.await.unwrap().unwrap(),
+            "the {op} went through a set that changed while it waited"
+        );
+        let kept = store.endpoint(&owner, &id).await.unwrap().unwrap();
+        assert!(kept.enabled, "{op}");
+        assert_eq!(kept.secret, sealed(1), "{op}");
+    }
+}
