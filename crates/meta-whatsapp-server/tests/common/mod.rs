@@ -789,12 +789,69 @@ impl Harness {
         Self::build_with_retry(stores, settings, app_secrets, wrap, RetryPolicy::NONE)
     }
 
+    /// On `stores` with `settings`, the service's one clock being `clock`
+    /// (roadmap M5k: two replicas sharing a fake clock, a broadcast's
+    /// pacer on it), Meta reached through what `wrap` makes of the
+    /// scripted transport.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_clock(
+        stores: Stores,
+        settings: Settings,
+        clock: ManualClock,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::build_full(
+            stores,
+            settings,
+            DEFAULT_APP_SECRETS,
+            wrap,
+            RetryPolicy::NONE,
+            clock,
+            None,
+        )
+    }
+
+    /// As [`Self::with_clock`], the service's clock being `state_clock`
+    /// (a virtual clock over Tokio's paused time, say) and the harness's
+    /// own `clock` a handle that moves nothing.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_state_clock(
+        stores: Stores,
+        settings: Settings,
+        state_clock: Arc<dyn meta_whatsapp_rs::core::clock::Clock>,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        let clock = ManualClock::new(state_clock.now());
+        Self::build_full(
+            stores,
+            settings,
+            DEFAULT_APP_SECRETS,
+            wrap,
+            RetryPolicy::NONE,
+            clock,
+            Some(state_clock),
+        )
+    }
+
     fn build_with_retry(
         stores: Stores,
         settings: Settings,
         app_secrets: &[&str],
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
         retry: RetryPolicy,
+    ) -> Self {
+        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
+        Self::build_full(stores, settings, app_secrets, wrap, retry, clock, None)
+    }
+
+    fn build_full(
+        stores: Stores,
+        settings: Settings,
+        app_secrets: &[&str],
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+        retry: RetryPolicy,
+        clock: ManualClock,
+        state_clock: Option<Arc<dyn meta_whatsapp_rs::core::clock::Clock>>,
     ) -> Self {
         let Stores {
             store,
@@ -815,13 +872,12 @@ impl Harness {
             .retry(retry)
             .build()
             .unwrap();
-        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
         let inbound = Inbound::new(
             app_secrets.iter().copied().map(AppSecret::new).collect(),
             VerifyToken::new(VERIFY_TOKEN),
         )
         .unwrap()
-        .with_clock(Arc::new(clock.clone()));
+        .with_clock(state_clock.unwrap_or_else(|| Arc::new(clock.clone())));
         let backend: Arc<dyn Backend> = Arc::new(HarnessBackend {
             store: store.clone(),
             kv: kv.clone(),

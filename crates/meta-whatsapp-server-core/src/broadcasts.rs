@@ -815,7 +815,11 @@ impl Outbound for TenantOutbound {
                     code = refused.code(),
                     "a broadcast's number cannot send: nothing sent"
                 );
-                return Err(unusable());
+                let error = unusable();
+                self.records
+                    .count(id, Counted::Failed(kind_code(error.kind()).to_owned()))
+                    .await;
+                return Err(error);
             }
         };
         let billed = billed_to_binding(sent, &owned, self.names_account);

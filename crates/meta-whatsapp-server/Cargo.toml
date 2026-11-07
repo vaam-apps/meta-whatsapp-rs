@@ -79,7 +79,7 @@ tracing.workspace = true
 clap.workspace = true
 
 [dev-dependencies]
-meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing"] }
+meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing", "bot"] }
 # The unit tests' memory backend, whatever the build's features.
 meta-whatsapp-server-store-memory.workspace = true
 # tests/media.rs: Meta's digest in base64, as its webhooks carry it (the
