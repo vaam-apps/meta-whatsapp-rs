@@ -23,7 +23,6 @@ use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::BusinessId;
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
-use meta_whatsapp_server::model::Scope;
 use meta_whatsapp_server::state::Settings;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
