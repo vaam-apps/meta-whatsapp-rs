@@ -761,11 +761,7 @@ fn webhook_config(
 /// still validated, so a typo is not hidden by it.
 fn pool_settings(r: &Reader<'_>) -> Result<PoolSettings, ConfigError> {
     let defaults = PoolSettings::default();
-    let on = match r
-        .plain("WA_SERVER_WEBHOOK_POOL")?
-        .as_deref()
-        .map(str::trim)
-    {
+    let on = match r.plain("WA_SERVER_WEBHOOK_POOL")?.as_deref().map(str::trim) {
         None | Some("" | "on") => true,
         Some("off") => false,
         Some(_) => {

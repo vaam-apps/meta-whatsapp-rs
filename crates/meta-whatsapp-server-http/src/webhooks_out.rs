@@ -1149,7 +1149,13 @@ mod tests {
         assert_eq!((counts.accepted(), counts.requests()), (2, 6));
         // An address in the URL is a third key.
         assert_eq!(
-            deliver(&sender, &policy, &resolver, &format!("http://127.0.0.1:{port}/")).await,
+            deliver(
+                &sender,
+                &policy,
+                &resolver,
+                &format!("http://127.0.0.1:{port}/")
+            )
+            .await,
             Ok(Ok(204))
         );
         assert_eq!(counts.accepted(), 3);
@@ -1161,10 +1167,11 @@ mod tests {
     #[tokio::test]
     async fn over_tls_a_connection_is_reused_for_the_same_name_only() {
         let key = rcgen::KeyPair::generate().unwrap();
-        let cert = rcgen::CertificateParams::new(vec!["one.test".to_owned(), "two.test".to_owned()])
-            .unwrap()
-            .self_signed(&key)
-            .unwrap();
+        let cert =
+            rcgen::CertificateParams::new(vec!["one.test".to_owned(), "two.test".to_owned()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
         let der = cert.der().clone();
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
@@ -1276,7 +1283,11 @@ mod tests {
         }
         settle().await;
         assert_eq!(
-            (counts.accepted(), sender.idle_connections(), counts.closed()),
+            (
+                counts.accepted(),
+                sender.idle_connections(),
+                counts.closed()
+            ),
             (3, 0, 3)
         );
         // Each zero is an off switch of its own.

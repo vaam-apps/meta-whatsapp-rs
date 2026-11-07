@@ -950,11 +950,6 @@ fn webhooks_out_read_a_data_key_an_allow_list_and_a_window() {
         ("WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT", "four"),
         ("WA_SERVER_WEBHOOK_LEASE", "29s"),
         ("WA_SERVER_WEBHOOK_LEASE", "soon"),
-        ("WA_SERVER_WEBHOOK_POOL", "yes"),
-        ("WA_SERVER_WEBHOOK_POOL_IDLE", "0s"),
-        ("WA_SERVER_WEBHOOK_POOL_IDLE", "soon"),
-        ("WA_SERVER_WEBHOOK_POOL_PER_DESTINATION", "0"),
-        ("WA_SERVER_WEBHOOK_POOL_DESTINATIONS", "many"),
     ] {
         let error = refused(
             &production()
@@ -1015,6 +1010,23 @@ fn webhooks_out_pool_settings() {
     .unwrap();
     assert_eq!(off.webhooks.pool, PoolSettings::off());
     assert!(!off.webhooks.pool.enabled());
+    for (name, value) in [
+        ("WA_SERVER_WEBHOOK_POOL", "yes"),
+        ("WA_SERVER_WEBHOOK_POOL_IDLE", "0s"),
+        ("WA_SERVER_WEBHOOK_POOL_IDLE", "soon"),
+        ("WA_SERVER_WEBHOOK_POOL_PER_DESTINATION", "0"),
+        ("WA_SERVER_WEBHOOK_POOL_DESTINATIONS", "many"),
+    ] {
+        let error = refused(&production().set(name, value));
+        assert!(
+            matches!(error, ConfigError::Invalid { .. }),
+            "{name}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{name}: the value is quoted"
+        );
+    }
 }
 
 /// Roadmap M5c1: `WA_SERVER_MEDIA_CONVERTER`. Unset or `none`, no
