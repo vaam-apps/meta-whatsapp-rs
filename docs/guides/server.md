@@ -149,6 +149,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on`: a key holding the scope `call_credentials` (no key holds it unless an operator gives it) may read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`); `off`: that route is `403 feature_not_available` and Meta is not asked (roadmap M5e2; a proposal, design D410) |
 | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) and every [calling](#calling) action on it names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
+| `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` | `off` | `on`: a key holding the scope `numbers` may make Meta deliver one of its numbers' webhooks to a URL of its own instead of the service ([Number settings](#number-settings)); the URL is checked as a webhook endpoint's is, so it needs `WA_SERVER_DATA_KEY` and a `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` that lists it. Off, `403 feature_not_available` and nothing asked of Meta; clearing an override is never gated by it. Anything else refuses the start |
 | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration, and the operator's signing of the max price agreement ([Marketing](#marketing-messages-api-max-price-and-welcome-message-sequences)). Off, each answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
@@ -2150,6 +2151,8 @@ number's `messaging_limit_tier` (`TIER_250`, `TIER_1K`, `TIER_10K`,
 | `GET`, `POST /v1/numbers/{pn}/official-business-account` | the status; the application (audited, takes an `Idempotency-Key`) |
 | `GET`, `PUT /v1/numbers/{pn}/compliance-info` | India's business compliance information; the declaration (the legal act, below) |
 | `GET /v1/numbers/{pn}/health-status` | whether messages can be sent through the number, and each node's status |
+| `GET /v1/wabas/{waba_id}/health-status` | the same for your WABA: `can_send_message` and the nodes you own or already hold (your WABA, your numbers, its templates, the business portfolio, the app); another tenant's WABA is `404`, nothing asked of Meta |
+| `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override` | the number's own webhook URL (`{url}`, `null` for none); divert its webhooks to your URL (off unless the deployment enables it); restore delivery to the service (always allowed) |
 | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | the welcome message flag, ice breakers (4 of 80 characters) and commands (30; names of 32 and hints of 256) |
 | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase one user's contact book entry at Meta (irreversible; scope `erasure`, audited) |
 
@@ -2185,10 +2188,34 @@ number's `messaging_limit_tier` (`TIER_250`, `TIER_1K`, `TIER_10K`,
   links are `http` or `https` without credentials, texts have no control,
   bidi override or zero-width character, short texts are at most 128
   characters and free texts 1024.
+- **The webhook override hides the number from the service.** With an
+  override Meta delivers the number's `messages`, `calls`, `history` and the
+  other supported webhooks (never templates' or accounts') to your URL
+  instead of the service, whose inbox, events and OTP delivery statuses for
+  that number then go quiet. So `PUT …/webhook-override` (`{url,
+  verify_token}`, `204`) is `403 feature_not_available`, with nothing asked
+  of Meta, unless the deployment sets `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`
+  (roadmap M5c6, design D441). Turned on, the URL goes through **the same
+  check as a webhook endpoint's** (`https`, no credentials in it, a host the
+  operator listed in `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`, every address
+  it resolves to allowed, never a private, loopback, link-local or metadata
+  one unless the operator listed its range): refused, it is `422` on `url`
+  and nothing is sent, whatever the reason; with no webhooks out configured,
+  `409 webhooks_not_configured`. Meta's limits apply: the URL at most 200
+  characters, the verify token (the one Meta echoes to verify the URL) not
+  empty. The set is audited (`webhook_override_set`, tenant, WABA, number,
+  the key's public id, the outcome), and a refused one too, as a warning
+  (`webhook_override_refused`, with the reason); the URL, the verify token
+  and Meta's error texts are in no log, audit event, error or answer.
+  **Clearing is always allowed** to the number's owner (and to an operator's
+  platform key acting for the tenant), whatever the setting:
+  `DELETE …/webhook-override` restores delivery to the service
+  (`webhook_override_cleared`). `GET` answers the number's own URL only,
+  never the WABA's override or the service's own callback.
 - **Not offered**: changing the number's `webhook_url` or
-  `connection_status` (the service owns the number's events), calling
-  settings (roadmap M5e), bot details and the coexistence data sync. No
-  call of these routes was run against Meta live.
+  `connection_status` (the service owns the number's events), the WABA-level
+  callback override, calling settings (roadmap M5e), bot details and the
+  coexistence data sync. No call of these routes was run against Meta live.
 
 ## Marketing Messages API, max price and welcome message sequences
 
