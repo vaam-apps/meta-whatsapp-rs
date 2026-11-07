@@ -1974,6 +1974,50 @@ mod tests {
         );
     }
 
+    /// Roadmap M5j2's operator fingerprints are the operation and the body's
+    /// canonical form, of a kind of their own. Decisive: the operation id
+    /// (dropped, the two routes share one for one body), the body (dropped,
+    /// any body replays), and the `admin-json` kind (the pinned digests).
+    #[test]
+    fn the_operator_fingerprints_are_per_body_operation_and_kind() {
+        let body = serde_json::json!({"name": "x", "partner_app_id": "1"});
+        let other = serde_json::json!({"name": "y", "partner_app_id": "1"});
+        let reordered = serde_json::json!({"partner_app_id": "1", "name": "x"});
+        assert_eq!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::create_partner_solution(&reordered)
+        );
+        assert_ne!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::create_partner_solution(&other)
+        );
+        assert_ne!(
+            Fingerprint::create_partner_solution(&body),
+            Fingerprint::submit_business_verification(&body)
+        );
+        assert_ne!(
+            Fingerprint::submit_business_verification(&body),
+            Fingerprint::submit_business_verification(&other)
+        );
+        // Pinned, derived apart from the code as `fingerprints_are_pinned`
+        // is (kind `admin-json`, the operation's id, no parameters, the
+        // canonical body): the kind and the id are stored in no record but
+        // decide which requests share a key's record.
+        let pinned = serde_json::json!({
+            "name": "x",
+            "partner_app_id": "1",
+            "owner_permissions": ["MESSAGING"],
+        });
+        assert_eq!(
+            hex::encode(Fingerprint::create_partner_solution(&pinned).as_bytes()),
+            "5176d82d503b69851b68b3addf4de70e8ee123334ac434c462b06ec51fe5f1eb"
+        );
+        assert_eq!(
+            hex::encode(Fingerprint::submit_business_verification(&pinned).as_bytes()),
+            "25f1ffc279026c81159aff939cd6fdf2466aa85a8c719d195b60c61c9e84a53a"
+        );
+    }
+
     /// The canonical input is the JSON as parsed (D27: the request's JSON
     /// as it came, canonicalized), so two bodies share a fingerprint only
     /// when they parse to one value, which is what the operation then
