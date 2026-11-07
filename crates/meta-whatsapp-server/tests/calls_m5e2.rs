@@ -132,7 +132,7 @@ async fn the_password_is_asked_with_metas_parameter_and_answered_only_here() {
 /// The scope `call_credentials` is its own: a key with `calls`, and a key
 /// with every other scope, are `403 forbidden` before anything is read or
 /// asked, with the setting on; the key holding it alone is answered.
-/// Decisive: `Operation::scope` for `GetCallSipCredentials` (map it to
+/// Decisive: the route's `tenant(…, Scope::CallCredentials)` (and `Operation::scope` for `GetCallSipCredentials`, pinned by the api-axum unit test; map it to
 /// `Calls` and the first two are answered).
 #[tokio::test]
 async fn the_password_needs_the_scope_that_no_other_scope_stands_in_for() {
