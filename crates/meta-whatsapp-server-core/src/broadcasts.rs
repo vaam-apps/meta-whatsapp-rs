@@ -836,8 +836,9 @@ impl Outbound for TenantOutbound {
                 Ok(response)
             }
             Err(error) => {
-                // A `190` marks the WABA's numbers, as any send's does.
-                let _ = owned.failed(&self.authz, &error).await;
+                // A `190` marks the WABA's numbers, as any send's does; Meta's
+                // texts stay out of the logs: they may quote the person.
+                let _ = owned.failed_withholding_texts(&self.authz, &error).await;
                 // Only a failure that will stay is counted: a throttled
                 // send is resent, and counted when it ends.
                 if !error.may_resend() {

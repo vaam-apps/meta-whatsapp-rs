@@ -1129,6 +1129,7 @@ impl Sample {
                 "business_id" => SAMPLE_BUSINESS_ID,
                 "code" => SAMPLE_QR_CODE,
                 "call_id" => SAMPLE_CALL_ID,
+                "broadcast_id" => SAMPLE_BROADCAST_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -1137,6 +1138,9 @@ impl Sample {
         out
     }
 }
+
+/// A broadcast's id (roadmap M5k): the shape of one, never made.
+pub const SAMPLE_BROADCAST_ID: &str = "bc_00000000000000000000000000000001";
 
 /// A Multi-Partner Solution, and a migration intent (roadmap M5j).
 pub const SAMPLE_SOLUTION_ID: &str = "795033096057724";
@@ -1485,6 +1489,11 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             | "/v1/numbers/{pn}/thread-control/take"
             | "/v1/numbers/{pn}/thread-control/release",
         ) => serde_json::json!({"user": {"phone": SAMPLE_TO}}),
+        // Roadmap M5k: a broadcast of a template to one person.
+        ("POST", "/v1/numbers/{pn}/broadcasts") => serde_json::json!({
+            "template": {"name": "spring_sale", "language": {"code": "en_US"}},
+            "recipients": [{"phone": SAMPLE_TO}],
+        }),
         // Roadmap M5f: a group's creation, a change and the participants
         // and join requests of one (`groups/reference`).
         ("POST", "/v1/numbers/{pn}/groups") => {
