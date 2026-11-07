@@ -953,6 +953,22 @@ async fn reseal_webhook_secrets(h: &Harness, admin: &str, configured: bool) {
     } else {
         assert_eq!(resealed.code(), "webhooks_not_configured");
     }
+    purge_group_records(h, admin).await;
+}
+
+/// Roadmap M5f3: the operator purging a number's group records.
+async fn purge_group_records(h: &Harness, admin: &str) {
+    let purged = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                "/v1/admin/numbers/106540352242922/group-records",
+            )
+            .key(admin),
+        )
+        .await;
+    // A number that is not bound (D382): a bound one is refused.
+    assert_eq!(purged.status.as_u16(), 200, "{}", purged.text);
 }
 
 async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
