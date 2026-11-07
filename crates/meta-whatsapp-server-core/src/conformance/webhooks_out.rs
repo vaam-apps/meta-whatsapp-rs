@@ -91,6 +91,7 @@ pub async fn run(backend: &dyn Backend) {
     a_rotation_signs_twice_for_24_hours(backend).await;
     a_large_event_is_delivered_truncated(backend).await;
     a_fan_out_reads_no_event_data(backend).await;
+    a_fan_out_pages_over_headers(backend).await;
     two_dispatchers_send_each_event_once(backend).await;
     a_slow_endpoint_does_not_starve_another(backend).await;
     every_endpoint_is_listed_to_the_walk(backend).await;
@@ -3265,4 +3266,115 @@ pub async fn a_fan_out_reads_no_event_data(backend: &dyn Backend) {
     assert_eq!(sent, ids, "each event delivered once");
     assert!(reads(&counted.outbox.gets) >= ids.len());
     assert_eq!(reads(&counted.outbox.pages), 0, "no full page at all");
+}
+
+/// Roadmap M2l: a fan-out over headers records the same deliveries as one
+/// over pages did. With a page of 2, an endpoint of one type, and a stream
+/// of its own and another tenant's events of several types: a full round
+/// moves the cursor to its last delivery (not past events it has not
+/// read), the round that fills no page moves it to the stream's high
+/// water (past the trailing events of other types), another tenant's and
+/// other types' events are never a delivery, and a round with nothing new
+/// moves nothing. Decisive: the cursor after each round, the delivered
+/// sequences.
+pub async fn a_fan_out_pages_over_headers(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let settings = DispatchSettings {
+        fan_out_page: 2,
+        ..fast_settings()
+    };
+    let rig = rig(backend, RetrySchedule::default(), settings);
+    let (a, b) = (unique_tenant("wh-pg-a"), unique_tenant("wh-pg-b"));
+    let (pa, pb) = (super::unique_digits(), super::unique_digits());
+    let ca = caller(backend, &rig.authz, &a).await;
+    let _ = caller(backend, &rig.authz, &b).await;
+    let (endpoint, _) = rig
+        .endpoints
+        .open(&rig.authz, &ca)
+        .unwrap()
+        .create(create(
+            "https://hooks.example.com/wa",
+            &["message_received"],
+        ))
+        .await
+        .unwrap();
+    bind(backend.records().as_ref(), &a, &pa).await;
+    bind(backend.records().as_ref(), &b, &pb).await;
+    let outbox = backend.outbox();
+    let start = endpoint.cursor;
+    let mut mine = Vec::new();
+    // a: msg, status, (b: msg), msg, msg, status, status.
+    for (owner, event_type) in [
+        (&a, "message_received"),
+        (&a, "status_updated"),
+        (&b, "message_received"),
+        (&a, "message_received"),
+        (&a, "message_received"),
+        (&a, "status_updated"),
+        (&a, "status_updated"),
+    ] {
+        let pn = if owner == &a { &pa } else { &pb };
+        let event = row(Some(owner.as_str()), event_type, pn, Some(&super::unique()));
+        let sequence = outbox.insert(&event).await.unwrap().unwrap();
+        if owner == &a && event_type == "message_received" {
+            mine.push((event.id.clone(), sequence));
+        }
+    }
+    let cursor = || async {
+        backend
+            .webhooks()
+            .endpoint(&tenant(&a), &endpoint.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .cursor
+    };
+    let delivered = || async {
+        let mut got: Vec<_> = backend
+            .webhooks()
+            .deliveries(
+                &tenant(&a),
+                &endpoint.id,
+                &PageRequest {
+                    after: None,
+                    limit: 100,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|d| (d.event_id.unwrap(), d.sequence.unwrap()))
+            .collect::<Vec<_>>();
+        got.sort_by_key(|(_, sequence)| *sequence);
+        got
+    };
+    assert_eq!(start, 0, "a fresh tenant's stream starts empty");
+    // Round 1: the first two matching events, a third follows.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine[..2], "the first page");
+    assert_eq!(cursor().await, mine[1].1, "the page's last delivery");
+    // Round 2: the last match fills no page; on to the stream's end.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine, "every match, once");
+    assert_eq!(cursor().await, 6, "the tenant's high water, past the rest");
+    // Nothing new: nothing moves.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine);
+    assert_eq!(cursor().await, 6);
+    // A later event is picked up from there.
+    let later = row(
+        Some(a.as_str()),
+        "message_received",
+        &pa,
+        Some(&super::unique()),
+    );
+    let sequence = outbox.insert(&later).await.unwrap().unwrap();
+    assert_eq!(sequence, 7);
+    rig.dispatcher.fan_out().await.unwrap();
+    let mut all = mine.clone();
+    all.push((later.id, 7));
+    assert_eq!(delivered().await, all);
+    assert_eq!(cursor().await, 7);
 }

@@ -5916,8 +5916,15 @@ design's (§9).
     and `a_fan_out_reads_no_event_data` in the webhooks-out suite (a
     counting outbox: 100 events of 256 KiB, a fan-out makes no `page`
     and no `get`, the 100 deliveries then read their event by id, one
-    each, and no page). Mutation: a fan-out that reads an event whole
-    fails it (`no event read whole in a fan-out`). **Breaking** for an
+    each, and no page) and `a_fan_out_pages_over_headers` (a page of 2,
+    one type, another tenant's events: the cursor after each round, the
+    delivered sequences, the high water past trailing events of other
+    types; the `purge` cases also check the header read's bounds).
+    Mutation: a fan-out that reads an event whole fails the first
+    (`no event read whole in a fan-out`); a cursor that ignores `more`
+    or the high water, a header read that reports no `purged_through`,
+    or one that drops the types, the tenant, or the limit's extra row,
+    fails the others. **Breaking** for an
     `Outbox` implemented outside this repository, before the first
     release: the method is required (`HeaderPage::from_page` and
     `HeaderQuery::as_event_query` build it from `page`, for a double,

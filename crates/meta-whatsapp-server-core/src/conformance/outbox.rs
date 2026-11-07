@@ -545,6 +545,19 @@ pub async fn purge_is_per_stream(backend: &dyn Backend) {
     let v = store.page(&query("suite-v", None, 10)).await.unwrap();
     assert_eq!(v.events.len(), 1, "the newer stream's event stays");
     assert_eq!((v.purged_through, v.high_water), (0, 1));
+    // The header read reports the same bounds (roadmap M2l).
+    let header_query = |tenant_id: &str| HeaderQuery {
+        tenant: tenant(tenant_id),
+        after: None,
+        types: None,
+        limit: 10,
+    };
+    let u = store.headers_after(&header_query("suite-u")).await.unwrap();
+    assert!(u.headers.is_empty() && !u.more);
+    assert_eq!((u.purged_through, u.high_water), (1, 1));
+    let v = store.headers_after(&header_query("suite-v")).await.unwrap();
+    assert_eq!(v.headers.len(), 1, "the newer stream's event stays");
+    assert_eq!((v.purged_through, v.high_water), (0, 1));
 }
 
 /// A purge removes a prefix of each stream and records it: the stream's
@@ -571,6 +584,19 @@ pub async fn purge(backend: &dyn Backend) {
     let after = store.page(&query("suite-p", None, 10)).await.unwrap();
     assert!(after.events.is_empty());
     assert_eq!((after.purged_through, after.high_water), (last, last));
+    let header_query = HeaderQuery {
+        tenant: tenant("suite-p"),
+        after: None,
+        types: None,
+        limit: 10,
+    };
+    let headers = store.headers_after(&header_query).await.unwrap();
+    assert!(headers.headers.is_empty() && !headers.more);
+    assert_eq!(
+        (headers.purged_through, headers.high_water),
+        (last, last),
+        "the header read reports a purge's bounds (roadmap M2l)"
+    );
     let next = store
         .insert(&row(Some("suite-p"), "message_received", "71", None))
         .await
@@ -580,6 +606,10 @@ pub async fn purge(backend: &dyn Backend) {
     let page = store.page(&query("suite-p", None, 10)).await.unwrap();
     let sequences: Vec<i64> = page.events.iter().map(|e| e.sequence).collect();
     assert_eq!(sequences, [next]);
+    let headers = store.headers_after(&header_query).await.unwrap();
+    let sequences: Vec<i64> = headers.headers.iter().map(|h| h.sequence).collect();
+    assert_eq!(sequences, [next], "from the oldest retained, as a page");
+    assert_eq!((headers.purged_through, headers.high_water), (last, next));
 }
 
 /// A purge of an earlier occurrence of a keyless event leaves the key with
