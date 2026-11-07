@@ -993,6 +993,37 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
     assert_eq!(token.token.expose_secret(), "TOKEN-201");
 }
 
+/// `webhooks reseal` without a data key refuses before it opens the
+/// database (roadmap M2i): there is no key to seal under, and a walk that
+/// reported success could let an operator drop a key still in use.
+#[test]
+fn webhooks_reseal_refuses_without_a_data_key() {
+    let Ports {
+        public,
+        internal,
+        held: _held,
+    } = two_ports();
+    let output = base(&mut Command::new(BIN), public, internal)
+        .env("DATABASE_URL", "postgres://127.0.0.1:1/never_opened")
+        .env(
+            "WA_VAULT_KEY",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .env("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes")
+        .env_remove("WA_SERVER_DATA_KEY")
+        .stdout(Stdio::piped())
+        .args(["webhooks", "reseal"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("WA_SERVER_DATA_KEY is not set"), "{stderr}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("endpoints walked"),
+        "nothing was walked"
+    );
+}
+
 /// `webhooks reseal` on Postgres (roadmap M2i): endpoints sealed under
 /// `k1` (one rotated, so with a previous secret) and one sealed under a
 /// key no longer configured. The command, with `k2` active and `k1`
@@ -1161,10 +1192,27 @@ fn live_postgres_cli_webhooks_reseal() {
         second_out.starts_with("3 endpoints walked, 0 re-sealed, 2 already current"),
         "{second_out}"
     );
+    // The unreadable endpoint gone, a run is clean: it exits 0, and
+    // re-seals nothing (the exit status is what lets a script drop the key).
+    runtime.block_on(async {
+        assert!(store.delete_endpoint(&tenant, &made[2].0).await.unwrap());
+    });
+    let third = run();
+    let third_out = String::from_utf8_lossy(&third.stdout).into_owned();
+    assert!(
+        third.status.success(),
+        "{third_out}{}",
+        String::from_utf8_lossy(&third.stderr)
+    );
+    assert!(
+        third_out.starts_with("2 endpoints walked, 0 re-sealed, 2 already current"),
+        "{third_out}"
+    );
     // No secret reaches either stream of either run.
     let streams = format!(
-        "{stdout}{stderr}{second_out}{}",
-        String::from_utf8_lossy(&second.stderr)
+        "{stdout}{stderr}{second_out}{}{third_out}{}",
+        String::from_utf8_lossy(&second.stderr),
+        String::from_utf8_lossy(&third.stderr)
     );
     for (_, secret, previous) in &made {
         for shown in std::iter::once(secret).chain(previous.iter()) {
