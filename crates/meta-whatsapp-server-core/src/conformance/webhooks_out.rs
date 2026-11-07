@@ -2816,8 +2816,8 @@ pub async fn a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(back
     let mut both = vec![shared.id.clone(), own.id.clone()];
     both.sort();
     assert_eq!(listed(&wide).await, both);
-    assert_eq!(listed(&tenant_key).await, [own.id.clone()]);
-    assert_eq!(listed(&narrow).await, [own.id.clone()]);
+    assert_eq!(listed(&tenant_key).await, std::slice::from_ref(&own.id));
+    assert_eq!(listed(&narrow).await, std::slice::from_ref(&own.id));
     let id = shared.id.as_str();
     for hidden in [&tenant_key, &narrow] {
         let open = rig.endpoints.open(&rig.authz, hidden).unwrap();
@@ -3051,7 +3051,7 @@ pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
         .iter()
         .map(|t| t.tenant.to_string())
         .collect();
-    assert_eq!(names, [b.clone()], "B only: never widened");
+    assert_eq!(names, std::slice::from_ref(&b), "B only: never widened");
     assert_eq!(round(&rig).await, 0, "A's pending delivery went with it");
     // The same id again is a new tenant, not a named one.
     records.create_tenant(&tenant(&a), "").await.unwrap();

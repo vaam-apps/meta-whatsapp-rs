@@ -320,7 +320,7 @@ impl WebhookStore for PgWebhookStore {
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let named: Option<bool> = sqlx::query_scalar(
+        let has_set: Option<bool> = sqlx::query_scalar(
             "SELECT named_tenants FROM wa_server_webhook_endpoints \
              WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
         )
@@ -329,10 +329,10 @@ impl WebhookStore for PgWebhookStore {
         .fetch_optional(&mut *tx)
         .await
         .map_err(backend)?;
-        let Some(named) = named else {
+        let Some(has_set) = has_set else {
             return Ok(None);
         };
-        if let (true, Some(set)) = (named, &change.tenants) {
+        if let (true, Some(set)) = (has_set, &change.tenants) {
             let names: Vec<String> = set.iter().map(|t| t.tenant.as_str().to_owned()).collect();
             // A tenant left out stops: its row first (a fan-out holding it
             // finishes before this goes on), then its pending deliveries.
