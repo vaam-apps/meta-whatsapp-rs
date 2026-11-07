@@ -745,6 +745,22 @@ impl meta_whatsapp_server::store::WebhookStore for Gate {
             .rotate_secret(t, id, secret, previous_until, now)
             .await
     }
+    async fn all_endpoints(
+        &self,
+        page: &meta_whatsapp_server::model::PageRequest,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        meta_whatsapp_server::model::Listing<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner.all_endpoints(page).await
+    }
+    async fn reseal_secrets(
+        &self,
+        id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        expected: &meta_whatsapp_server_core::webhooks_out::store::SealedSecrets,
+        replacement: &meta_whatsapp_server_core::webhooks_out::store::SealedSecrets,
+    ) -> meta_whatsapp_server::store::StoreResult<bool> {
+        self.inner.reseal_secrets(id, expected, replacement).await
+    }
     async fn delete_endpoint(
         &self,
         t: &meta_whatsapp_server::model::TenantId,
