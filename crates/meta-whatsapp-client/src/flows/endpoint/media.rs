@@ -79,6 +79,7 @@ const HMAC_LEN: usize = 10;
 /// [`Client`]: crate::Client
 /// [`Client::request_url`]: crate::Client::request_url
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowMedia {
     /// Id of the upload; use it as the key of a per-file `error-message`.
     /// Not a Graph media id (see [`FlowMediaId`]).
@@ -96,6 +97,7 @@ pub struct FlowMedia {
 /// `encryption_metadata` of an uploaded file. All values are base64.
 /// `Debug` hides the two keys.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MediaEncryptionMetadata {
     /// SHA-256 of the downloaded (encrypted) file.
     pub encrypted_hash: String,

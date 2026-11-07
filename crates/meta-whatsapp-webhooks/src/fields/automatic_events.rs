@@ -13,6 +13,7 @@ use super::common::Metadata;
 
 /// `value` of an `automatic_events` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AutomaticEventsValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,6 +37,7 @@ open_enum! {
 
 /// `automatic_events[]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AutomaticEvent {
     /// Id of the message the event was detected in.
     pub id: MessageId,
@@ -54,6 +56,7 @@ pub struct AutomaticEvent {
 
 /// `automatic_events[].custom_data`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PurchaseData {
     /// Currency code.
     #[serde(default, skip_serializing_if = "Option::is_none")]

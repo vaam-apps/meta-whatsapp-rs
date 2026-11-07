@@ -562,6 +562,7 @@ impl AcceptOptions {
 
 /// Answer of [`Calling::connect`] (`CallResponsePayload`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallStarted {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -580,6 +581,7 @@ impl CallStarted {
 
 /// An element of [`CallStarted::calls`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct StartedCall {
     /// Call id (`wacid.…`).
     pub id: CallId,
@@ -587,6 +589,7 @@ pub struct StartedCall {
 
 /// Answer of [`Calling::permissions`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallPermissions {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -600,6 +603,7 @@ pub struct CallPermissions {
 
 /// `permission` of [`CallPermissions`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallPermission {
     /// Status.
     pub status: CallPermissionStatus,
@@ -637,6 +641,7 @@ open_enum! {
 
 /// An element of [`CallPermissions::actions`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallPermissionAction {
     /// The action.
     pub action_name: CallPermissionActionName,
@@ -659,6 +664,7 @@ open_enum! {
 
 /// A limit on an action.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ActionLimit {
     /// ISO 8601 duration, e.g. `PT24H`, `P7D`.
     pub time_period: String,

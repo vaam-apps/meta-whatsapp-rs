@@ -18,6 +18,7 @@ use subtle::ConstantTimeEq;
 /// here so that a malformed request is rejected by
 /// [`verify_subscription`] (→ `403`) rather than by the query extractor.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[non_exhaustive]
 pub struct VerificationQuery {
     /// `hub.mode`; must be `subscribe`.
     #[serde(rename = "hub.mode", default)]

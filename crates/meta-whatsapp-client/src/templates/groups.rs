@@ -181,6 +181,7 @@ impl TemplateGroupUpdate {
 
 /// Response of a group creation: `{"id": "<TEMPLATE_GROUP_ID>"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateGroupCreated {
     /// The new group's id.
     pub id: TemplateGroupId,
@@ -191,6 +192,7 @@ pub struct TemplateGroupCreated {
 /// Only `id` is sure to be present; the rest is optional so that a field
 /// Meta leaves out never fails parsing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateGroup {
     /// Group id.
     pub id: TemplateGroupId,
@@ -229,6 +231,7 @@ pub struct TemplateGroup {
 /// failure map that is `null`, and an empty failure map written as `[]`;
 /// a reason that is not a string is kept as its JSON text.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ArchiveResult {
     /// Ids of the templates archived.
     #[serde(default, deserialize_with = "lenient::ids")]
@@ -242,6 +245,7 @@ pub struct ArchiveResult {
 /// failures (`"Template is not archived"`) and parsing as in
 /// [`ArchiveResult`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnarchiveResult {
     /// Ids of the templates unarchived.
     #[serde(default, deserialize_with = "lenient::ids")]

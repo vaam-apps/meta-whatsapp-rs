@@ -1074,3 +1074,24 @@ async fn resumable_upload_validates_locally_and_needs_a_token() {
     }
     assert!(t.requests().is_empty());
 }
+
+/// `MediaInfo` is `#[non_exhaustive]`: a caller holding the id, URL and
+/// `sha256` of a media webhook builds one with `new` to download it.
+#[tokio::test]
+async fn a_media_info_built_from_a_webhook_downloads_and_verifies() {
+    let body = b"\xff\xd8jpeg bytes";
+    let t = ScriptedTransport::new();
+    t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    let mut from_webhook = MediaInfo::new(media_id(), LOOKASIDE);
+    assert_eq!(from_webhook.messaging_product, "whatsapp");
+    assert_eq!(from_webhook.file_size, None);
+    from_webhook.sha256 = sha_hex(body);
+    let download = media.download_with_info(from_webhook).await.unwrap();
+    let downloaded = download.verified().unwrap().collect(64).await.unwrap();
+    assert_eq!(&downloaded.data[..], body);
+    let reqs = t.requests();
+    assert_eq!(reqs[0].method, Method::GET);
+    assert_eq!(reqs[0].url.as_str(), LOOKASIDE);
+    assert_eq!(t.remaining(), 0);
+}

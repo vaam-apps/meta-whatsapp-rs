@@ -56,6 +56,7 @@ open_enum! {
 
 /// `value` of a `flows` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowsValue {
     /// Kind of notification.
     pub event: FlowEvent,
@@ -98,6 +99,7 @@ pub struct FlowsValue {
 
 /// `flows.errors[]`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FlowErrorStat {
     /// Error type, e.g. `INVALID_SCREEN_TRANSITION`, `TIMEOUT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

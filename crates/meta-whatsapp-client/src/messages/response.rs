@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 /// Response of `POST /{phone_number_id}/messages`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct SendResponse {
     /// Always `whatsapp`. Some older samples omit it.
     #[serde(default)]
@@ -36,6 +37,7 @@ impl SendResponse {
 /// `wa_id` is absent; sent to both → the phone number wins. Sent to a group
 /// → `input` is the group id.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct SentContact {
     /// What the request addressed (phone number, BSUID or group id).
     #[serde(default)]
@@ -54,6 +56,7 @@ pub struct SentContact {
 
 /// `messages[]` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct SentMessage {
     /// The new message's `wamid`.
     pub id: MessageId,

@@ -14,6 +14,7 @@ use super::common::{Contact, Metadata};
 
 /// `value` of a `user_preferences` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserPreferencesValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49,6 +50,7 @@ open_enum! {
 
 /// `user_preferences[]`: one preference change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserPreference {
     /// Phone number; omitted when Meta may not share it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,6 +75,7 @@ pub struct UserPreference {
 
 /// `value` of a `user_id_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserIdUpdateValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +93,7 @@ pub struct UserIdUpdateValue {
 /// `user_id_update[]`: a user's BSUID changed. Re-key everything you stored
 /// under [`IdChange::previous`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserIdUpdate {
     /// Phone number; omitted when Meta may not share it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +113,7 @@ pub struct UserIdUpdate {
 
 /// `{previous, current}` pair of a BSUID change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct IdChange {
     /// The old id.
     pub previous: UserId,

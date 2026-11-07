@@ -14,8 +14,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M5e2)
 
-- Calling, what M5e did not route (design D410 to D416, the implementer's
-  proposals, not decided, each swappable). The library: `Media::upload_with`
+- Calling, what M5e did not route (design D410 to D416, decided by the
+  coordinator on 2026-11-07 under the owner's delegation, each swappable). The library: `Media::upload_with`
   takes `UploadOptions` (a `use_case`, a description) and
   `UploadOptions::voicemail_announcement()` sends Meta's
   `use_case=call_voicemail_announcement`; `Media::upload` is unchanged and
@@ -35,6 +35,25 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   routes and the two audit actions are pending the owner's confirmation
   before the first release. The OpenAPI document is additive only. No legal
   act.
+
+### Changed (breaking, roadmap L20b)
+
+- **`#[non_exhaustive]` on every response struct, webhook payload
+  struct and open enum** (roadmap L20b; OPEN_QUESTIONS #28, decided
+  2026-09-26): 218 structs in `meta-whatsapp-client` and
+  `meta-whatsapp-webhooks` and `MessageProductType` gained it, the
+  macro's enums already had it. Outside those crates a struct literal of
+  one of them no longer compiles, nor does an exhaustive destructure
+  (add `..`); build test values from JSON (`serde_json::from_value`) or
+  from `Default` and field assignment. Request types (Flow JSON, template
+  definitions and sends, payment and checkout message parameters, the
+  calling settings, the endpoints' answers) stay open; the exceptions
+  are listed with their reasons in
+  `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`, a source scan that
+  fails on a response or webhook struct, or an open enum, without the
+  attribute. The rule is in `docs/architecture.md`. `MediaInfo::new(id,
+  url)` builds the one input of `Media::download_with_info` that a media
+  webhook leaves callers to build.
 
 ### Added (roadmap M2j)
 
@@ -587,7 +606,8 @@ stored data, the owner's).
 - API conventions: #27, one catch-all shape, `Other(String)`, from one
   macro in core (L20a, breaking; landed: see Changed and "Open questions
   closed"); #28, `#[non_exhaustive]` on response
-  and webhook types and open enums (L20b, breaking); #29, the axum and
+  and webhook types and open enums (L20b, breaking; landed: see
+  Changed); #29, the axum and
   sqlx re-exports kept (no code).
 - Webhooks and live updates: #30, a permanently failing event is
   dead-lettered, the rest of the batch delivered (L21a); #31, live

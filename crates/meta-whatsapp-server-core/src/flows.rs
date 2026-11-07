@@ -121,6 +121,7 @@ impl From<FlowValidationError> for FlowIssue {
             column_start,
             column_end,
             pointers,
+            ..
         } = error;
         Self {
             error,
@@ -178,11 +179,10 @@ impl From<FlowDetails> for FlowInfo {
             json_version,
             data_api_version,
             endpoint_uri,
-            // The WABA is the ownership check's; the preview has its own
-            // call; the application is "an object" no page types.
-            preview: _,
-            whatsapp_business_account: _,
-            application: _,
+            // Left out: the preview (it has its own call), the WABA (the
+            // ownership check's), the application ("an object" no page
+            // types) and whatever Meta adds.
+            ..
         } = flow;
         Self {
             id,

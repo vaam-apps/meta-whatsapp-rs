@@ -32,6 +32,7 @@ use super::common::Metadata;
 
 /// `value` of any `group_*` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroupsValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +86,7 @@ open_enum! {
 /// whoever holds it join (or ask to join) the group. The field keeps it
 /// whole, and serializing writes it whole.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroupUpdate {
     /// When the event happened.
     #[serde(
@@ -218,6 +220,7 @@ impl fmt::Debug for GroupUpdate {
 /// A participant in `added_participants` / `removed_participants` /
 /// `failed_participants`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroupParticipant {
     /// The identifier you used in the request (phone number or BSUID).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,6 +248,7 @@ pub struct GroupParticipant {
 
 /// One setting in a `group_settings_update`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroupSettingChange {
     /// New text (subject, description).
     #[serde(default, skip_serializing_if = "Option::is_none")]

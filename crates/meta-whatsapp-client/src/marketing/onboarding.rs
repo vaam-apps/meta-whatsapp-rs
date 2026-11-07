@@ -82,6 +82,7 @@ open_enum! {
 
 /// `marketing_messages_onboarding_status` of a business portfolio.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BusinessOnboardingStatus {
     /// Terms of Service state.
     pub status: TermsStatus,
@@ -92,6 +93,7 @@ pub struct BusinessOnboardingStatus {
 
 /// `owner_business_info` of a WABA.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OwnerBusinessInfo {
     /// Business portfolio id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,6 +108,7 @@ pub struct OwnerBusinessInfo {
 
 /// A client WABA listed by [`MarketingBusiness::client_wabas_with_status`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ClientWaba {
     /// WABA id.
     pub id: WabaId,
@@ -165,6 +168,7 @@ impl ListClientWabas {
 /// the request Meta sent to the business's admins. A response, unlike
 /// `embedded_signup::OnboardingRequest`, which you build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OnboardingRequested {
     /// Id of the onboarding request, for tracking.
     pub request_id: String,

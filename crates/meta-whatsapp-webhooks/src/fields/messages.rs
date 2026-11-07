@@ -53,6 +53,7 @@ use super::routing::ConversationContext;
 
 /// `value` of a `messages` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MessagesValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +112,7 @@ open_enum! {
 /// [`LinkClickData::click_id`] (appended to the URL the user visits) or
 /// [`LinkClickData::tracking_token`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserAction {
     /// What happened.
     pub action_type: UserActionType,
@@ -126,6 +128,7 @@ pub struct UserAction {
 /// optional per the page. Clicks are reported for messages sent in the
 /// last 7 days.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LinkClickData {
     /// Which part of the message was clicked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,6 +149,7 @@ pub struct LinkClickData {
 /// The type-specific part is [`InboundMessage::content`]; every other field
 /// is common to all message types.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct InboundMessage {
     /// Sender's phone number. Omitted for username adopters whose number Meta
     /// may not share (`business-scoped-user-ids`).
@@ -198,6 +202,7 @@ impl InboundMessage {
 
 /// `context` of an inbound message.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MessageContext {
     /// Business display number of the message replied to / referred from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,6 +223,7 @@ pub struct MessageContext {
 
 /// `context.referred_product`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReferredProduct {
     /// Catalog id.
     #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]
@@ -257,6 +263,7 @@ open_enum! {
 /// [`source_url`](Self::source_url), the ad's public short link, is shown
 /// as is.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Referral {
     /// Ad URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -334,6 +341,7 @@ impl fmt::Debug for Referral {
 
 /// `referral.welcome_message`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WelcomeMessage {
     /// Greeting text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -542,6 +550,7 @@ fn serialize_raw<S: Serializer>(serializer: S, raw: &Value) -> Result<S::Ok, S::
 
 /// `text` payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TextContent {
     /// Message text.
     pub body: String,
@@ -559,6 +568,7 @@ pub struct TextContent {
 /// query (`lookaside.fbsbx.com/…?mid=…&hash=…`), and logs outlive it; the
 /// field keeps it whole, and serializing writes it whole.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MediaContent {
     /// Media asset id; `GET /{id}` returns a download URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -615,6 +625,7 @@ impl fmt::Debug for MediaContent {
 
 /// `location` payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LocationContent {
     /// Latitude, decimal degrees.
     pub latitude: f64,
@@ -644,6 +655,7 @@ open_enum! {
 /// One shared contact card (`contacts` message). Many properties are
 /// omitted when the user or their device does not share them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SharedContact {
     /// Addresses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -676,6 +688,7 @@ pub struct SharedContact {
 
 /// `contacts[].addresses[]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactAddress {
     /// Street.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -702,6 +715,7 @@ pub struct ContactAddress {
 
 /// `contacts[].emails[]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactEmail {
     /// Email address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -713,6 +727,7 @@ pub struct ContactEmail {
 
 /// `contacts[].name`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactName {
     /// Formatted full name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -736,6 +751,7 @@ pub struct ContactName {
 
 /// `contacts[].org`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactOrg {
     /// Company.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -750,6 +766,7 @@ pub struct ContactOrg {
 
 /// `contacts[].phones[]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactPhone {
     /// Phone number as shared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -764,6 +781,7 @@ pub struct ContactPhone {
 
 /// `contacts[].urls[]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContactUrl {
     /// URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -853,6 +871,7 @@ impl Serialize for InteractiveReply {
 
 /// `interactive.button_reply`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ButtonReply {
     /// Button id you set when sending.
     pub id: String,
@@ -862,6 +881,7 @@ pub struct ButtonReply {
 
 /// `interactive.list_reply`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ListReply {
     /// Row id you set when sending.
     pub id: String,
@@ -874,6 +894,7 @@ pub struct ListReply {
 
 /// `interactive.nfm_reply` (Flows, address messages).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NfmReply {
     /// `flow` for Flows, `address_message` for address messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -915,6 +936,7 @@ open_enum! {
 
 /// `interactive.call_permission_reply` (`calling/user-call-permissions`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallPermissionReply {
     /// The user's answer.
     pub response: CallPermissionResponse,
@@ -935,6 +957,7 @@ pub struct CallPermissionReply {
 
 /// `button` payload: a template quick-reply button tap.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ButtonContent {
     /// Payload set on the button when the template was sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -946,6 +969,7 @@ pub struct ButtonContent {
 
 /// `order` payload.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OrderContent {
     /// Catalog id.
     #[serde(
@@ -964,6 +988,7 @@ pub struct OrderContent {
 
 /// `order.product_items[]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ProductItem {
     /// Product retailer id (SKU).
     pub product_retailer_id: String,
@@ -980,6 +1005,7 @@ pub struct ProductItem {
 
 /// `reaction` payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReactionContent {
     /// The message reacted to.
     pub message_id: MessageId,
@@ -1000,6 +1026,7 @@ open_enum! {
 
 /// `system` payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SystemContent {
     /// Human-readable description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1020,6 +1047,7 @@ pub struct SystemContent {
 
 /// `unsupported` payload.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnsupportedContent {
     /// The type Cloud API cannot deliver (e.g. `poll_update`, `edit`).
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
@@ -1028,6 +1056,7 @@ pub struct UnsupportedContent {
 
 /// `edit` payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EditContent {
     /// The message that was edited.
     pub original_message_id: MessageId,
@@ -1037,6 +1066,7 @@ pub struct EditContent {
 
 /// `edit.message`: the edited message's new content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EditedMessage {
     /// Context of the edited message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1048,6 +1078,7 @@ pub struct EditedMessage {
 
 /// `revoke` payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RevokeContent {
     /// The message that was deleted.
     pub original_message_id: MessageId,
@@ -1102,6 +1133,7 @@ open_enum! {
 /// transaction. Meta asks not to rely on it alone: look the payment up
 /// (`meta_whatsapp_client::payments::Payments::lookup`) before shipping.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Status {
     /// Id of the message this status is about; for a payment's status,
     /// the notification's id.
@@ -1205,6 +1237,7 @@ impl Status {
 
 /// `statuses[].conversation`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Conversation {
     /// Conversation id (per free entry point window from v24.0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1226,6 +1259,7 @@ pub struct Conversation {
 
 /// `conversation.origin`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ConversationOrigin {
     /// Conversation category.
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
@@ -1283,6 +1317,7 @@ open_enum! {
 
 /// `statuses[].pricing` (`pricing`, `webhooks/reference/messages/status`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Pricing {
     /// Billable. Meta plans to deprecate it; prefer `pricing_type` + `category`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
