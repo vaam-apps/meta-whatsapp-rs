@@ -69,6 +69,7 @@ pub async fn run(backend: &dyn Backend) {
     a_fan_out_moves_its_cursor_once(backend).await;
     a_claim_is_exclusive_until_its_lease_ends(backend).await;
     a_settlement_records_its_attempt(backend).await;
+    the_pending_backlog_is_counted(backend).await;
     deliveries_go_with_their_endpoint_and_tenant(backend).await;
     a_delivery_is_signed_and_carries_its_tenants_events_only(backend).await;
     every_tenant_event_type_is_delivered(backend).await;
@@ -983,6 +984,144 @@ pub async fn a_settlement_records_its_attempt(backend: &dyn Backend) {
         None,
         "another endpoint's id"
     );
+}
+
+/// The backlog counts (roadmap M2k): [`WebhookStore::pending`] counts every
+/// pending delivery, claimed or not, and reports the earliest
+/// `next_attempt_at` due by the instant asked, never a retry still waiting
+/// for its backoff nor a delivery that is settled; it falls as deliveries
+/// are delivered or fail, and with the endpoint that held them.
+pub async fn the_pending_backlog_is_counted(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    drain(store.as_ref()).await;
+    let a = unique_tenant("wh-backlog");
+    records.create_tenant(&tenant(&a), "").await.unwrap();
+    let endpoint = created(store.as_ref(), &new_endpoint(&a, 0)).await;
+    let at = START + time::Duration::days(900);
+    let secs = time::Duration::seconds;
+    let empty = store.pending(at).await.unwrap();
+    assert_eq!((empty.count, empty.oldest_due), (0, None));
+    store
+        .fan_out(
+            &endpoint.id,
+            0,
+            3,
+            &[
+                delivery("evt_b1", 1, at),
+                delivery("evt_b2", 2, at + secs(10)),
+                delivery("evt_b3", 3, at + secs(20)),
+            ],
+        )
+        .await
+        .unwrap();
+    // Every one counts; only those due by the instant asked date it.
+    let before = store.pending(at - secs(1)).await.unwrap();
+    assert_eq!((before.count, before.oldest_due), (3, None));
+    let first = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((first.count, first.oldest_due), (3, Some(at)));
+    // A suspended tenant's and a disabled endpoint's deliveries wait, and
+    // the backlog is what waits: they count, and they age.
+    records
+        .update_tenant(&tenant(&a), None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap();
+    let suspended = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((suspended.count, suspended.oldest_due), (3, Some(at)));
+    records
+        .update_tenant(&tenant(&a), None, Some(TenantStatus::Active))
+        .await
+        .unwrap();
+    let toggle = |enabled| EndpointChange {
+        enabled: Some(enabled),
+        ..EndpointChange::default()
+    };
+    store
+        .update_endpoint(&tenant(&a), &endpoint.id, &toggle(false), at)
+        .await
+        .unwrap();
+    let disabled = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((disabled.count, disabled.oldest_due), (3, Some(at)));
+    store
+        .update_endpoint(&tenant(&a), &endpoint.id, &toggle(true), at)
+        .await
+        .unwrap();
+    // Claimed, still pending: it counts until it is settled.
+    let one = take(store.as_ref(), &endpoint.id, at + secs(15)).await;
+    assert_eq!(store.pending(at + secs(15)).await.unwrap().count, 3);
+    let settle = |outcome| Attempt {
+        delivery: one.delivery.id.clone(),
+        claim: one.claim.clone(),
+        outcome,
+        started_at: at + secs(15),
+        duration_ms: 1,
+        status: Some(200),
+        error: None,
+        counted: true,
+        disable_if_failing_since: None,
+    };
+    // A retry still waiting is pending but not due: the oldest due one is
+    // the next delivery's, not the oldest record's.
+    assert!(
+        store
+            .settle(&settle(Outcome::Retry(at + secs(500))), at + secs(15))
+            .await
+            .unwrap()
+    );
+    let retrying = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!(
+        (retrying.count, retrying.oldest_due),
+        (3, Some(at + secs(10)))
+    );
+    // Delivered, then failed: each leaves the backlog.
+    let two = take(store.as_ref(), &endpoint.id, at + secs(15)).await;
+    assert_eq!(two.delivery.event_id.as_deref(), Some("evt_b2"));
+    let mut done = Attempt {
+        delivery: two.delivery.id.clone(),
+        claim: two.claim.clone(),
+        ..settle(Outcome::Delivered)
+    };
+    assert!(store.settle(&done, at + secs(15)).await.unwrap());
+    let delivered = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((delivered.count, delivered.oldest_due), (2, None));
+    let three = take(store.as_ref(), &endpoint.id, at + secs(25)).await;
+    done.delivery = three.delivery.id.clone();
+    done.claim = three.claim.clone();
+    done.outcome = Outcome::Failed;
+    assert!(store.settle(&done, at + secs(25)).await.unwrap());
+    let failed = store.pending(at + secs(25)).await.unwrap();
+    assert_eq!((failed.count, failed.oldest_due), (1, None));
+    // The retrying one comes due.
+    let later = store.pending(at + secs(500)).await.unwrap();
+    assert_eq!((later.count, later.oldest_due), (1, Some(at + secs(500))));
+    // A manual retry makes a settled one pending again.
+    assert!(
+        store
+            .retry_delivery(
+                &tenant(&a),
+                &endpoint.id,
+                &two.delivery.id,
+                at + secs(600),
+                at + time::Duration::hours(72),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let retried = store.pending(at + secs(600)).await.unwrap();
+    assert_eq!(
+        (retried.count, retried.oldest_due),
+        (2, Some(at + secs(500)))
+    );
+    // And the endpoint's deletion takes its deliveries from the backlog.
+    assert!(
+        store
+            .delete_endpoint(&tenant(&a), &endpoint.id)
+            .await
+            .unwrap()
+    );
+    let gone = store.pending(at + secs(600)).await.unwrap();
+    assert_eq!((gone.count, gone.oldest_due), (0, None));
 }
 
 /// Deleting an endpoint deletes its deliveries; deleting a tenant its

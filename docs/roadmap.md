@@ -5854,7 +5854,7 @@ design's (§9).
     attempt opens a connection to it, never the pooled one; a pooled
     connection to an address the list no longer admits is never used.
 
-- [ ] **M2k. The pending webhooks-out metric** (design §7.3; added by
+- [x] **M2k. The pending webhooks-out metric** (design §7.3; added by
   M2c): the pending deliveries and the age of the oldest due one, on
   `/metrics`, labelled by no endpoint, URL or tenant (unless the
   `tenant` labels are on).
@@ -5862,6 +5862,16 @@ design's (§9).
   - **Decisive:** the gauge rises with the deliveries a silent receiver
     holds and falls to 0 once they are delivered; no label names an
     endpoint id or a URL.
+  - **Landed:** two unlabelled gauges, `wa_server_webhooks_out_pending_deliveries`
+    and `wa_server_webhooks_out_oldest_due_age_seconds` (design D300 to
+    D302, decided and swappable), from a new `WebhookStore::pending(now)` (memory and
+    Postgres, conformance case `the_pending_backlog_is_counted`; no
+    migration; the MongoDB spike composes the memory store) read when
+    `/metrics` is scraped, one read at a time and within 2 s. There is no
+    `tenant` labels setting in the service yet, so there is no tenant
+    variant. Decisive tests: `the_pending_deliveries_are_a_gauge_that_falls_when_they_are_delivered`
+    (`tests/webhooks_out.rs`), `a_hung_or_failing_store_never_holds_the_scrape`,
+    `a_retry_in_backoff_does_not_age_the_backlog` and the conformance case.
 
 - [ ] **M2l. An id-only outbox read for the fan-out** (D106; added by
   M2c): an `Outbox` method answering the sequences, ids and types after
