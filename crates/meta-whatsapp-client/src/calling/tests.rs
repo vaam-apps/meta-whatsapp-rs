@@ -1087,6 +1087,32 @@ fn docs_settings_json() -> serde_json::Value {
     })
 }
 
+/// An answer with SIP passwords that does not decode (here a server
+/// without its host, after one with a password) is an error that holds
+/// neither the body nor serde's message, in `Display` or `Debug`. Decisive:
+/// `send_withheld` in `Calling::settings` (use `send` and the first
+/// server's password is in the error's snippet).
+#[tokio::test]
+async fn settings_with_credentials_that_do_not_decode_leak_no_password() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        200,
+        json!({"calling": {"sip": {"status": "ENABLED", "servers": [
+            {"hostname": "sip.example.com", "sip_user_password": "hunter2-secret"},
+            {"sip_user_password": "second-secret"}]}}}),
+    );
+    let error = client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .settings(true)
+        .await
+        .unwrap_err();
+    for shown in [error.to_string(), format!("{error:?}")] {
+        assert!(!shown.contains("secret"), "{shown}");
+        assert!(!shown.contains("sip.example.com"), "{shown}");
+    }
+    assert_eq!(ts.remaining(), 0);
+}
+
 #[tokio::test]
 async fn settings_parse_docs_example() {
     let ts = ScriptedTransport::new();

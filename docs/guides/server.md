@@ -147,6 +147,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
+| `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on`: a key holding the scope `call_credentials` (no key holds it unless an operator gives it) may read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`); `off`: that route is `403 feature_not_available` and Meta is not asked (roadmap M5e2; a proposal, design D410) |
 | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) and every [calling](#calling) action on it names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
 | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration, and the operator's signing of the max price agreement ([Marketing](#marketing-messages-api-max-price-and-welcome-message-sequences)). Off, each answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
@@ -1173,14 +1174,24 @@ purpose to both participants first, and a participant who does not consent
 ends the call: the consent is Meta's announcement and your policy, and the
 service decides nothing about it. The result arrives as a
 `call_recording_available` or `call_transcription_available` event with a
-media id (downloaded within 7 days through the media route; whether Meta
-serves a recording to `?phone_number_id={pn}` has not been run against
-Meta).
+media id (downloaded within 7 days through the media route,
+`GET /v1/numbers/{pn}/media/{id}`, which asks Meta for the id on the
+number; Meta's pages do not say it serves a recording or a transcript that
+way, and it has not been run against Meta: if it answers `404` for them,
+that is the open question of design D414). The call permission request is
+the send route's `interactive` message of type `call_permission_request`
+(window rules and `Idempotency-Key` as any send).
 
 **Secrets.** An SDP offer or answer holds addresses and ICE credentials; it
 is in the request that carries it and in no log, error or audit event. A
-SIP server's password is **never read from Meta and never answered**
-(`include_sip_credentials` is never sent); read it in WhatsApp Manager. A
+SIP server's password is **not in `GET …/call-settings`** (it is never
+asked for there). The one route that answers it is `GET
+/v1/numbers/{pn}/call-settings/sip-credentials`, for a key with the scope
+`call_credentials` and only when the deployment sets
+`WA_SERVER_CALL_SIP_CREDENTIALS=on`; the answer is `no-store`, audited as
+`call_sip_credentials_read` (who and which number), and the password is in
+no log, error, audit event or idempotency record (design D410, D413,
+proposals). A
 failed call answers Meta's code and the service's kind (`409` and
 `call_permission_missing` for `138006`, `429` and `call_limit_reached`,
 `502` and `call_connection_failed`, ... with `error.graph.code`; roadmap
@@ -1192,11 +1203,14 @@ through unanswered), the settings' **section names** and whether recording
 or transcription was enabled; never who was called, which call, an SDP or
 a SIP host.
 
-Not offered: the SIP password, uploading a voicemail announcement (Meta
-wants `use_case=call_voicemail_announcement`, which the media routes do
-not send: upload it elsewhere, then name its media id, which the service
-looks up as the number's own before it changes the settings), sending the
-call permission request (a message: a send), call buttons and deep links.
+A voicemail announcement is uploaded with `POST
+/v1/numbers/{pn}/call-settings/voicemail-announcement` (a multipart `file`
+of Ogg with Opus, at most 16 MiB, `201 {media_id}`, an `Idempotency-Key`;
+Meta wants it under 60 seconds and refuses longer): name the id in the
+settings' `voicemail.audio.default.announcement_media_id`, which the service
+looks up as the number's own before it changes the settings.
+
+Not offered: call buttons and deep links, a typed transcript document.
 Actions are never repeated after a timeout: read the call's events.
 
 ## Commerce, QR codes, analytics and the block list

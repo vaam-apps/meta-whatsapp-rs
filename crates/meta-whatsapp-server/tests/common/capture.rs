@@ -899,6 +899,9 @@ pub fn with_uploads(
         // Roadmap M5c3: the legal acts are taken, so that their routes
         // run through (they are off by default).
         legal_acts: true,
+        // Roadmap M5e2: the SIP password read answers, so that its route
+        // runs through (it is off by default).
+        call_sip_credentials: true,
         ..settings
     }
 }
@@ -2856,6 +2859,8 @@ const CALL_ICE_PWD_ANSWER: &str = "IcePwdOfTheAnswerForTheLogs9Q";
 const CALL_ADDRESS: &str = "203.0.113.77";
 const CALL_SIP_PASSWORD: &str = "SipPasswordForTheLogs-7Zk2";
 const CALL_SIP_HOST: &str = "sip.calling-logs.example";
+/// The bytes of a voicemail announcement (roadmap M5e2): in no log.
+const CALL_AUDIO: &[u8] = b"announcement-bytes-for-the-logs-4Qm";
 const CALL_PHONE: &str = "+16315559090";
 const CALL_BSUID: &str = "US.4021998800112233";
 const CALL_ID: &str = "wacid.CallIdForTheLogsABGGFjFVU2";
@@ -2928,6 +2933,73 @@ async fn calling(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(voicemail.status.as_u16(), 204, "{}", voicemail.text);
+    // Roadmap M5e2: the SIP password read, by a key holding the scope of
+    // its own, with Meta sending the password: it is in the answer (the one
+    // place) and in no log line and no audit event; a refusal whose text
+    // quotes it answers nothing of it. Then a voicemail announcement
+    // uploaded (no byte of the file is logged).
+    let credentials_key = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["call_credentials"]})),
+        )
+        .await
+        .json()["key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    h.graph.push_json(
+        200,
+        json!({"calling": {"status": "ENABLED", "sip": {"status": "ENABLED", "servers": [
+            {"hostname": CALL_SIP_HOST, "sip_user_password": CALL_SIP_PASSWORD}]}}}),
+    );
+    let revealed = h
+        .call(
+            Call::get(format!("/v1/numbers/{PN}/call-settings/sip-credentials"))
+                .key(&credentials_key),
+        )
+        .await;
+    assert_eq!(revealed.status.as_u16(), 200, "{}", revealed.text);
+    assert!(
+        revealed.text.contains(CALL_SIP_PASSWORD),
+        "the answer is where the password goes: {}",
+        revealed.text
+    );
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#138000) {CALL_SIP_PASSWORD}"),
+                         "type": "OAuthException", "code": 138_000,
+                         "error_data": {"messaging_product": "whatsapp",
+                                        "details": CALL_SIP_PASSWORD}}}),
+    );
+    let refused_read = h
+        .call(
+            Call::get(format!("/v1/numbers/{PN}/call-settings/sip-credentials"))
+                .key(&credentials_key),
+        )
+        .await;
+    assert_eq!(refused_read.status.as_u16(), 409, "{}", refused_read.text);
+    assert!(
+        !refused_read.text.contains(CALL_SIP_PASSWORD),
+        "{}",
+        refused_read.text
+    );
+    h.graph.push_json(200, json!({"id": "1037543291543636"}));
+    let uploaded = h
+        .call(
+            call(
+                Method::POST,
+                &format!("/v1/numbers/{PN}/call-settings/voicemail-announcement"),
+            )
+            .multipart(&[(
+                "file",
+                Some("announcement.ogg"),
+                &super::ogg_opus(CALL_AUDIO),
+            )]),
+        )
+        .await;
+    assert_eq!(uploaded.status.as_u16(), 201, "{}", uploaded.text);
     // The permission, by phone number and by BSUID.
     for query in [
         format!("phone={}", CALL_PHONE.replace('+', "%2B")),
@@ -3051,6 +3123,7 @@ async fn calling(h: &Harness, admin: &str) -> Vec<String> {
         CALL_ADDRESS.to_owned(),
         CALL_SIP_PASSWORD.to_owned(),
         CALL_SIP_HOST.to_owned(),
+        String::from_utf8(CALL_AUDIO.to_vec()).unwrap(),
         CALL_PHONE.to_owned(),
         "16315559090".to_owned(),
         CALL_BSUID.to_owned(),
@@ -4615,6 +4688,23 @@ fn check_call_audit(changes: &[&serde_json::Value]) {
                 false,
                 false,
                 Some("voicemail")
+            ),
+            // Roadmap M5e2 (D412, D413): the SIP password read says who
+            // and which number, never a host or a password; the upload,
+            // no byte of the file.
+            (
+                "call_sip_credentials_read",
+                "answered",
+                false,
+                false,
+                Some("sip")
+            ),
+            (
+                "call_voicemail_announcement_uploaded",
+                "answered",
+                false,
+                false,
+                None
             ),
             ("call_connect_requested", "answered", true, false, None),
             ("call_pre_accepted", "answered", false, false, None),

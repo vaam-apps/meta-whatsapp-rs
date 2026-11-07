@@ -102,6 +102,89 @@ async fn upload_sends_the_documented_multipart_fields() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// `calling/call-settings`, "Upload a voicemail announcement media file":
+/// `file` (audio/ogg), `messaging_product`, `use_case` and `description`.
+#[tokio::test]
+async fn a_voicemail_announcement_upload_sends_the_use_case_and_the_description() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "1037543291543636"}));
+    let id = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .upload_with(
+            Bytes::from_static(b"OggS\x00OpusHead"),
+            "audio/ogg",
+            "announcement.ogg",
+            &UploadOptions::voicemail_announcement().description("Default announcement (English)"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(id, media_id());
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/106540352242922/media");
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    let (_, _, data) = req.multipart_field("messaging_product").unwrap();
+    assert_eq!(&data[..], b"whatsapp");
+    let (_, _, data) = req.multipart_field("use_case").unwrap();
+    assert_eq!(&data[..], b"call_voicemail_announcement");
+    let (_, _, data) = req.multipart_field("description").unwrap();
+    assert_eq!(&data[..], b"Default announcement (English)");
+    let (fname, ctype, data) = req.multipart_field("file").unwrap();
+    assert_eq!(fname, Some("announcement.ogg"));
+    assert_eq!(ctype, Some("audio/ogg"));
+    assert_eq!(&data[..], b"OggS\x00OpusHead");
+    let RecordedBody::Multipart(parts) = &req.body else {
+        panic!("expected multipart");
+    };
+    assert_eq!(parts.len(), 5);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The use case is an option, never a default: `upload` and the default
+/// options send neither field; and a voicemail announcement is audio/ogg
+/// (checked before any request).
+#[tokio::test]
+async fn the_use_case_is_sent_only_when_asked_for_and_only_with_audio_ogg() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "1037543291543636"}));
+    t.push_json(200, json!({"id": "1037543291543636"}));
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    media
+        .upload(Bytes::from_static(b"OggS"), "audio/ogg", "a.ogg")
+        .await
+        .unwrap();
+    for (n, req) in t.requests().iter().enumerate() {
+        assert!(req.multipart_field("use_case").is_none(), "{n}");
+        assert!(req.multipart_field("description").is_none(), "{n}");
+    }
+    media
+        .upload_with(
+            Bytes::from_static(b"OggS"),
+            "audio/ogg; codecs=opus",
+            "a.ogg",
+            &UploadOptions::voicemail_announcement(),
+        )
+        .await
+        .unwrap();
+    let req = t.last_request().unwrap();
+    assert!(req.multipart_field("use_case").is_some());
+    assert!(req.multipart_field("description").is_none());
+    let before = t.requests().len();
+    let err = media
+        .upload_with(
+            Bytes::from_static(b"ID3"),
+            "audio/mpeg",
+            "a.mp3",
+            &UploadOptions::voicemail_announcement(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Validation(_)), "{err:?}");
+    assert_eq!(t.requests().len(), before, "nothing sent");
+    assert_eq!(t.remaining(), 0);
+}
+
 #[tokio::test]
 async fn upload_converted_sends_the_format_s_type_and_name() {
     let t = ScriptedTransport::new();

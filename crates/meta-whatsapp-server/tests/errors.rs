@@ -423,6 +423,7 @@ const CALLS_META: &[&str] = &[
     "GET /v1/numbers/{pn}/call-settings",
     "PATCH /v1/numbers/{pn}/call-settings",
     "GET /v1/numbers/{pn}/call-permissions",
+    "POST /v1/numbers/{pn}/call-settings/voicemail-announcement",
     "POST /v1/numbers/{pn}/calls",
     "POST /v1/numbers/{pn}/calls/{call_id}/pre-accept",
     "POST /v1/numbers/{pn}/calls/{call_id}/accept",

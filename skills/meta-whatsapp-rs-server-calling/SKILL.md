@@ -24,6 +24,8 @@ other scope grants (`send` does not); call analytics are the scope
 | Route | Does |
 | --- | --- |
 | `GET`, `PATCH /v1/numbers/{pn}/call-settings` | the `CallingSettings` object (status, hours, icons, callback permission, SIP, audio, voicemail); the read adds `restrictions`; a change sets the fields it names, `204` |
+| `GET /v1/numbers/{pn}/call-settings/sip-credentials` | the SIP servers **with their passwords**: the scope `call_credentials` (no other scope grants it) and the deployment's `WA_SERVER_CALL_SIP_CREDENTIALS=on`, else `403`; `no-store` |
+| `POST /v1/numbers/{pn}/call-settings/voicemail-announcement` | upload an Ogg/Opus `file` (multipart, at most 16 MiB) as the voicemail announcement: `201` with `media_id`; takes an `Idempotency-Key` |
 | `GET /v1/numbers/{pn}/call-permissions` | `phone` (E.164 with its +) and/or `user_id` (a BSUID): `status`, `expiration_time`, `actions` |
 | `POST /v1/numbers/{pn}/calls` | place a call (`ConnectCallRequest`): `201` with `call_id`; takes an `Idempotency-Key` |
 | `POST /v1/numbers/{pn}/calls/{call_id}/pre-accept`, `POST /v1/numbers/{pn}/calls/{call_id}/accept` | answer a user's call with `sdp_answer` |
@@ -127,15 +129,21 @@ number**: any other is `not_found`, and nothing changes.
 ## What never reaches a log or an error
 
 An SDP (addresses, ICE credentials) is in the request that carries it and
-nowhere else. A SIP server's password is **never read from Meta and never
-answered**: take it from WhatsApp Manager. A failed call answers Meta's
+nowhere else. A SIP server's password is not in `GET .../call-settings`.
+The one route that answers it is `GET .../call-settings/sip-credentials`,
+for a key with the scope `call_credentials` when the deployment turned the
+read on; the password is in no log, audit event, error or idempotency
+record, so keep it out of yours too. A failed call answers Meta's
 `code` and the service's `kind`, never Meta's text.
 
 ## What meta-whatsapp-rs does not do
 
-The WebRTC media, the SIP password, uploading a voicemail announcement
-(Meta wants a use case the media routes do not send), sending the call
-permission request, call buttons and deep links. Meta's calling codes
+The WebRTC media, call buttons and deep links. The call permission request
+is a message: send it as `interactive` of type `call_permission_request`
+through the send route (see `meta-whatsapp-rs-server-send`). A call's
+recording or transcript downloads through the media route by the media id
+of its event; whether Meta serves it to the number's media lookup is not
+confirmed by its pages. Meta's calling codes
 (138xxx) answer their own kind (`calling_not_enabled`,
 `call_permission_missing`, `call_limit_reached`, `call_connection_failed`,
 ...; `unknown` only for a code Meta's page does not list): branch on the

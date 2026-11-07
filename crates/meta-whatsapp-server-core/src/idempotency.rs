@@ -82,6 +82,7 @@ use crate::uploads::NewUpload;
 /// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 /// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
+/// | `upload_call_voicemail_announcement` ([`Self::upload_call_voicemail_announcement`]; roadmap M5e2) | the number's id; the file's SHA-256 (the file itself is not kept) |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
@@ -139,6 +140,21 @@ impl Fingerprint {
                 ("filename", upload.filename().as_bytes()),
                 ("file", digest.as_slice()),
             ],
+        )
+    }
+
+    /// `upload_call_voicemail_announcement` of `audio` on `number` (roadmap
+    /// M5e2; no legacy fingerprint): the file's SHA-256 (the file itself is
+    /// not kept).
+    pub fn upload_call_voicemail_announcement(
+        number: &PhoneNumberId,
+        audio: &crate::calls::VoicemailAudio,
+    ) -> Self {
+        let digest = Sha256::digest(audio.data());
+        Self::parts(
+            Operation::UploadCallVoicemailAnnouncement,
+            &[("pn", number.as_str())],
+            &[("file", digest.as_slice())],
         )
     }
 
