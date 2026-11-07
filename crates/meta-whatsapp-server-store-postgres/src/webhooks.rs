@@ -29,7 +29,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId};
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, Claimed, CreateOutcome, EndpointChange, NewDelivery, NewEndpoint,
-    Outcome, WebhookStore,
+    Outcome, PendingDeliveries, WebhookStore,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     AttemptError, Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId,
@@ -615,5 +615,24 @@ impl WebhookStore for PgWebhookStore {
         .await
         .map_err(backend)?;
         Ok(done.rows_affected())
+    }
+
+    async fn pending(&self, now: OffsetDateTime) -> StoreResult<PendingDeliveries> {
+        // The partial index on pending rows answers it alone.
+        let row = sqlx::query(
+            "SELECT count(*) AS pending, \
+                    min(next_attempt_at) FILTER (WHERE next_attempt_at <= $1) AS oldest_due \
+             FROM wa_server_webhook_deliveries WHERE status = 'pending'",
+        )
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(backend)?;
+        let count: i64 = get(&row, "pending")?;
+        let oldest_due: Option<OffsetDateTime> = get(&row, "oldest_due")?;
+        Ok(PendingDeliveries {
+            count: u64::try_from(count).unwrap_or(0),
+            oldest_due,
+        })
     }
 }

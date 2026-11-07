@@ -27,6 +27,17 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   each under an `Idempotency-Key`, audited, answering no text of Meta's.
   Six operations, no new scope; OpenAPI additive.
 
+### Added (roadmap M2k)
+
+- The webhooks-out backlog on `/metrics`: the gauges
+  `wa_server_webhooks_out_pending_deliveries` and
+  `wa_server_webhooks_out_oldest_due_age_seconds`, with no label (design D300
+  to D302, coordinator's decisions, swappable; the two names pending the owner's
+  confirmation before the first release),
+  read when scraped through a new `WebhookStore::pending` (a port method:
+  **upgrade:** a `WebhookStore` implemented outside this repository adds it;
+  memory and Postgres have it, no migration) and `WebhookEndpoints::backlog`.
+
 ### Added (roadmap M5f2)
 
 - **Group pictures, in the service** (roadmap M5f2, parity row 76 now done
