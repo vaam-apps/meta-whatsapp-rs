@@ -66,6 +66,15 @@ ids are no secrets: a route open to merchants would let one take
 another's arrival. A tenant key gets `forbidden` (403). Off, the route
 answers `signup_not_configured` (409).
 
+Send an `Idempotency-Key` header with the claim (and with the pool's add and
+code requests below): the same key and body after a `504` is one request to
+Meta and gets the first answer back (`Idempotent-Replayed: true`); another
+body is `idempotency_key_reused` (422). A claim Meta refused (nothing sent)
+puts the arrival back and frees the key; one Meta may have received puts the
+arrival back and keeps the `onboarding_failed` for that key, so claim again
+under a new key. The PIN is not compared: another PIN under the same key
+gets the first answer.
+
 ## Pre-verified numbers
 
 Your operator (admin key) keeps a pool of numbers verified ahead of time

@@ -132,6 +132,21 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `number_settings::is_legal_admin_act`, the audit actions; the names are
   pending the owner's confirmation before the first release.
 
+### Added (roadmap M5j3)
+
+- **Idempotency on the pool's `add` and `request-code` and on the hosted
+  claim** (roadmap M5j3, design D292 done, D350 and D351, the implementer's
+  proposals): `POST /v1/admin/pre-verified-numbers`,
+  `POST /v1/admin/pre-verified-numbers/{id}/code` and
+  `POST /v1/admin/signup/hosted` take an optional `Idempotency-Key`, scoped
+  to the admin key as M5j2's: the same key and body after a `504` is one
+  request to Meta (a second code is a second message), another body (or
+  another number) is `422 idempotency_key_reused`. The hosted claim keeps its
+  one-claim rule: a failure that proves nothing was sent puts the arrival
+  back and frees the key; its `pin` is in the fingerprint only as present.
+  Additive in the OpenAPI document (the header and the `504`/`409`/`422`
+  descriptions); no migration, no new stored name.
+
 ### Added (roadmap M5j2)
 
 - **Idempotency on the operator's creating POSTs** (roadmap M5j2, design
