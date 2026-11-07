@@ -21004,6 +21004,384 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/flow-key": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/flow-key`: whether the caller's tenant set a\nFlow key for the WABA, and its public half. The private key is never\nanswered.",
+        "operationId": "get_flow_key",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The key's public half, or `configured: false`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowKey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`PUT /v1/wabas/{waba_id}/flow-key`: set the WABA's Flow private key.\nAudited (`flow_key_set`). The data endpoint decrypts this WABA's\nrequests with it from the next one; set the answer's `public_key` as\neach number's business public key at Meta, or its Flows answer `421`.",
+        "operationId": "set_flow_key",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: a repeat with the same key and the same public key gets the kept answer (`Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set (or replaced): the key's public half",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowKey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `private_key` (not an unencrypted 2048-bit RSA private key in PEM, or over 16 KiB; never quoting it) or `body`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/flow-key`: delete the WABA's Flow key.\nAudited (`flow_key_deleted`) when there was one. `204` either way. The\ndata endpoint then uses the deployment's key if the deployment allows\nit, else answers `404`.",
+        "operationId": "delete_flow_key",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, or there was none"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/flows": {
       "get": {
         "tags": [
@@ -32648,6 +33026,50 @@
           }
         }
       },
+      "FlowKey": {
+        "type": "object",
+        "description": "A WABA's Flow key, as its public half.",
+        "required": [
+          "configured",
+          "public_key",
+          "public_key_sha256"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether the caller's tenant has set a Flow key for this WABA. If\nnot, the data endpoint uses the deployment's key when the\ndeployment allows it (`WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK`),\nelse answers `404`."
+          },
+          "public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The public key as PEM (`-----BEGIN PUBLIC KEY-----`): set it as the\nbusiness public key of each number a Flow is sent from, at Meta."
+          },
+          "public_key_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SHA-256 of `public_key`'s text, lowercase hex: tells two keys\napart."
+          }
+        }
+      },
+      "FlowKeyRequest": {
+        "type": "object",
+        "description": "The key to set.",
+        "required": [
+          "private_key"
+        ],
+        "properties": {
+          "private_key": {
+            "type": "string",
+            "format": "password",
+            "description": "The private key as PEM text: an **unencrypted** 2048-bit RSA key,\nPKCS#8 (`-----BEGIN PRIVATE KEY-----`) or PKCS#1 (`-----BEGIN RSA\nPRIVATE KEY-----`). Meta's own `openssl genrsa -des3` makes a\npassword-protected one, which is refused: remove the password once\nwith `openssl pkcs8 -topk8 -nocrypt`. A secret: it is stored sealed\nin the token vault and never answered, logged or audited. At most\n16 KiB."
+          }
+        },
+        "additionalProperties": false
+      },
       "FlowList": {
         "type": "object",
         "description": "A page of a WABA's Flows.",
@@ -40442,7 +40864,7 @@
     },
     {
       "name": "flows",
-      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
+      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. A WABA's Flow private key is set, read (its public half) and deleted by its tenant (roadmap M5d2). The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
     },
     {
       "name": "payments",

@@ -199,6 +199,10 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             "/v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
         ),
         (Method::DELETE, "/v1/wabas/{waba_id}/flows/{flow_id}"),
+        // Roadmap M5d2: a WABA's Flow private key.
+        (Method::PUT, "/v1/wabas/{waba_id}/flow-key"),
+        (Method::GET, "/v1/wabas/{waba_id}/flow-key"),
+        (Method::DELETE, "/v1/wabas/{waba_id}/flow-key"),
         (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
         // Roadmap M5g (the design's M5.1): commerce, QR codes, analytics
         // and the block list. A catalog is its WABA's, a code its number's.

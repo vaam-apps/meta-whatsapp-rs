@@ -300,6 +300,12 @@ pub enum Operation {
     DeprecateFlow,
     /// `delete_flow`: a draft Flow deleted (roadmap M5d).
     DeleteFlow,
+    /// `set_flow_key`: a WABA's Flow private key set by its tenant (roadmap M5d2).
+    SetFlowKey,
+    /// `get_flow_key`: whether a WABA has a Flow key, and its public half (roadmap M5d2).
+    GetFlowKey,
+    /// `delete_flow_key`: a WABA's Flow key deleted (roadmap M5d2).
+    DeleteFlowKey,
     /// `get_commerce_settings`: a number's commerce settings (roadmap M5g).
     GetCommerceSettings,
     /// `update_commerce_settings`: a number's commerce settings changed: the cart enabled or not, the catalog shown or not (roadmap M5g).
@@ -386,7 +392,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 166] = [
+    pub const ALL: [Self; 169] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -512,6 +518,9 @@ impl Operation {
         Self::PublishFlow,
         Self::DeprecateFlow,
         Self::DeleteFlow,
+        Self::SetFlowKey,
+        Self::GetFlowKey,
+        Self::DeleteFlowKey,
         Self::GetCommerceSettings,
         Self::UpdateCommerceSettings,
         Self::ListCatalogs,
@@ -684,6 +693,9 @@ impl Operation {
             Self::PublishFlow => "publish_flow",
             Self::DeprecateFlow => "deprecate_flow",
             Self::DeleteFlow => "delete_flow",
+            Self::SetFlowKey => "set_flow_key",
+            Self::GetFlowKey => "get_flow_key",
+            Self::DeleteFlowKey => "delete_flow_key",
             Self::GetCommerceSettings => "get_commerce_settings",
             Self::UpdateCommerceSettings => "update_commerce_settings",
             Self::ListCatalogs => "list_catalogs",
@@ -797,7 +809,10 @@ impl Operation {
             | Self::PreviewFlow
             | Self::PublishFlow
             | Self::DeprecateFlow
-            | Self::DeleteFlow => Scope::Flows,
+            | Self::DeleteFlow
+            | Self::SetFlowKey
+            | Self::GetFlowKey
+            | Self::DeleteFlowKey => Scope::Flows,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
