@@ -17,6 +17,10 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 - A webhook endpoint made with a platform key may name `tenants` (one to
   ten): it receives those tenants' events, each delivery read in its own
   tenant's stream (roadmap M2m; migration 11).
+- A platform key's webhook endpoint is deleted, has its secret rotated or
+  is pinged only while its set of tenants is the one the key's reach was
+  checked against, as its update already was (roadmap M2m, D342); a set
+  another key changed meanwhile answers `404`.
 
 ### Added (roadmap M2i)
 

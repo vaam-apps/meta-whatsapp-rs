@@ -5913,6 +5913,9 @@ design's (§9).
     `tenants_are_a_platform_keys_and_checked`, and three more on every
     backend, and `a_platform_keys_endpoint_receives_the_tenants_it_names`
     over HTTP. Not built: `"*"`.
+    Follow-up: deletion, secret rotation and the test ping are
+    compare-and-sets on the tenant set checked, as the update is
+    (D342's extension; `a_stale_set_refuses_a_deletion_a_rotation_and_a_ping`).
 
 ### M3. Embedded Signup, OTP, coexistence
 
