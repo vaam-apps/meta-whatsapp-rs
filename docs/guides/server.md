@@ -2057,6 +2057,11 @@ number's `messaging_limit_tier` (`TIER_250`, `TIER_1K`, `TIER_10K`,
   fingerprint. Meta's error texts on these calls are withheld, and a
   call cut by a timeout is not replayed (`504`: read the settings before
   asking again).
+- **Every legal act is sent exactly once.** The service sends the
+  compliance declaration, the partner and billing acts and the max price
+  agreement through a client that never retries, so a timeout or a `5xx`
+  is `504`/`502` with `may_have_been_sent` and nothing is replayed (read
+  the state before asking again).
 - **One legal act is off until you turn it on.** The India compliance
   information declaration (`PUT …/compliance-info`) answers `403
   feature_not_available`, with nothing asked of Meta, unless the
