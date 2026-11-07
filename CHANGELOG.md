@@ -33,8 +33,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M5h2)
 
-- **What M5h did not route** (rows 136, 137; D430 to D435, proposed, not
-  decided): three admin routes. `POST
+- **What M5h did not route** (rows 136, 137; D430 to D435, decided
+  2026-11-07): three admin routes. `POST
   /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
   max price agreement's state with the operator's `token` in the body and
   answers `{status}`: Meta's answer names the signer, the service's never
@@ -43,7 +43,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   partner Intent API (an invitation to a business's admins to accept the
   Marketing Messages API's terms, not the acceptance): gated as a legal act
   (`WA_SERVER_LEGAL_ACTS`, the new operation `request_marketing_onboarding`
-  in `is_legal_admin_act`), once, audited `marketing_onboarding_requested`.
+  in `is_legal_admin_act`), once (it takes an `Idempotency-Key`), audited `marketing_onboarding_requested`.
   `GET /v1/admin/partners/client-wabas` lists the client WABAs by
   onboarding status. OpenAPI additive only (three paths, six schemas).
   A GIF header's send-time parameter stays open (roadmap M5h3): no page shows it (D435).

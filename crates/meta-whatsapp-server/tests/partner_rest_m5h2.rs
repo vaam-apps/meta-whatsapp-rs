@@ -234,6 +234,79 @@ async fn the_invitations_refusals_answer_the_code_and_are_never_replayed() {
     assert_eq!(f.h.graph.remaining(), 0);
 }
 
+/// The invitation takes an `Idempotency-Key`, scoped to the admin key (D292:
+/// a repeat has an effect of its own, it emails the admins again): the same
+/// key and request after a `504` or a success is one request to Meta, the
+/// same key for another business or another solution is `422
+/// idempotency_key_reused`, an invalid key is `422` with nothing sent, and
+/// without a key nothing is remembered. The gate answers before the key. The
+/// records hold the answer, never a token (the invitation has none).
+/// Decisive: `idempotent_admin` removed from the handler.
+#[tokio::test]
+async fn the_invitation_takes_an_idempotency_key_and_a_retry_is_not_a_second_invitation() {
+    let f = fixture(true, true).await;
+    let keyed = |business: &str, key: &str, body: Option<Value>| {
+        let call = onboard(business, &f).header("idempotency-key", key);
+        match body {
+            Some(body) => call.json(&body),
+            None => call,
+        }
+    };
+    // A timeout is kept: the retry under the key gets it, nothing is sent.
+    f.h.graph.push_error(|| TransportError::Timeout);
+    let cut = f.h.call(keyed(END_BUSINESS, "k-cut", None)).await;
+    assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
+    let again = f.h.call(keyed(END_BUSINESS, "k-cut", None)).await;
+    assert_eq!(again.status, StatusCode::GATEWAY_TIMEOUT, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(f.h.graph.requests().len(), 1);
+    // A success is kept and replayed; `{}` is the same request as no body.
+    f.h.graph.push_json(200, json!({"request_id": REQUEST_ID}));
+    let first = f.h.call(keyed(END_BUSINESS, "k-ok", None)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+    let replay = f.h.call(keyed(END_BUSINESS, "k-ok", Some(json!({})))).await;
+    assert_eq!(replay.text, first.text);
+    assert_eq!(replay.headers["idempotent-replayed"], "true");
+    assert_eq!(f.h.graph.requests().len(), 2);
+    // The same key for another business or another solution is a reuse.
+    for call in [
+        keyed("2780023991705", "k-ok", None),
+        keyed(END_BUSINESS, "k-ok", Some(json!({"solution_id": SOLUTION}))),
+    ] {
+        let reused = f.h.call(call).await;
+        assert_eq!(reused.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(reused.code(), "idempotency_key_reused");
+    }
+    let bad = f.h.call(keyed(END_BUSINESS, "with space", None)).await;
+    assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(f.h.graph.requests().len(), 2);
+    // Another admin key does not see the record: its request reaches Meta.
+    let other = f.h.admin_key().await;
+    f.h.graph.push_json(200, json!({"request_id": REQUEST_ID}));
+    let reply =
+        f.h.call(
+            Call::new(
+                Method::POST,
+                format!("/v1/admin/partners/businesses/{END_BUSINESS}/marketing-onboarding"),
+            )
+            .key(&other)
+            .header("idempotency-key", "k-ok"),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert!(!reply.headers.contains_key("idempotent-replayed"));
+    assert_eq!(f.h.graph.requests().len(), 3);
+    assert_eq!(f.h.graph.remaining(), 0);
+    // The gate answers before the key is read.
+    let off = fixture(false, true).await;
+    let refused =
+        off.h
+            .call(onboard(END_BUSINESS, &off).header("idempotency-key", "with space"))
+            .await;
+    assert_eq!(refused.code(), "feature_not_available");
+    assert!(off.h.graph.requests().is_empty());
+}
+
 // ─── The client WABAs by onboarding status ───────────────────────────────
 
 /// `onboarding`'s example: the filter is Meta's, the token the
@@ -412,6 +485,16 @@ async fn the_agreements_state_failures_keep_the_signer_and_the_token_out() {
     let html = f.h.call(state(BUSINESS, &json!(BUSINESS_TOKEN), &f)).await;
     f.h.graph.push_json(200, json!([SIGNER_EMAIL]));
     let array = f.h.call(state(BUSINESS, &json!(BUSINESS_TOKEN), &f)).await;
+    // A token that cannot be a header value never reaches Meta, and is not
+    // echoed.
+    let before = f.h.graph.requests().len();
+    let unsendable = f
+        .h
+        .call(state(BUSINESS, &json!("EAAB-planted\nsecond-line"), &f))
+        .await;
+    assert!(!unsendable.status.is_success(), "{}", unsendable.text);
+    assert_eq!(f.h.graph.requests().len(), before);
+    assert!(!unsendable.text.contains("planted"), "{}", unsendable.text);
     for reply in [&refused, &odd, &html, &array] {
         for planted in [
             SIGNER_NAME,

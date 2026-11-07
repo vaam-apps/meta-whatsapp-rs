@@ -15,7 +15,7 @@
 //! | `POST /v1/admin/partners/solutions/{id}/accept`, `…/reject` | `POST /{solution}/accept` (**legal act**), `…/reject` (**legal act**) |
 //! | `POST /v1/admin/partners/solutions/{id}/deactivation-request`, `…/accept`, `…/reject` | `POST /{solution}/send_deactivation_request`, `…/accept_deactivation_request` (**legal act**), `…/reject_deactivation_request` |
 //! | `GET /v1/admin/partners/users/{user_id}/wabas` | `GET /{user}/assigned_whatsapp_business_accounts` |
-//! | `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | `POST /{business}/onboard_partners_to_mm_lite` (**legal act**: an invitation to a business's admins to accept the Marketing Messages API's terms; roadmap M5h2) |
+//! | `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | `POST /{business}/onboard_partners_to_mm_lite` (**legal act**, takes an `Idempotency-Key`: an invitation to a business's admins to accept the Marketing Messages API's terms; roadmap M5h2) |
 //! | `GET /v1/admin/partners/client-wabas` | `GET /{business}/client_whatsapp_business_accounts?filtering=…` (roadmap M5h2) |
 //!
 //! **The tenant's routes** (scope `partners`, a WABA of its own, its
@@ -1079,6 +1079,19 @@ pub(crate) async fn reject_partner_solution_deactivation(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The invitation as the operation a key keeps: the request's id.
+async fn invite_to_marketing_onboarding(
+    service: &Partners<'_>,
+    authz: &Authorizer,
+    business_id: &str,
+    solution_id: Option<&str>,
+) -> Result<Success, ApiError> {
+    let requested = service
+        .request_marketing_onboarding(authz, business_id, solution_id)
+        .await?;
+    Success::json(StatusCode::OK, &MarketingOnboardingBody::from(requested))
+}
+
 /// `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`:
 /// the partner Intent API. Meta emails every admin of the business an
 /// invitation to accept the Marketing Messages API's Terms of Service, and
@@ -1087,23 +1100,28 @@ pub(crate) async fn reject_partner_solution_deactivation(
 /// a legal act** (it acts for the business and cannot be recalled; the
 /// invitation is not the acceptance, which a person gives in Meta Business
 /// Suite): off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`,
-/// audited, sent once. Uses the deployment's partner credentials.
+/// audited, sent once. Uses the deployment's partner credentials. Takes an
+/// `Idempotency-Key`, scoped to the admin key, so that a client's retry
+/// after a `504` is not a second invitation.
 #[utoipa::path(
     post,
     path = "/v1/admin/partners/businesses/{business_id}/marketing-onboarding",
     tag = "partners",
     security(("api_key" = [])),
-    params(("business_id" = String, Path, description = "The end business portfolio to invite")),
+    params(
+        ("business_id" = String, Path, description = "The end business portfolio to invite"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never invite twice. The answer is kept"),
+    ),
     request_body(content = Option<RequestMarketingOnboardingBody>, description = "Optional; an empty body sends no solution"),
     responses(
         (status = 200, description = "Meta sent the request; audited `marketing_onboarding_requested`", body = MarketingOnboardingBody),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden` (not an admin key), or Meta's refusal", body = ErrorBody),
-        (status = 409, description = "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `business_id`, `solution_id` or `body`; Meta's refusal (an ineligible business, a duplicate request)", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`); `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `business_id`, `solution_id`, `body` or `Idempotency-Key`: nothing was sent; Meta's refusal (an ineligible business, a duplicate request); `idempotency_key_reused`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent` (the request is never sent again by the service)", body = ErrorBody),
-        (status = 504, description = "`timeout`: the invitation may have been sent", body = ErrorBody),
+        (status = 504, description = "`timeout`: the invitation may have been sent; repeat the request with the same `Idempotency-Key` for this answer", body = ErrorBody),
     )
 )]
 pub(crate) async fn request_marketing_onboarding(
@@ -1111,15 +1129,40 @@ pub(crate) async fn request_marketing_onboarding(
     admin: AdminCaller,
     _gate: LegalActsOn,
     Path(business_id): Path<String>,
-    OptionalJson(body): OptionalJson<RequestMarketingOnboardingBody>,
-) -> Result<Json<MarketingOnboardingBody>, ApiError> {
-    let requested = state
+    KeyHeader(key): KeyHeader,
+    OptionalJson(body): OptionalJson<Value>,
+) -> Response {
+    // The fingerprint holds the body (the optional solution id) and the
+    // business: no token, which is the deployment's, not an input.
+    let fingerprint = Fingerprint::request_marketing_onboarding(&business_id, &body);
+    let body = if body.is_null() {
+        RequestMarketingOnboardingBody::default()
+    } else {
+        match serde_json::from_value::<RequestMarketingOnboardingBody>(body) {
+            Ok(body) => body,
+            Err(_) => return ApiError::invalid("body").into_response(),
+        }
+    };
+    let service = match state
         .signups()
-        .partners(state.authz(), &admin, state.settings().legal_acts)?
-        .observed_by(state.metrics())
-        .request_marketing_onboarding(state.authz(), &business_id, body.solution_id.as_deref())
-        .await?;
-    Ok(Json(requested.into()))
+        .partners(state.authz(), &admin, state.settings().legal_acts)
+    {
+        Ok(service) => service.observed_by(state.metrics()),
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    state
+        .idempotent_admin(
+            &admin,
+            key,
+            fingerprint,
+            invite_to_marketing_onboarding(
+                &service,
+                state.authz(),
+                &business_id,
+                body.solution_id.as_deref(),
+            ),
+        )
+        .await
 }
 
 /// `GET /v1/admin/partners/client-wabas`: one page of the client WABAs

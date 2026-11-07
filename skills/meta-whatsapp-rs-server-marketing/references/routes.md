@@ -13,5 +13,5 @@
 | `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences`, `GET`, `PATCH`, `DELETE …/{sequence_id}` | welcome message sequences |
 | `POST /v1/admin/businesses/{business_id}/max-price-agreement` | the operator's signing of the max price agreement (admin key) |
 | `POST /v1/admin/businesses/{business_id}/max-price-agreement/state` | the agreement's state, read with the operator's `token` in the body; the answer is `{status}`, never the signer (admin key; not a legal act) |
-| `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | the partner Intent API: an invitation to a business's admins to accept the terms; a legal act (admin key) |
+| `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | the partner Intent API: an invitation to a business's admins to accept the terms; a legal act, takes an `Idempotency-Key` (admin key) |
 | `GET /v1/admin/partners/client-wabas` | the client WABAs by onboarding status (admin key) |

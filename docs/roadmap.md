@@ -7405,7 +7405,8 @@ or WABA fails the family's own cross-tenant test).
     gated as a legal act by `number_settings::is_legal_admin_act` (a sixth
     arm, `AdminOperation::RequestMarketingOnboarding`): off, `403
     feature_not_available` before the body is read and with nothing sent;
-    on, one request through `legal_client`, never replayed, audited
+    on, one request through `legal_client`, never replayed (it takes an
+    `Idempotency-Key`), audited
     `marketing_onboarding_requested` (D431–D433). `GET
     /v1/admin/partners/client-wabas` lists the client WABAs shared with the
     deployment's business by onboarding status (`Partners::client_wabas`,
@@ -7417,8 +7418,9 @@ or WABA fails the family's own cross-tenant test).
     token and Meta text in no line), `tests/legal_acts_once.rs` (the
     invitation joins the walk: eleven acts), `tests/authz.rs` (M5.1 over
     the two partner routes), the core's checks.
-  - **Proposed, not decided:** D430–D435, by the implementer; the
-    coordinator decides under the owner's delegation. Names pending the
+  - **Decided:** D430–D435, by the coordinator on 2026-11-07 under the
+    owner's delegation, each swappable (D432 changed in review: the
+    invitation takes an `Idempotency-Key`). Names pending the
     owner's confirmation before the first release: the three paths, the
     operation ids `read_max_price_agreement`, `request_marketing_onboarding`
     and `list_client_wabas`, and the audit actions
