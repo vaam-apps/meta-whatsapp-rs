@@ -30704,7 +30704,11 @@
               "null"
             ],
             "items": {
-              "type": "object"
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
             },
             "description": "This person's own `components`, replacing the template's: their\nparameters (Meta's template components, as a send takes them)."
           },
@@ -32779,7 +32783,11 @@
           },
           "template": {
             "type": "object",
-            "description": "Meta's template object: `name`, `language` and, for parameters\nevery person shares, `components`. A template naming a catalog is\nnot offered in a broadcast."
+            "description": "Meta's template object: `name`, `language` and, for parameters\nevery person shares, `components`. A template naming a catalog is\nnot offered in a broadcast.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
