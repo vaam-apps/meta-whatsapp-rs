@@ -360,6 +360,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // the note forwarded to the new owner are not logged.
     secrets.section("routing");
     secrets.extend(routing(h, &admin).await);
+    // Broadcasts (roadmap M5k): the people and their parameters are not
+    // logged, nor Meta's refusal quoting them.
+    secrets.section("broadcasts");
+    secrets.extend(broadcasts(h, &admin).await);
     secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -2596,6 +2600,84 @@ async fn routing(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+pub const BROADCAST_PHONE: &str = "+16505557411";
+pub const BROADCAST_BSUID: &str = "US.77665544332211009988";
+pub const BROADCAST_PARAM: &str = "CAPTURE-BROADCAST-PARAM-Aloe-sale-20";
+
+/// Roadmap M5k's routes on merchant-42's first number: a broadcast created
+/// for two people (one with parameters of their own), sent by a worker (one
+/// accepted, one refused by Meta with a text quoting the person), read, and
+/// a second one created and cancelled; returns what the logs must not
+/// hold. The audit events are `check_audit`'s.
+async fn broadcasts(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["broadcasts"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let template = json!({"name": "spring_sale", "language": {"code": "en_US"}});
+    let own = json!([{"type": "body", "parameters": [{"type": "text", "text": BROADCAST_PARAM}]}]);
+    let create = |people: serde_json::Value| {
+        Call::new(Method::POST, format!("/v1/numbers/{PN}/broadcasts"))
+            .key(&key)
+            .json(&json!({"template": template, "recipients": people}))
+    };
+    let made = h
+        .call(create(json!([
+            {"phone": BROADCAST_PHONE, "components": own},
+            {"user_id": BROADCAST_BSUID}
+        ])))
+        .await;
+    assert_eq!(made.status.as_u16(), 202, "{}", made.text);
+    let id = made.json()["id"].as_str().unwrap().to_owned();
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "contacts": [{"input": BROADCAST_PHONE, "wa_id": "16505557411"}],
+               "messages": [{"id": "wamid.CAPTURE-BROADCAST"}]}),
+    );
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#131050) {BROADCAST_BSUID} {BROADCAST_PHONE} {BROADCAST_PARAM}"),
+                         "type": "OAuthException", "code": 131_050,
+                         "error_data": {"details": format!("{BROADCAST_PHONE}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    h.state.broadcast_workers().unwrap()[0]
+        .tick()
+        .await
+        .unwrap();
+    let read = h
+        .call(Call::get(format!("/v1/numbers/{PN}/broadcasts/{id}")).key(&key))
+        .await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    let second = h.call(create(json!([{"phone": BROADCAST_PHONE}]))).await;
+    assert_eq!(second.status.as_u16(), 202, "{}", second.text);
+    let second = second.json()["id"].as_str().unwrap().to_owned();
+    let cancelled = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{PN}/broadcasts/{second}/cancel"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(cancelled.status.as_u16(), 200, "{}", cancelled.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        BROADCAST_PHONE.to_owned(),
+        BROADCAST_BSUID.to_owned(),
+        BROADCAST_PARAM.to_owned(),
+    ]
+}
+
 /// A group's id (`groups/webhooks`: it embeds the business number) is in no
 /// line of the service's own, and in the library's `graph request` debug
 /// line only (it names the path it calls: [`check`] says so); a group's
@@ -4373,7 +4455,11 @@ fn check_audit(logs: &str) {
             "thread_passed",
             "thread_taken",
             "thread_released",
-            "thread_passed"
+            "thread_passed",
+            // Roadmap M5k: two broadcasts created, the second cancelled.
+            "broadcast_created",
+            "broadcast_created",
+            "broadcast_cancelled"
         ],
         "the template changes', the PIN change's, the deregistration's, the payment changes', the QR code deletion's and the block list changes' audit events"
     );
