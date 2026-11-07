@@ -6828,9 +6828,9 @@ or WABA fails the family's own cross-tenant test).
     service follow-up, D310-D313). The marketing send (M5h, landed) names none: Meta's pages
     for `/marketing_messages` document no such field; pinned by the walk. Several bindings per number
     wait for OPEN_QUESTIONS #46.
-- [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,
-  156): the per-number webhook override, the `connection_status` and
-  `webhook_url` setters, a WABA's health status and bot details.
+- [ ] **M5c6. Number settings: what M5c3 left** (rows 133, 156):
+  the per-number webhook override, the `connection_status` and `webhook_url`
+  setters, a WABA's health status and bot details.
   - **After:** M5c3.
   - **Scope:** each is a decision before it is a route. The webhook
     override and the `webhook_url` setter would let a tenant divert or hide
@@ -6857,7 +6857,7 @@ or WABA fails the family's own cross-tenant test).
     `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on` (default `off`;
     `Settings::number_webhook_override`; the gate is an extractor before the
     vault and again in the core), its URL goes through the same
-    `webhooks_out::destination::pin` as a webhook endpoint's before anything
+    `server_core::webhooks_out::destination::pin` as a webhook endpoint's before anything
     is sent (`422` on `url`; `409 webhooks_not_configured` without webhooks
     out), the token and the URL are in no log or audit event
     (`webhook_override_set`, `webhook_override_refused`), and clearing
@@ -6870,8 +6870,9 @@ or WABA fails the family's own cross-tenant test).
     credentials; the setting off; clearing in all four settings states;
     exact requests), `tests/common/capture.rs` (a planted verify token and
     URL path, the audit events), `tests/config.rs`, `tests/authz.rs`,
-    `tests/errors.rs`. Parity rows 128 and 132 are done on both sides;
-    133 and 156 stay partial.
+    `tests/errors.rs`. The parity rows of the override and of a WABA's
+    health are done on both sides; the rows of bot details and of the
+    two setters stay partial.
   - **Proposed, not decided:** D440 to D445, by the implementer (the
     coordinator decides, AGENTS.md § Decisions). New names pending the
     owner's confirmation before the first release: the setting
