@@ -282,6 +282,10 @@ pub enum Operation {
     TerminateCall,
     /// `get_call_analytics`: a WABA's call analytics (roadmap M5e; pending the owner's confirmation before the first release).
     GetCallAnalytics,
+    /// `get_call_sip_credentials`: the SIP password of a number's calling settings, the one answer that carries it (roadmap M5e2; scope `call_credentials`; a secret: refused unless the deployment enables it; pending the owner's confirmation before the first release).
+    GetCallSipCredentials,
+    /// `upload_call_voicemail_announcement`: an audio file uploaded as a voicemail announcement, `use_case=call_voicemail_announcement` (roadmap M5e2; pending the owner's confirmation before the first release).
+    UploadCallVoicemailAnnouncement,
     /// `create_flow`: a Flow created in a WABA (roadmap M5d).
     CreateFlow,
     /// `list_flows`: a WABA's Flows (roadmap M5d).
@@ -392,7 +396,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 169] = [
+    pub const ALL: [Self; 171] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -509,6 +513,8 @@ impl Operation {
         Self::RejectCall,
         Self::TerminateCall,
         Self::GetCallAnalytics,
+        Self::GetCallSipCredentials,
+        Self::UploadCallVoicemailAnnouncement,
         Self::CreateFlow,
         Self::ListFlows,
         Self::GetFlow,
@@ -684,6 +690,8 @@ impl Operation {
             Self::RejectCall => "reject_call",
             Self::TerminateCall => "terminate_call",
             Self::GetCallAnalytics => "get_call_analytics",
+            Self::GetCallSipCredentials => "get_call_sip_credentials",
+            Self::UploadCallVoicemailAnnouncement => "upload_call_voicemail_announcement",
             Self::CreateFlow => "create_flow",
             Self::ListFlows => "list_flows",
             Self::GetFlow => "get_flow",
@@ -910,7 +918,9 @@ impl Operation {
             | Self::PreAcceptCall
             | Self::AcceptCall
             | Self::RejectCall
-            | Self::TerminateCall => Scope::Calls,
+            | Self::TerminateCall
+            | Self::UploadCallVoicemailAnnouncement => Scope::Calls,
+            Self::GetCallSipCredentials => Scope::CallCredentials,
         }
     }
 }

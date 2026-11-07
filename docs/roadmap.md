@@ -7034,7 +7034,7 @@ or WABA fails the family's own cross-tenant test).
   - **Not done here:** see M5e2; Meta's calling error codes (138xxx) were
     not classified by the library when this landed (L28 did it); no
     call of these routes was run against Meta live.
-- [ ] **M5e2. What M5e did not route**: reading a SIP
+- [x] **M5e2. What M5e did not route**: reading a SIP
   server's password (a route behind a scope and an audit event of its
   own, `include_sip_credentials` sent only there), uploading a voicemail
   announcement with Meta's `use_case=call_voicemail_announcement` (the
@@ -7048,6 +7048,60 @@ or WABA fails the family's own cross-tenant test).
   - **After:** M5e.
   - **Decisive:** M5.1, M5.2 for each; a SIP password never reaches a log
     or an audit event.
+  - **Landed** (*PR number to be added when it lands*; design D410 to
+    D416, **the implementer's proposals, not decided**, each swappable):
+    (1) `GET /v1/numbers/{pn}/call-settings/sip-credentials` reads a SIP
+    server's password, behind a new scope, `call_credentials`, which no
+    key holds until an operator gives it, **and** the deployment setting
+    `WA_SERVER_CALL_SIP_CREDENTIALS` (`off` by default: `403
+    feature_not_available`, Meta not asked); `include_sip_credentials` is
+    sent only there; `no-store`; its own audit event
+    `call_sip_credentials_read`; the password is in no log, audit event,
+    error or idempotency record, and D214 still holds for the settings
+    read. (2) `POST /v1/numbers/{pn}/call-settings/voicemail-announcement`
+    uploads Ogg/Opus (checked by its bytes, 16 MiB) with
+    `use_case=call_voicemail_announcement`, which the library offers as an
+    option of `Media::upload_with`, never a default of `Media::upload`.
+    (3) Recording and transcript media: **open**. Meta's pages say they
+    use the media messages' download flow and are silent on
+    `?phone_number_id=`, so nothing new is routed; the existing media
+    route sends it and a refused id is `404` with only the lookup sent
+    (D414). (4) The permission request message is the send route's
+    `interactive` `call_permission_request`, routed since M5a (D415), with
+    the exact body pinned. No legal act (no page ties these to terms).
+    Tests: `tests/calls_m5e2.rs`, `tests/authz.rs` (M5.1 over the new
+    routes), `tests/common/capture.rs` (the planted password), the core's
+    `calls` tests, the client's `media` tests; the OpenAPI document is
+    additive only. Pending the owner's confirmation before the first
+    release: the scope, the setting, the two paths, the two audit actions.
+    Not run against Meta live.
+  - **Landed** (*PR number to be added when it lands*; design D410 to
+    D416, **the implementer's proposals, not decided**, each swappable):
+    (1) `GET /v1/numbers/{pn}/call-settings/sip-credentials` reads a SIP
+    server's password, behind a new scope, `call_credentials`, which no
+    key holds until an operator gives it, **and** the deployment setting
+    `WA_SERVER_CALL_SIP_CREDENTIALS` (`off` by default: `403
+    feature_not_available`, Meta not asked); `include_sip_credentials` is
+    sent only there; `no-store`; its own audit event
+    `call_sip_credentials_read`; the password is in no log, audit event,
+    error or idempotency record, and D214 still holds for the settings
+    read. (2) `POST /v1/numbers/{pn}/call-settings/voicemail-announcement`
+    uploads Ogg/Opus (checked by its bytes, 16 MiB) with
+    `use_case=call_voicemail_announcement`, which the library offers as an
+    option of `Media::upload_with`, never a default of `Media::upload`.
+    (3) Recording and transcript media: **open**. Meta's pages say they
+    use the media messages' download flow and are silent on
+    `?phone_number_id=`, so nothing new is routed; the existing media
+    route sends it and a refused id is `404` with only the lookup sent
+    (D414). (4) The permission request message is the send route's
+    `interactive` `call_permission_request`, routed since M5a (D415), with
+    the exact body pinned. No legal act (no page ties these to terms).
+    Tests: `tests/calls_m5e2.rs`, `tests/authz.rs` (M5.1 over the new
+    routes), `tests/common/capture.rs` (the planted password), the core's
+    `calls` tests, the client's `media` tests; the OpenAPI document is
+    additive only. Pending the owner's confirmation before the first
+    release: the scope, the setting, the two paths, the two audit actions.
+    Not run against Meta live.
 - [x] **M5f. Groups** (rows 76, 77, 79, 81; row 76's picture is M5f2).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; a group id not in the number's groups is

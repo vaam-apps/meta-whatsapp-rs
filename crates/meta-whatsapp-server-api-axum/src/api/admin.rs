@@ -507,6 +507,10 @@ pub enum ScopeName {
     /// A number's calling: settings, call permissions, the call a
     /// business places and the actions on a call (roadmap M5e).
     Calls,
+    /// Reading the SIP password of a number's calling settings (roadmap
+    /// M5e2): off for every key until it is given, and answered only when
+    /// the deployment enables it.
+    CallCredentials,
     /// Partner acts on a WABA (roadmap M5j).
     Partners,
 }
@@ -534,6 +538,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Marketing => Scope::Marketing,
             ScopeName::Routing => Scope::Routing,
             ScopeName::Calls => Scope::Calls,
+            ScopeName::CallCredentials => Scope::CallCredentials,
             ScopeName::Partners => Scope::Partners,
         }
     }
@@ -562,6 +567,7 @@ impl From<Scope> for ScopeName {
             Scope::Marketing => ScopeName::Marketing,
             Scope::Routing => ScopeName::Routing,
             Scope::Calls => ScopeName::Calls,
+            Scope::CallCredentials => ScopeName::CallCredentials,
             Scope::Partners => ScopeName::Partners,
         }
     }

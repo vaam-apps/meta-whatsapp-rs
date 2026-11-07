@@ -65,6 +65,10 @@ pub const TEMPLATE_CACHE_TTL: Duration = Duration::from_secs(60);
 /// What the operator tunes (sections 5.4, 6 and 7.2), and the design's
 /// fixed values, which tests shorten.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is an independent deployment setting read from its own variable, not a state machine"
+)]
 pub struct Settings {
     /// `WA_SERVER_RATE_*`.
     pub rate_limits: RateLimits,
@@ -163,6 +167,13 @@ pub struct Settings {
     /// (the default); off, a send names none and Meta resolves the account
     /// from the token.
     pub send_messaging_account_id: bool,
+    /// `WA_SERVER_CALL_SIP_CREDENTIALS` (roadmap M5e2, design D410,
+    /// pending the owner's confirmation before the first release):
+    /// whether `GET /v1/numbers/{pn}/call-settings/sip-credentials`
+    /// answers a SIP server's password. Off (the default), it is `403
+    /// feature_not_available` and nothing is asked of Meta, whichever key
+    /// asks; on, it still takes a key holding the scope `call_credentials`.
+    pub call_sip_credentials: bool,
 }
 
 impl Default for Settings {
@@ -188,6 +199,7 @@ impl Default for Settings {
             flows_deployment_key_fallback: true,
             legal_acts: false,
             send_messaging_account_id: true,
+            call_sip_credentials: false,
         }
     }
 }

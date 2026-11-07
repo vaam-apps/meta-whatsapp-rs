@@ -6304,6 +6304,314 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/call-settings/sip-credentials": {
+      "get": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/call-settings/sip-credentials`: the number's SIP\nservers with their passwords.",
+        "operationId": "get_call_sip_credentials",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The SIP servers, each with its password: the only answer of the service that carries one. `Cache-Control: no-store`. Audited as `call_sip_credentials_read` (who and which number, never a host or a password)",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`no-store`"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallSipCredentials"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (the key lacks the scope `call_credentials`), `tenant_suspended`, `feature_not_available` (the deployment has not enabled the read, `WA_SERVER_CALL_SIP_CREDENTIALS`: nothing was asked of Meta), or Meta's refusal (`calling_temporarily_disabled`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/call-settings/voicemail-announcement": {
+      "post": {
+        "tags": [
+          "calls"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/call-settings/voicemail-announcement`: upload an\naudio file as the number's voicemail announcement.",
+        "operationId": "upload_call_voicemail_announcement",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and file never upload twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CallVoicemailAnnouncementUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded on this number with `use_case=call_voicemail_announcement`: name the media id in the settings' `voicemail.audio.default.announcement_media_id`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallVoicemailAnnouncementUploaded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`media_too_large`: larger than 16 MiB or `WA_SERVER_MEDIA_MAX_BYTES`; `payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `file` (not Ogg with Opus, empty or missing) or `body` (not a form of `file` alone, or its framing past 16 KiB); `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (`media_upload_failed`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the upload may have happened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/calls": {
       "post": {
         "tags": [
@@ -31165,6 +31473,61 @@
         },
         "additionalProperties": false
       },
+      "CallSipCredential": {
+        "type": "object",
+        "description": "A SIP server with the password Meta generated for it: **a secret**,\nanswered by the one route behind the scope `call_credentials`. No\n`Debug` output of its fields.",
+        "required": [
+          "hostname",
+          "port",
+          "sip_user_password"
+        ],
+        "properties": {
+          "hostname": {
+            "type": "string",
+            "description": "The server's host name."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its port, when Meta reports one.",
+            "minimum": 0
+          },
+          "sip_user_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest password Meta generated for the business on this\nserver: authenticates the business to Meta. A secret: keep it out\nof logs and of any store that is not a secret manager. Null when\nMeta did not send one."
+          }
+        }
+      },
+      "CallSipCredentials": {
+        "type": "object",
+        "description": "A number's SIP servers with their passwords.",
+        "required": [
+          "status",
+          "servers"
+        ],
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallSipCredential"
+            },
+            "description": "The servers, each with its password."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ENABLED` or `DISABLED`; null when SIP was never configured."
+          }
+        }
+      },
       "CallSipServer": {
         "type": "object",
         "description": "A SIP server. Its password is not here: the service never asks Meta for\nit and never answers it.",
@@ -31252,6 +31615,33 @@
           }
         },
         "additionalProperties": false
+      },
+      "CallVoicemailAnnouncementUpload": {
+        "type": "object",
+        "description": "A voicemail announcement's form (`multipart/form-data`).",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "An Ogg file with the Opus codec (judged by its bytes, not by the\npart's type), shorter than 60 seconds, at most 16 MiB. The form\ntakes no other field."
+          }
+        }
+      },
+      "CallVoicemailAnnouncementUploaded": {
+        "type": "object",
+        "description": "The voicemail announcement that was uploaded.",
+        "required": [
+          "media_id"
+        ],
+        "properties": {
+          "media_id": {
+            "type": "string",
+            "description": "Its media id: what `voicemail.audio.default.announcement_media_id`\nof the call settings takes. The media is usable as a voicemail\nannouncement only, not as a message's media."
+          }
+        }
       },
       "CallVoicemailAudio": {
         "type": "object",
@@ -38752,6 +39142,7 @@
           "marketing",
           "routing",
           "calls",
+          "call_credentials",
           "partners"
         ]
       },
