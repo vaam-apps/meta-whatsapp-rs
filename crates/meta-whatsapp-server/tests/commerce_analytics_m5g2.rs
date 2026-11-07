@@ -743,8 +743,8 @@ async fn with_the_legal_acts_off_the_insights_are_refused_without_a_request_to_m
 /// A confirmation cut off by a timeout is sent **once**, even where the
 /// client retries (the library marks the call replayable; the service does
 /// not let it be): one request, `504`, nothing left over for a second.
-/// Decisive: the `with_retry(RetryPolicy::NONE)` in
-/// `Analytics::enable_template_insights`.
+/// Decisive: the `legal_client` in
+/// `Analytics::enable_template_insights` (the walk in `legal_acts_once.rs` covers it with the rest).
 #[tokio::test]
 async fn a_cut_off_insights_confirmation_is_never_replayed() {
     let h = Harness::with_retry(

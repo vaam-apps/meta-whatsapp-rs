@@ -77,7 +77,7 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::messages::{
     Accepted, KeysOnly, MessageType, RecipientObject, SendMessage, admit_named_object, message,
 };
-use crate::number_settings::is_legal_admin_act;
+use crate::number_settings::{is_legal_admin_act, legal_client};
 use crate::observe::Observer;
 use crate::operation::AdminOperation;
 use crate::request::{graph_id, meta_object, typed_graph_id, wire};
@@ -1295,10 +1295,7 @@ impl<'a> MaxPriceAgreements<'a> {
         if token.expose_secret().trim().is_empty() {
             return Err(ServiceError::invalid("token"));
         }
-        let result = self
-            .authz
-            .client()
-            .with_token(token)
+        let result = legal_client(&self.authz.client().with_token(token))
             .marketing_business(business.clone())
             .sign_max_price_agreement(&MaxPriceAgreementSigner::new(
                 signer.name.clone(),
