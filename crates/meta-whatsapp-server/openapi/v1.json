@@ -2063,8 +2063,22 @@
         "tags": [
           "pre_verified"
         ],
-        "summary": "`POST /v1/admin/pre-verified-numbers`: add a number to the pool.",
+        "summary": "`POST /v1/admin/pre-verified-numbers`: add a number to the pool. It\ntakes an `Idempotency-Key`, scoped to the admin key (roadmap M5j3), so\nthat a retry after a `504` does not add the number twice.",
         "operationId": "add_pre_verified_number",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never add twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2107,7 +2121,7 @@
             }
           },
           "409": {
-            "description": "`signup_not_configured`: no pool (`WA_PARTNER_BUSINESS_ID`)",
+            "description": "`signup_not_configured`: no pool (`WA_PARTNER_BUSINESS_ID`); `idempotency_in_progress`, `outcome_unknown`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2117,7 +2131,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`phone_number`, `body`)",
+            "description": "`invalid_request` (`phone_number`, `body`, `Idempotency-Key`); `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2128,6 +2142,16 @@
           },
           "502": {
             "description": "`graph_error` and its kin: Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: list the pool before adding again, or repeat the request with the same `Idempotency-Key` for this answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -2344,7 +2368,7 @@
         "tags": [
           "pre_verified"
         ],
-        "summary": "`POST /v1/admin/pre-verified-numbers/{id}/code`: have Meta send the\none-time code (not replayed after a timeout: each request sends a\nmessage).",
+        "summary": "`POST /v1/admin/pre-verified-numbers/{id}/code`: have Meta send the\none-time code (not replayed after a timeout: each request sends a\nmessage). It takes an `Idempotency-Key`, scoped to the admin key\n(roadmap M5j3), so that a client's retry after a `504` is not a second\nmessage to the number.",
         "operationId": "request_pre_verified_code",
         "parameters": [
           {
@@ -2354,6 +2378,18 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the admin key: the same key, number and body never send a second code",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -2392,7 +2428,7 @@
             }
           },
           "409": {
-            "description": "`signup_not_configured`",
+            "description": "`signup_not_configured`; `idempotency_in_progress`, `outcome_unknown`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2402,7 +2438,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`id`, `language`, `body`)",
+            "description": "`invalid_request` (`id`, `language`, `body`, `Idempotency-Key`); `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2413,6 +2449,16 @@
           },
           "502": {
             "description": "Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the code may have been sent; repeat the request with the same `Idempotency-Key` for this answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -2722,8 +2768,22 @@
         "tags": [
           "admin"
         ],
-        "summary": "`POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the\nservice saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the\noperator names. The operator's explicit, audited decision (D202): the\nwebhook names no tenant and its ids are no secret, so no tenant key\nclaims.",
+        "summary": "`POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the\nservice saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the\noperator names. The operator's explicit, audited decision (D202): the\nwebhook names no tenant and its ids are no secret, so no tenant key\nclaims. It takes an `Idempotency-Key`, scoped to the admin key\n(roadmap M5j3): a retry after a `504` gets the first answer and does\nnot run the onboarding again, and the PIN is never part of what the key\nkeeps.",
         "operationId": "complete_hosted_signup",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never claim twice. The PIN's value is not part of what the key compares, and the answer is kept without any token",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2776,7 +2836,7 @@
             }
           },
           "409": {
-            "description": "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)",
+            "description": "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`); `idempotency_in_progress`, `outcome_unknown`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2786,7 +2846,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed",
+            "description": "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`, `Idempotency-Key`), before the arrival is claimed; `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2796,7 +2856,7 @@
             }
           },
           "502": {
-            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)",
+            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again; with a key, a failure Meta may have received is kept, so claim again under a new key)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2807,6 +2867,16 @@
           },
           "503": {
             "description": "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: repeat the request with the same `Idempotency-Key` for the first answer",
             "content": {
               "application/json": {
                 "schema": {

@@ -1312,6 +1312,22 @@ reject and the deactivation calls change a state Meta refuses to change
 twice, and the max-price agreement carries a token) take none: after a `504`,
 read the solution first.
 
+The pool's `POST /v1/admin/pre-verified-numbers` (add) and
+`…/{id}/code` (a second code is a second message to the number) and the
+hosted claim, `POST /v1/admin/signup/hosted`, take the same optional
+`Idempotency-Key` (roadmap M5j3, design D350 and D351), the same way: a
+repeat after a `504` gets the first answer back and Meta is asked once, and
+another body, or for the code another number, is `422
+idempotency_key_reused`. A claim keeps the arrival's one-claim rule: a
+claim that proves nothing was sent (`not_found`, a refusal, Meta's `4xx`)
+puts the arrival back and leaves the key free, so the same key retries; one
+Meta may have received (a timeout, a `5xx`, or a `503` after Meta
+onboarded the WABA, such as one that moved before the connection was
+confirmed) puts the arrival back and the key keeps the answer, so repeat it
+to read it and claim again under a new key. The PIN is never stored, and is not compared: a repeat under the
+same key with another PIN gets the first answer. The pool's `verify` takes
+no key (a code twice is harmless).
+
 ### A tenant's WABA
 
 | Route | Does |
