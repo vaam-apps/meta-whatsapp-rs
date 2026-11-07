@@ -2645,7 +2645,7 @@ async fn broadcasts(h: &Harness, admin: &str) -> Vec<String> {
         400,
         json!({"error": {"message": format!("(#131050) {BROADCAST_BSUID} {BROADCAST_PHONE} {BROADCAST_PARAM}"),
                          "type": "OAuthException", "code": 131_050,
-                         "error_data": {"details": format!("{BROADCAST_PHONE}")},
+                         "error_data": {"details": BROADCAST_PHONE},
                          "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     h.state.broadcast_workers().unwrap()[0]

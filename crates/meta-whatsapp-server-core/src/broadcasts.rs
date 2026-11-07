@@ -636,7 +636,7 @@ impl BroadcastRecords {
             };
             match &outcome {
                 Counted::Sent => progress.sent += 1,
-                Counted::Unknown => progress.unknown += 1,
+                Counted::Indeterminate => progress.unknown += 1,
                 Counted::Failed(kind) => *progress.failed.entry(kind.clone()).or_default() += 1,
             }
             let written = match version {
@@ -718,7 +718,7 @@ impl BroadcastRecords {
 
 enum Counted {
     Sent,
-    Unknown,
+    Indeterminate,
     Failed(String),
 }
 
@@ -862,7 +862,7 @@ impl Outbound for TenantOutbound {
                 // send is resent, and counted when it ends.
                 if !error.may_resend() {
                     let counted = if error.may_have_been_sent() {
-                        Counted::Unknown
+                        Counted::Indeterminate
                     } else {
                         Counted::Failed(kind_code(error.kind()).to_owned())
                     };
