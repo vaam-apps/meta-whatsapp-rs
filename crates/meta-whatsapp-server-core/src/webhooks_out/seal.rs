@@ -221,7 +221,7 @@ impl DataKeys {
         };
         let current = sealed
             .as_stored()
-            .splitn(3, '.')
+            .split('.')
             .nth(1)
             .is_some_and(|kid| kid == self.active.id);
         if current {

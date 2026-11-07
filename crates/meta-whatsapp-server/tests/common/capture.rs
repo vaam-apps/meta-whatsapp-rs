@@ -941,6 +941,20 @@ fn with_bare_keys(mut secrets: Vec<String>) -> Vec<String> {
     secrets
 }
 
+/// Roadmap M2i: the walk opens both secrets (the rotation left a previous
+/// one) while the planted ones are shown to the scan.
+async fn reseal_webhook_secrets(h: &Harness, admin: &str, configured: bool) {
+    let resealed = h
+        .call(Call::new(Method::POST, "/v1/admin/webhooks/reseal").key(admin))
+        .await;
+    if configured {
+        assert_eq!(resealed.status.as_u16(), 200, "{}", resealed.text);
+        assert_eq!(resealed.json()["failed"], json!([]), "{}", resealed.text);
+    } else {
+        assert_eq!(resealed.code(), "webhooks_not_configured");
+    }
+}
+
 async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
     let minted = h
         .call(
@@ -992,17 +1006,7 @@ async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
     if configured {
         secrets.push(rotated.json()["secret"].as_str().unwrap().to_owned());
     }
-    // Roadmap M2i: the walk opens both secrets (the rotation left a
-    // previous one) while the planted ones are shown to the scan.
-    let resealed = h
-        .call(Call::new(Method::POST, "/v1/admin/webhooks/reseal").key(admin))
-        .await;
-    if configured {
-        assert_eq!(resealed.status.as_u16(), 200, "{}", resealed.text);
-        assert_eq!(resealed.json()["failed"], json!([]), "{}", resealed.text);
-    } else {
-        assert_eq!(resealed.code(), "webhooks_not_configured");
-    }
+    reseal_webhook_secrets(h, admin, configured).await;
     let pinged = h
         .call(Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test")).key(&key))
         .await;

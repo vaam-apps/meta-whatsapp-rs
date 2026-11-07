@@ -260,29 +260,34 @@ pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result
         }
         Command::Webhooks(WebhooksCommand::Reseal) => {
             init_cli_logs();
-            let config = Config::from_process_env().context("refusing to re-seal")?;
-            // As `vault rotate`: memory is this process's alone.
-            anyhow::ensure!(
-                !matches!(config.storage, Storage::Memory),
-                "refusing to re-seal: memory storage is per process, and this command cannot reach \
-                 the running service's (use POST /v1/admin/webhooks/reseal, or set DATABASE_URL)"
-            );
-            let keys = config.webhooks.data_keys.clone().context(
-                "refusing to re-seal: WA_SERVER_DATA_KEY is not set, so there is no key to seal under",
-            )?;
-            let backend = serve::open(backends, &config.storage, config.migrate).await?;
-            let report = reseal_secrets(backend.webhooks().as_ref(), &keys).await;
-            backend.close().await;
-            let report = report.context("re-sealing the webhook secrets")?;
-            println!("{}", reseal_line(&report));
-            anyhow::ensure!(
-                report.complete(),
-                "not every secret is under the active key: keep the previous key (an unreadable \
-                 one needs the key that sealed it listed; a changed one, another run)"
-            );
-            Ok(())
+            reseal_webhooks(backends).await
         }
     }
+}
+
+/// `webhooks reseal`: the walk, on the service's own configuration.
+async fn reseal_webhooks(backends: &dyn BackendFactory) -> anyhow::Result<()> {
+    let config = Config::from_process_env().context("refusing to re-seal")?;
+    // As `vault rotate`: memory is this process's alone.
+    anyhow::ensure!(
+        !matches!(config.storage, Storage::Memory),
+        "refusing to re-seal: memory storage is per process, and this command cannot reach \
+         the running service's (use POST /v1/admin/webhooks/reseal, or set DATABASE_URL)"
+    );
+    let keys = config.webhooks.data_keys.clone().context(
+        "refusing to re-seal: WA_SERVER_DATA_KEY is not set, so there is no key to seal under",
+    )?;
+    let backend = serve::open(backends, &config.storage, config.migrate).await?;
+    let report = reseal_secrets(backend.webhooks().as_ref(), &keys).await;
+    backend.close().await;
+    let report = report.context("re-sealing the webhook secrets")?;
+    println!("{}", reseal_line(&report));
+    anyhow::ensure!(
+        report.complete(),
+        "not every secret is under the active key: keep the previous key (an unreadable \
+         one needs the key that sealed it listed; a changed one, another run)"
+    );
+    Ok(())
 }
 
 /// The line `webhooks reseal` prints: counts and endpoint ids, never a
