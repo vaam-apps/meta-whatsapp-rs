@@ -120,6 +120,18 @@ impl WebhookEndpoints {
         self.out.as_ref()
     }
 
+    /// Re-seal every endpoint's secrets under the active data key (roadmap
+    /// M2i; [`super::reseal::reseal_secrets`]). Crate-private: the
+    /// operator's `Admin::reseal_webhook_secrets` calls it, once it has
+    /// admitted its caller.
+    pub(crate) async fn reseal_secrets(&self) -> Result<super::reseal::ResealReport, ServiceError> {
+        let out = self
+            .out
+            .as_ref()
+            .ok_or_else(|| ServiceError::new(ErrorCode::WEBHOOKS_NOT_CONFIGURED))?;
+        Ok(super::reseal::reseal_secrets(self.store.as_ref(), &out.keys).await?)
+    }
+
     /// The services for `caller`, once `authz` admits it (a caller another
     /// authorizer made opens nothing), on its tenant.
     ///

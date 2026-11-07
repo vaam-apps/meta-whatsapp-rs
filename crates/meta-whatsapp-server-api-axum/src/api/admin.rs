@@ -1112,3 +1112,70 @@ pub(crate) async fn rotate_vault(
     let report = operations(&state, &admin)?.rotate_vault().await?;
     Ok(Json(report.into()))
 }
+
+// ─── Webhook secrets ─────────────────────────────────────────────────────
+
+/// What re-sealing the webhook secrets did: counts and endpoint ids,
+/// never a secret.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct WebhookSecretsReseal {
+    /// Endpoints walked, every tenant's, enabled or not.
+    pub endpoints: u64,
+    /// Endpoints whose secrets were sealed again under the active data
+    /// key and written.
+    pub resealed: u64,
+    /// Endpoints whose secrets were under the active key already.
+    pub current: u64,
+    /// Endpoints left alone because their row changed between the walk's
+    /// read and its write (a rotation landed): repeat the walk.
+    pub changed: u64,
+    /// Endpoints with a secret no listed data key opens for that endpoint
+    /// (or that is altered). Keep the previous keys until this is empty.
+    pub failed: Vec<String>,
+}
+
+/// Seal every webhook endpoint's secret and previous secret again under
+/// the active data key (`WA_SERVER_DATA_KEY`), so that an old key can
+/// leave `WA_SERVER_DATA_PREVIOUS_KEYS`: the data key rotation's second
+/// step, as `POST /v1/admin/vault/rotate` is the vault key's. The old key
+/// can go once `changed` and `failed` are both empty (and every replica
+/// runs the new key). Also `meta-whatsapp-server webhooks reseal`.
+///
+/// Each row is written only if it is still the one read, so a secret
+/// rotation landing meanwhile is not overwritten (`changed`), and a repeat
+/// re-seals nothing already current. The walk is a request like any other,
+/// cut at the 55 s request deadline (`504 timeout`, part of the endpoints
+/// done): repeat it, or run the command, which has no deadline. Audited
+/// as `webhook_secrets_resealed`; no secret is in the answer.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/webhooks/reseal",
+    tag = "admin",
+    security(("api_key" = [])),
+    responses(
+        (status = 200, description = "Walked every endpoint: how many were re-sealed, were current, changed meanwhile, or could not be read", body = WebhookSecretsReseal),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 409, description = "`webhooks_not_configured`: no `WA_SERVER_DATA_KEY`", body = ErrorBody),
+        (status = 504, description = "`timeout`: the walk outlived the 55 s request deadline, part of the endpoints re-sealed; repeat it, or run `meta-whatsapp-server webhooks reseal`, which has no deadline", body = ErrorBody),
+    )
+)]
+pub(crate) async fn reseal_webhook_secrets(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+) -> Result<Json<WebhookSecretsReseal>, ApiError> {
+    let report = operations(&state, &admin)?
+        .reseal_webhook_secrets(state.webhooks())
+        .await?;
+    Ok(Json(WebhookSecretsReseal {
+        endpoints: report.endpoints,
+        resealed: report.resealed,
+        current: report.current,
+        changed: report.changed,
+        failed: report
+            .failed
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect(),
+    }))
+}

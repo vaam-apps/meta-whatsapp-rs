@@ -534,6 +534,32 @@ fn vault_rotate_refuses_memory_storage() {
     );
 }
 
+/// `webhooks reseal` refuses memory storage for the reason `vault rotate`
+/// does (roadmap M2i): its own store is empty and the running service's
+/// out of reach, and a walk reporting success over nothing would let an
+/// operator drop a key still in use. Decisive: the refusal.
+#[test]
+fn webhooks_reseal_refuses_memory_storage() {
+    let Ports {
+        public,
+        internal,
+        held: _held,
+    } = two_ports();
+    let output = base(&mut Command::new(BIN), public, internal)
+        .env("WA_SERVER_ENV", "development")
+        .stdout(Stdio::piped())
+        .args(["webhooks", "reseal"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("memory storage is per process"), "{stderr}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("endpoints walked"),
+        "nothing was walked"
+    );
+}
+
 /// The served binary takes Meta's deliveries on the public listener,
 /// verified with `WA_APP_SECRET` or `WA_APP_SECRET_PREVIOUS`, into its
 /// outbox (an operator-only event here, counted on `/metrics`); an
@@ -965,6 +991,186 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
         .unwrap()
         .unwrap();
     assert_eq!(token.token.expose_secret(), "TOKEN-201");
+}
+
+/// `webhooks reseal` on Postgres (roadmap M2i): endpoints sealed under
+/// `k1` (one rotated, so with a previous secret) and one sealed under a
+/// key no longer configured. The command, with `k2` active and `k1`
+/// previous, seals the readable ones anew (they open with `k2` alone,
+/// to the secrets they were made with), lists the unreadable one and
+/// exits non-zero; a second run re-seals nothing; neither prints a secret.
+/// Decisive: the rows after the command, and its exit status.
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+fn live_postgres_cli_webhooks_reseal() {
+    use meta_whatsapp_server::model::{PageRequest, TenantId};
+    use meta_whatsapp_server::store::{
+        PgStore, PgWebhookStore, RecordStore, WebhookStore, migrate,
+    };
+    use meta_whatsapp_server_core::webhooks_out::EndpointId;
+    use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
+    use meta_whatsapp_server_core::webhooks_out::signature::EndpointSecret;
+    use meta_whatsapp_server_core::webhooks_out::store::NewEndpoint;
+
+    const NEW: &str = "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=";
+    const OLD: &str = "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=";
+    const LOST: &str = "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=";
+    let Some(url) = common::postgres_url() else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let db = runtime.block_on(common::TestDb::new()).unwrap();
+    let old = DataKeys::new(DataKey::from_base64("k1", OLD).unwrap());
+    let lost = DataKeys::new(DataKey::from_base64("kx", LOST).unwrap());
+    let tenant = TenantId::parse("merchant-a").unwrap();
+    let now = time::macros::datetime!(2026-11-06 10:00 UTC);
+    // (endpoint, current secret, previous secret) as the service showed them.
+    let (store, made) = runtime.block_on(async {
+        let pool = db.pool(3).await;
+        migrate(&pool).await.unwrap();
+        PgStore::new(pool.clone())
+            .create_tenant(&tenant, "")
+            .await
+            .unwrap();
+        let store = PgWebhookStore::new(pool);
+        let mut made = Vec::new();
+        for (index, keys) in [&old, &old, &lost].into_iter().enumerate() {
+            let id = EndpointId::generate().unwrap();
+            let secret = EndpointSecret::generate().unwrap();
+            store
+                .create_endpoint(
+                    &NewEndpoint {
+                        id: id.clone(),
+                        tenant: tenant.clone(),
+                        url: "https://hooks.example.com/wa".to_owned(),
+                        types: vec!["message_received".to_owned()],
+                        secret: keys.seal(&id, &secret).unwrap(),
+                        cursor: 0,
+                        now,
+                    },
+                    10,
+                )
+                .await
+                .unwrap();
+            let mut previous = None;
+            if index == 1 {
+                let rotated = EndpointSecret::generate().unwrap();
+                store
+                    .rotate_secret(
+                        &tenant,
+                        &id,
+                        &keys.seal(&id, &rotated).unwrap(),
+                        now + time::Duration::hours(24),
+                        now,
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                previous = Some(secret);
+                made.push((id, rotated, previous));
+            } else {
+                made.push((id, secret, previous));
+            }
+        }
+        (store, made)
+    });
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
+    let run = || {
+        let Ports {
+            public,
+            internal,
+            held: _held,
+        } = two_ports();
+        base(&mut Command::new(BIN), public, internal)
+            .env("DATABASE_URL", &url)
+            .env(
+                "WA_VAULT_KEY",
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            )
+            .env("WA_SERVER_DATA_KEY", NEW)
+            .env("WA_SERVER_DATA_KEY_ID", "k2")
+            .env("WA_SERVER_DATA_PREVIOUS_KEYS", format!("k1:{OLD}"))
+            .env("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes")
+            .stdout(Stdio::piped())
+            .args(["webhooks", "reseal"])
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&first.stdout).into_owned(),
+        String::from_utf8_lossy(&first.stderr).into_owned(),
+    );
+    assert!(
+        !first.status.success(),
+        "an unreadable secret: {stdout}{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        format!(
+            "3 endpoints walked, 2 re-sealed, 0 already current, 0 skipped by a concurrent \
+             change, 1 unreadable: {}",
+            made[2].0.as_str()
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("keep the previous key"), "{stderr}");
+    let new_alone = DataKeys::new(DataKey::from_base64("k2", NEW).unwrap());
+    let rows = runtime.block_on(async {
+        store
+            .endpoints(
+                &tenant,
+                &PageRequest {
+                    after: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .unwrap()
+            .items
+    });
+    for (id, secret, previous) in &made[..2] {
+        let row = rows.iter().find(|e| &e.id == id).unwrap();
+        assert_eq!(
+            new_alone.open(id, &row.secret).map(|s| s.expose()),
+            Some(secret.expose()),
+            "opens with the new key alone, to the secret it was made with"
+        );
+        assert_eq!(
+            row.previous_secret
+                .as_ref()
+                .map(|p| new_alone.open(id, p).map(|s| s.expose())),
+            previous.as_ref().map(|p| Some(p.expose())),
+            "the previous secret too"
+        );
+    }
+    let untouched = rows.iter().find(|e| e.id == made[2].0).unwrap();
+    assert!(
+        untouched.secret.as_stored().starts_with("v1.kx."),
+        "an unreadable secret is left as it is"
+    );
+    // A second run: nothing left to re-seal; the unreadable one remains.
+    let second = run();
+    let second_out = String::from_utf8_lossy(&second.stdout).into_owned();
+    assert!(!second.status.success());
+    assert!(
+        second_out.starts_with("3 endpoints walked, 0 re-sealed, 2 already current"),
+        "{second_out}"
+    );
+    // No secret reaches either stream of either run.
+    let streams = format!(
+        "{stdout}{stderr}{second_out}{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    for (_, secret, previous) in &made {
+        for shown in std::iter::once(secret).chain(previous.iter()) {
+            assert!(!streams.contains(&shown.expose()[6..]), "a secret printed");
+        }
+    }
 }
 
 // ─── Migration continuity across the crate split (roadmap S7) ───────────

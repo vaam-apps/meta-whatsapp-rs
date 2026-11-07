@@ -24,6 +24,11 @@
 //!   disabled endpoint or a suspended tenant. A settlement names its
 //!   claim, and is refused once another claim took the delivery (its
 //!   lease ended).
+//! - **A re-seal is a compare-and-set** ([`WebhookStore::reseal_secrets`],
+//!   roadmap M2i): it replaces an endpoint's sealed secret and previous
+//!   secret only while both are still the values the caller read, so a
+//!   rotation landing between a walk's read and write is not overwritten;
+//!   it changes nothing else, `updated_at` included.
 //! - **One clock**: what is due is decided by the instant the caller
 //!   passes (the dispatcher's, the service's `Clock`), never the
 //!   database's own, so the retry schedule runs on one clock, which a test
@@ -101,6 +106,25 @@ impl std::fmt::Debug for EndpointChange {
             .field("types", &self.types.as_ref().map(Vec::len))
             .field("enabled", &self.enabled)
             .finish()
+    }
+}
+
+/// An endpoint's sealed secret and previous secret, as stored: what a
+/// re-seal reads and writes together ([`WebhookStore::reseal_secrets`]).
+/// `Debug` shows nothing of them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SealedSecrets {
+    /// The current secret.
+    pub secret: SealedSecret,
+    /// The previous one, if the endpoint has one (expired or not).
+    pub previous: Option<SealedSecret>,
+}
+
+impl std::fmt::Debug for SealedSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SealedSecrets")
+            .field("previous", &self.previous.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -245,6 +269,23 @@ pub trait WebhookStore: Send + Sync + 'static {
         previous_until: OffsetDateTime,
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>>;
+
+    /// Every endpoint of every tenant, enabled or not, in byte order of
+    /// their ids (`page.after` is an exclusive lower bound): what a
+    /// re-seal walks (roadmap M2i).
+    async fn all_endpoints(&self, page: &PageRequest) -> StoreResult<Listing<Endpoint>>;
+
+    /// Replace endpoint `id`'s sealed secrets with `replacement`, only if
+    /// they are still `expected` (compare-and-set on both); `false`,
+    /// nothing written, when they differ (a rotation landed) or the
+    /// endpoint is gone. Touches no other column, `updated_at` included:
+    /// the secrets signed with are the same.
+    async fn reseal_secrets(
+        &self,
+        id: &EndpointId,
+        expected: &SealedSecrets,
+        replacement: &SealedSecrets,
+    ) -> StoreResult<bool>;
 
     /// Delete `tenant`'s endpoint `id` and its deliveries; `false` for
     /// another tenant's.

@@ -11,6 +11,7 @@
 //! meta-whatsapp-server admin list-keys [--tenant ID]
 //! meta-whatsapp-server admin revoke-key <key_id>
 //! meta-whatsapp-server vault rotate           re-encrypt every token under the active vault key
+//! meta-whatsapp-server webhooks reseal        seal every webhook endpoint's secrets again under the active data key
 //! ```
 //!
 //! The admin commands need only `DATABASE_URL` (they migrate first unless
@@ -34,6 +35,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use meta_whatsapp_server_core::admin::{TenantsInput, allowed_tenants, is_valid_name, mint};
+use meta_whatsapp_server_core::webhooks_out::EndpointId;
+use meta_whatsapp_server_core::webhooks_out::reseal::{ResealReport, reseal_secrets};
 
 use crate::config::{self, Config, Env, MigrateMode, ProcessEnv, Storage};
 use crate::doctor::{Doctor, Status};
@@ -79,6 +82,26 @@ pub enum Command {
     /// The token vault.
     #[command(subcommand)]
     Vault(VaultCommand),
+    /// Webhooks out.
+    #[command(subcommand)]
+    Webhooks(WebhooksCommand),
+}
+
+/// A webhooks-out command.
+#[derive(Debug, Subcommand)]
+pub enum WebhooksCommand {
+    /// Seal every endpoint's secret and previous secret again under the
+    /// active data key (`WA_SERVER_DATA_KEY`, the old one in
+    /// `WA_SERVER_DATA_PREVIOUS_KEYS`), like `POST /v1/admin/webhooks/reseal`
+    /// but without its request deadline (roadmap M2i). Each row is
+    /// written only if it is still the one read; a second run re-seals
+    /// nothing. Needs the service's configuration, with Postgres (memory
+    /// storage is per process: refused). Prints counts and endpoint ids,
+    /// never a secret. Exits non-zero while a secret is unreadable or a
+    /// row changed meanwhile: keep the old key, and run it again. The old
+    /// key is never removed by the command; remove it from
+    /// `WA_SERVER_DATA_PREVIOUS_KEYS` once a run is clean.
+    Reseal,
 }
 
 /// A vault command.
@@ -235,7 +258,51 @@ pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result
             );
             Ok(())
         }
+        Command::Webhooks(WebhooksCommand::Reseal) => {
+            init_cli_logs();
+            let config = Config::from_process_env().context("refusing to re-seal")?;
+            // As `vault rotate`: memory is this process's alone.
+            anyhow::ensure!(
+                !matches!(config.storage, Storage::Memory),
+                "refusing to re-seal: memory storage is per process, and this command cannot reach \
+                 the running service's (use POST /v1/admin/webhooks/reseal, or set DATABASE_URL)"
+            );
+            let keys = config.webhooks.data_keys.clone().context(
+                "refusing to re-seal: WA_SERVER_DATA_KEY is not set, so there is no key to seal under",
+            )?;
+            let backend = serve::open(backends, &config.storage, config.migrate).await?;
+            let report = reseal_secrets(backend.webhooks().as_ref(), &keys).await;
+            backend.close().await;
+            let report = report.context("re-sealing the webhook secrets")?;
+            println!("{}", reseal_line(&report));
+            anyhow::ensure!(
+                report.complete(),
+                "not every secret is under the active key: keep the previous key (an unreadable \
+                 one needs the key that sealed it listed; a changed one, another run)"
+            );
+            Ok(())
+        }
     }
+}
+
+/// The line `webhooks reseal` prints: counts and endpoint ids, never a
+/// secret.
+fn reseal_line(report: &ResealReport) -> String {
+    let failed: Vec<&str> = report.failed.iter().map(EndpointId::as_str).collect();
+    format!(
+        "{} endpoints walked, {} re-sealed, {} already current, {} skipped by a concurrent \
+         change, {} unreadable{}",
+        report.endpoints,
+        report.resealed,
+        report.current,
+        report.changed,
+        failed.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", failed.join(", "))
+        }
+    )
 }
 
 fn init_cli_logs() {

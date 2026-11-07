@@ -123,6 +123,19 @@ impl DataKey {
     }
 }
 
+/// What re-sealing one stored secret found ([`DataKeys::reseal`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resealed {
+    /// Already sealed under the active key; nothing to do.
+    Current,
+    /// Sealed under a previous key: the same secret, sealed under the
+    /// active one.
+    Sealed(SealedSecret),
+    /// Not opened by any listed key, for this endpoint, or altered (or no
+    /// randomness to seal with): left as it is.
+    Unreadable,
+}
+
 /// The active data key and the previous ones. `Debug` shows their ids.
 #[derive(Debug, Clone)]
 pub struct DataKeys {
@@ -197,6 +210,25 @@ impl DataKeys {
             key.id,
             B64.encode(sealed)
         )))
+    }
+
+    /// `sealed`, which `endpoint`'s secret is stored as, sealed anew under
+    /// the active key when another key sealed it (roadmap M2i). The
+    /// plaintext lives in this call only (zeroized on drop).
+    pub fn reseal(&self, endpoint: &EndpointId, sealed: &SealedSecret) -> Resealed {
+        let Some(secret) = self.open(endpoint, sealed) else {
+            return Resealed::Unreadable;
+        };
+        let current = sealed
+            .as_stored()
+            .splitn(3, '.')
+            .nth(1)
+            .is_some_and(|kid| kid == self.active.id);
+        if current {
+            return Resealed::Current;
+        }
+        self.seal(endpoint, &secret)
+            .map_or(Resealed::Unreadable, Resealed::Sealed)
     }
 
     /// `endpoint`'s secret, opened; `None` when it was sealed under a key

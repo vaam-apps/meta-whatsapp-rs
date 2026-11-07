@@ -44,6 +44,8 @@ use crate::number_events::{DisconnectReason, NumberEvent};
 use crate::observe::Observer;
 use crate::signup::Signups;
 use crate::store::RecordStore;
+use crate::webhooks_out::endpoints::WebhookEndpoints;
+use crate::webhooks_out::reseal::ResealReport;
 
 /// Most numbers an attach binds for one WABA (Meta allows far fewer): past
 /// it the listing is refused as `upstream` rather than followed for ever.
@@ -1036,6 +1038,26 @@ impl<'a> Admin<'a> {
     pub async fn rotate_vault(&self) -> Result<VaultRotation, ServiceError> {
         let report = self.authz.rotate_vault(self.caller).await?;
         self.audit("vault_rotated", Subject::default());
+        Ok(report)
+    }
+
+    /// Re-seal every webhook endpoint's secret and previous secret under
+    /// the active data key (`WA_SERVER_DATA_KEY`), audited
+    /// (`webhook_secrets_resealed`; roadmap M2i). The old key can go from
+    /// `WA_SERVER_DATA_PREVIOUS_KEYS` once the report is
+    /// [`ResealReport::complete`].
+    ///
+    /// # Errors
+    ///
+    /// `409 webhooks_not_configured` without a data key; the service's
+    /// own storage failing (an endpoint that fails is reported in
+    /// `failed`, and the walk goes on).
+    pub async fn reseal_webhook_secrets(
+        &self,
+        endpoints: &WebhookEndpoints,
+    ) -> Result<ResealReport, ServiceError> {
+        let report = endpoints.reseal_secrets().await?;
+        self.audit("webhook_secrets_resealed", Subject::default());
         Ok(report)
     }
 }

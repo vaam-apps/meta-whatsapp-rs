@@ -13,7 +13,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId, TenantSta
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, ClaimToken, Claimed, CreateOutcome, EndpointChange, NewDelivery,
-    NewEndpoint, Outcome, WebhookStore,
+    NewEndpoint, Outcome, SealedSecrets, WebhookStore,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId, SealedSecret,
@@ -238,6 +238,40 @@ impl WebhookStore for MemoryWebhookStore {
         endpoint.previous_secret_until = Some(previous_until);
         endpoint.updated_at = now;
         Ok(Some(endpoint.clone()))
+    }
+
+    async fn all_endpoints(&self, page: &PageRequest) -> StoreResult<Listing<Endpoint>> {
+        let state = self.lock();
+        let items: Vec<Endpoint> = state
+            .endpoints
+            .iter()
+            .filter(|(id, _)| {
+                page.after
+                    .as_deref()
+                    .is_none_or(|after| id.as_str() > after)
+            })
+            .take(page.limit + 1)
+            .map(|(_, e)| e.clone())
+            .collect();
+        Ok(listing(items, page.limit, |e| e.id.as_str().to_owned()))
+    }
+
+    async fn reseal_secrets(
+        &self,
+        id: &EndpointId,
+        expected: &SealedSecrets,
+        replacement: &SealedSecrets,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let Some(endpoint) = state.endpoints.get_mut(id.as_str()) else {
+            return Ok(false);
+        };
+        if endpoint.secret != expected.secret || endpoint.previous_secret != expected.previous {
+            return Ok(false);
+        }
+        endpoint.secret = replacement.secret.clone();
+        endpoint.previous_secret.clone_from(&replacement.previous);
+        Ok(true)
     }
 
     async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool> {

@@ -479,4 +479,104 @@ async fn without_a_data_key_the_routes_are_not_configured() {
     );
     let listed = h.call(Call::get("/v1/webhook-endpoints").key(&key)).await;
     assert_eq!(listed.code(), "webhooks_not_configured");
+    // The re-seal route too (roadmap M2i): nothing to seal under.
+    let admin = h.admin_key().await;
+    let reseal = h
+        .call(Call::new(Method::POST, "/v1/admin/webhooks/reseal").key(&admin))
+        .await;
+    assert_eq!(
+        (reseal.status, reseal.code()),
+        (StatusCode::CONFLICT, "webhooks_not_configured".to_owned())
+    );
+}
+
+/// Roadmap M2i: `POST /v1/admin/webhooks/reseal`, admin key only, walks
+/// every tenant's endpoints and answers counts and ids, never a secret.
+/// One endpoint sealed under the previous key `k1` (written to the store
+/// as an older deployment would have), two made under the active `k2`:
+/// the first call re-seals one and finds two current, it opens with `k2`
+/// alone, and the second call re-seals nothing. A tenant key is `403`, no
+/// key `401`. Decisive: the row after the call.
+#[tokio::test]
+async fn the_reseal_route_walks_every_tenants_endpoints() {
+    use meta_whatsapp_server_core::webhooks_out::EndpointId;
+    use meta_whatsapp_server_core::webhooks_out::store::NewEndpoint;
+    use time::macros::datetime;
+
+    let k1 = DataKey::from_base64("k1", "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=").unwrap();
+    let k2 = DataKey::from_base64("k2", "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=").unwrap();
+    let mut out = webhooks_out();
+    out.keys = Arc::new(DataKeys::new(k2).with_previous(k1.clone()).unwrap());
+    let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
+        webhooks_out: Some(out.clone()),
+        ..test_settings()
+    });
+    h.tenant(A).await;
+    h.tenant(B).await;
+    let admin = h.admin_key().await;
+    let key_a = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let key_b = h.tenant_key(B, &[Scope::Webhooks]).await;
+    let (addr, _got) = receiver().await;
+    let url = format!("http://{addr}/hook");
+    let made_a = create(&h, &key_a, &url, &["message_received"]).await;
+    create(&h, &key_b, &url, &["message_received"]).await;
+    // An endpoint of an older deployment: sealed under `k1`.
+    let old_id = EndpointId::generate().unwrap();
+    let old_secret = EndpointSecret::generate().unwrap();
+    h.backend
+        .webhooks()
+        .create_endpoint(
+            &NewEndpoint {
+                id: old_id.clone(),
+                tenant: meta_whatsapp_server::model::TenantId::parse(B).unwrap(),
+                url: url.clone(),
+                types: vec!["message_received".to_owned()],
+                secret: DataKeys::new(k1).seal(&old_id, &old_secret).unwrap(),
+                cursor: 0,
+                now: datetime!(2026-11-06 10:00 UTC),
+            },
+            10,
+        )
+        .await
+        .unwrap();
+    let reseal = || Call::new(Method::POST, "/v1/admin/webhooks/reseal");
+    let denied = h.call(reseal().key(&key_a)).await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text);
+    let anonymous = h.call(reseal()).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+
+    let first = h.call(reseal().key(&admin)).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+    assert_eq!(
+        first.json(),
+        json!({"endpoints": 3, "resealed": 1, "current": 2, "changed": 0, "failed": []})
+    );
+    assert!(
+        !first.text.contains(&old_secret.expose()[6..]),
+        "never a secret"
+    );
+    let row = h
+        .backend
+        .webhooks()
+        .endpoint(
+            &meta_whatsapp_server::model::TenantId::parse(B).unwrap(),
+            &old_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let k2_alone = DataKeys::new(
+        DataKey::from_base64("k2", "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=").unwrap(),
+    );
+    assert_eq!(
+        k2_alone.open(&old_id, &row.secret).map(|s| s.expose()),
+        Some(old_secret.expose()),
+        "the same secret, under the new key alone"
+    );
+    let second = h.call(reseal().key(&admin)).await;
+    assert_eq!(
+        second.json(),
+        json!({"endpoints": 3, "resealed": 0, "current": 3, "changed": 0, "failed": []})
+    );
+    assert!(made_a["id"].is_string());
 }

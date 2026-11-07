@@ -161,6 +161,13 @@ read, not rewritten. Keep the previous key in `WA_VAULT_PREVIOUS_KEYS`
 (or `VaultKeys::with_previous`) from the deploy that introduces the new
 one until the clean rotation.
 
+The webhook signing secrets have a key of their own, `WA_SERVER_DATA_KEY`:
+after it changes, `meta-whatsapp-server webhooks reseal` (or `POST
+/v1/admin/webhooks/reseal`) seals them again under the new key, and the old
+one leaves `WA_SERVER_DATA_PREVIOUS_KEYS` once a run reports nothing
+skipped and nothing unreadable (steps in the
+[server guide](server.md#rotating-the-data-key)).
+
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
 in `Debug`; the value comes out only through `expose_secret()`. Call it at

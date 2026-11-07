@@ -28,6 +28,10 @@ use meta_whatsapp_rs::core::transport::{HttpRequest, HttpResponse, HttpTransport
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::{BindOutcome, TenantId};
 use meta_whatsapp_server::store::Store;
+use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+use meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut;
+use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
+use meta_whatsapp_server_http::webhooks_out::{HyperSender, SystemResolver};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
@@ -128,7 +132,17 @@ async fn each_admin_change_logs_its_own_audit_event_and_a_refused_one_none() {
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));
     let store = Arc::new(OnceLock::new());
-    let h = Harness::with_transport(common::test_settings(), |graph| {
+    let webhooks_out = WebhooksOut::new(
+        DataKeys::new(DataKey::generate("k1").unwrap()),
+        DestinationPolicy::parse("hooks.example.com", false).unwrap(),
+        Arc::new(SystemResolver),
+        Arc::new(HyperSender::new().unwrap()),
+    );
+    let settings = meta_whatsapp_server::state::Settings {
+        webhooks_out: Some(webhooks_out),
+        ..common::test_settings()
+    };
+    let h = Harness::with_transport(settings, |graph| {
         Arc::new(BindsWhileListing {
             graph,
             store: store.clone(),
@@ -388,6 +402,20 @@ async fn each_admin_change_logs_its_own_audit_event_and_a_refused_one_none() {
     )
     .await;
     assert_eq!(logged, [event("vault_rotated", admin_id, &[])]);
+
+    // The webhook secrets' re-seal (roadmap M2i): one event, no subject.
+    let (_, logged) = run(
+        Call::new(Method::POST, "/v1/admin/webhooks/reseal").key(&admin),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(logged, [event("webhook_secrets_resealed", admin_id, &[])]);
+    let (_, logged) = run(
+        Call::new(Method::POST, "/v1/admin/webhooks/reseal"),
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    assert_eq!(logged, none, "a refused call is not audited");
 
     // Unbinding.
     h.graph.push_json(200, json!({"success": true}));
