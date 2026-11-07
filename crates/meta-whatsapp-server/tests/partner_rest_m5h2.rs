@@ -283,7 +283,7 @@ async fn the_invitation_takes_an_idempotency_key_and_a_retry_is_not_a_second_inv
     // Another admin key does not see the record: its request reaches Meta.
     let other = f.h.admin_key().await;
     f.h.graph.push_json(200, json!({"request_id": REQUEST_ID}));
-    let reply =
+    let elsewhere =
         f.h.call(
             Call::new(
                 Method::POST,
@@ -293,8 +293,8 @@ async fn the_invitation_takes_an_idempotency_key_and_a_retry_is_not_a_second_inv
             .header("idempotency-key", "k-ok"),
         )
         .await;
-    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
-    assert!(!reply.headers.contains_key("idempotent-replayed"));
+    assert_eq!(elsewhere.status, StatusCode::OK, "{}", elsewhere.text);
+    assert!(!elsewhere.headers.contains_key("idempotent-replayed"));
     assert_eq!(f.h.graph.requests().len(), 3);
     assert_eq!(f.h.graph.remaining(), 0);
     // The gate answers before the key is read.
