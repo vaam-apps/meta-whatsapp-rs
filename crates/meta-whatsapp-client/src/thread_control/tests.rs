@@ -387,6 +387,33 @@ async fn responses_tolerate_new_and_missing_fields() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// A 200 that says `success: false` is an error for all three actions
+/// (a caller that records the action must not record it); `success: true`
+/// next to the documented fields is an answer. Decisive: `send_checked` in
+/// `ThreadControl::send`.
+#[tokio::test]
+async fn a_200_that_says_success_false_is_an_error() {
+    let t = ScriptedTransport::new();
+    let api = api(&t);
+    for _ in 0..3 {
+        t.push_json(200, json!({"success": false}));
+    }
+    assert!(api.release(&Recipient::phone(USER)).await.is_err());
+    assert!(api.take(&Recipient::phone(USER), None).await.is_err());
+    assert!(
+        api.pass(&Recipient::phone(USER), &Pass::to_escalation_partner())
+            .await
+            .is_err()
+    );
+    t.push_json(
+        200,
+        json!({"success": true, "messaging_product": "whatsapp", "request_id": "R2"}),
+    );
+    let resp = api.release(&Recipient::phone(USER)).await.unwrap();
+    assert_eq!(resp.request_id.as_deref(), Some("R2"));
+    assert_eq!(t.remaining(), 0);
+}
+
 /// A row of the page's error table: an account not enabled for `pass`.
 #[tokio::test]
 async fn pass_not_supported_is_an_invalid_parameter() {

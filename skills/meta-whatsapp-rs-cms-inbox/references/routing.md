@@ -66,6 +66,17 @@ inbox
     .await?;
 ```
 
+When you hold the user as a `Recipient` (a phone number, a `wa_id` or a
+BSUID, as the request named them) and not as the conversation's key,
+`inbox.record_thread_owner_of(&user, owner, role)` and
+`inbox.record_release_of(&user)` find the key for you: the one `InboxSink`
+records a handover under (`inbox.conversation_of(&user)`: a phone number the
+inbox linked to a BSUID leads to the BSUID, never to the phone number alone).
+They date the record to the second, so a handover webhook of the same second
+or later wins over it. Record only what Meta answered: after a timeout,
+record nothing. The server routes (`meta-whatsapp-rs-server-routing`) do
+exactly this.
+
 Which of the three calls are open to you is set by the roles the
 merchant's business gave yours on the number, not by who owns a thread:
 read them with `ThreadControl::routing_roles` (a GET of the number's
