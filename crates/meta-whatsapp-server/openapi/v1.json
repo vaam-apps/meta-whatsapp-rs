@@ -233,6 +233,83 @@
         ]
       }
     },
+    "/v1/admin/numbers/{phone_number_id}/group-records": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Purge the service's records of the groups a number holds (roadmap\nM5f3), which the unbinding of the number's WABA and a tenant's deletion\npurge already: for one number, bound or not, so that an operator can\nfinish a purge that failed after an unbinding. The records are the\nservice's own notes of which groups the number holds (never Meta's\ndata): a bound number's are made again by its next\n`group_lifecycle_update` event and its next group listing, and until\nthen its groups answer `404`. Idempotent. Audited as\n`group_records_purged`, with the number's id.",
+        "operationId": "purge_group_records",
+        "parameters": [
+          {
+            "name": "phone_number_id",
+            "in": "path",
+            "description": "The number's id (digits only)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Purged: how many records were deleted (zero when there were none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupRecordsPurged"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not a number's id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/partners/business-verifications": {
       "get": {
         "tags": [
@@ -33527,6 +33604,21 @@
           "kind": {
             "type": "string",
             "description": "The service's error code for it, to branch on (`ErrorCode`'s)."
+          }
+        }
+      },
+      "GroupRecordsPurged": {
+        "type": "object",
+        "description": "What purging a number's group records did.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many records of the number's groups were deleted (no group's\nid is in the answer).",
+            "minimum": 0
           }
         }
       },
