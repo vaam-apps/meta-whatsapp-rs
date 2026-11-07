@@ -301,6 +301,7 @@ impl NewBroadcast {
         }
         let mut people = Vec::with_capacity(recipients.len());
         let mut overrides = BTreeMap::new();
+        let mut listed = std::collections::BTreeSet::new();
         for (index, recipient) in recipients.into_iter().enumerate() {
             let at = || format!("recipients[{index}]");
             let to = RecipientObject {
@@ -325,7 +326,13 @@ impl NewBroadcast {
             if names_an_object(&built) {
                 return Err(ServiceError::invalid("template"));
             }
-            if let (Some(components), Some(key)) = (recipient.components, person_key(&person)) {
+            // A person listed again is sent once, by their first listing
+            // (the jobs drop the later ones): so with the first one's
+            // parameters, never a later listing's.
+            if let Some(key) = person_key(&person)
+                && listed.insert(key.clone())
+                && let Some(components) = recipient.components
+            {
                 overrides.insert(key, components);
             }
             people.push(person);
@@ -1111,6 +1118,41 @@ mod tests {
         assert_eq!(
             person_key(&Recipient::phone("+16505551234")).as_deref(),
             Some("phone:+16505551234")
+        );
+    }
+
+    /// A person listed twice is sent once, with the parameters of their
+    /// first listing. Decisive: `NewBroadcast::new`'s `listed` set (without
+    /// it the later listing's parameters replace the first's).
+    #[test]
+    fn a_person_listed_twice_keeps_the_first_listings_parameters() {
+        let template = json!({"name": "promo", "language": {"code": "en_US"}});
+        let person = |components: Option<Value>| BroadcastRecipient {
+            phone: Some("+16505551234".to_owned()),
+            components,
+            ..BroadcastRecipient::default()
+        };
+        let first = json!([{"type": "body", "parameters": [{"type": "text", "text": "FIRST"}]}]);
+        let later = json!([{"type": "body", "parameters": [{"type": "text", "text": "LATER"}]}]);
+        let both = NewBroadcast::new(
+            template.clone(),
+            vec![person(Some(first.clone())), person(Some(later.clone()))],
+            &BroadcastSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(both.payload()["components"]["phone:+16505551234"], first);
+        // The first listing with none: the later one's are not borrowed.
+        let none_first = NewBroadcast::new(
+            template,
+            vec![person(None), person(Some(later))],
+            &BroadcastSettings::default(),
+        )
+        .unwrap();
+        assert!(
+            none_first.payload()["components"]
+                .as_object()
+                .unwrap()
+                .is_empty()
         );
     }
 
