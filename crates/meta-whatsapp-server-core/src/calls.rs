@@ -729,6 +729,8 @@ pub struct Calls<'a> {
     number: &'a OwnedNumber,
     records: &'a CallRecords,
     observer: &'a dyn Observer,
+    /// [`Self::naming_the_account`].
+    names_account: bool,
 }
 
 impl fmt::Debug for Calls<'_> {
@@ -769,7 +771,27 @@ impl<'a> Calls<'a> {
             number,
             records,
             observer: &(),
+            names_account: false,
         })
+    }
+
+    /// Whether every action of a call (`connect`, `pre_accept`, `accept`,
+    /// `reject`, `terminate`) names the number's binding's WABA id as its
+    /// `messaging_account_id` (roadmap L29, design D310; the adapter passes
+    /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`, as for a send). Off until
+    /// called: an action names none and Meta resolves the account from the
+    /// token.
+    ///
+    /// The value is the binding's WABA id as this [`OwnedNumber`] holds
+    /// it, the same on every action a request makes for one call as long
+    /// as the binding does not change; nothing of it is stored with the
+    /// call (D311). A request cannot carry the field itself: the call
+    /// bodies' unknown keys are refused. The settings and permission reads
+    /// never carry it (their pages have no such field).
+    #[must_use]
+    pub fn naming_the_account(mut self, enabled: bool) -> Self {
+        self.names_account = enabled;
+        self
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).
@@ -793,10 +815,18 @@ impl<'a> Calls<'a> {
         api
     }
 
+    /// The library's calling handle, naming the binding's account when
+    /// [`Self::naming_the_account`]: the one place the field is set.
     fn client(&self) -> meta_whatsapp_rs::client::calling::Calling {
-        self.number
+        let calling = self
+            .number
             .client()
-            .calling(self.number.phone_number_id().clone())
+            .calling(self.number.phone_number_id().clone());
+        if self.names_account {
+            calling.messaging_account_id(self.number.waba_id().clone())
+        } else {
+            calling
+        }
     }
 
     /// `call` is the one of this number (the capability was made for it).

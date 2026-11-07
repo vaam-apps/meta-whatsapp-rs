@@ -21,6 +21,9 @@
 //!   ([`CallRecording`], [`CallTranscription`]; see [`recording`]), off
 //!   unless set.
 //!
+//! - `account-model-evolution/messaging#calling-api` — the Messaging
+//!   Account of a call ([`Calling::messaging_account_id`]), off unless set.
+//!
 //! Every call action is a `POST /{phone-number-id}/calls` with an `action`.
 //! SDP is opaque here: it is passed through unparsed (RFC 8866; WebRTC
 //! media is out of scope). Call events arrive as `calls` webhooks
@@ -38,7 +41,7 @@
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{CallId, PhoneNumberId, UserId};
+use meta_whatsapp_core::ids::{CallId, PhoneNumberId, UserId, WabaId};
 use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::recipient::Recipient;
 use serde::{Deserialize, Serialize};
@@ -62,6 +65,7 @@ pub const BIZ_OPAQUE_CALLBACK_DATA_MAX_CHARS: usize = 512;
 pub struct Calling {
     client: Client,
     phone_number_id: PhoneNumberId,
+    messaging_account_id: Option<WabaId>,
 }
 
 impl Client {
@@ -70,6 +74,7 @@ impl Client {
         Calling {
             client: self.clone(),
             phone_number_id: phone_number_id.into(),
+            messaging_account_id: None,
         }
     }
 }
@@ -83,6 +88,38 @@ impl Calling {
     /// The client this API uses.
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Name `id`, a Messaging Account, in the body of every call action
+    /// this handle sends (`messaging_account_id`;
+    /// `account-model-evolution/messaging#calling-api`,
+    /// `calling/business-initiated-calls`, `calling/user-initiated-calls`).
+    ///
+    /// Meta's rule is the Messages API's: include it whenever the access
+    /// token reaches more than one Messaging Account on the phone number,
+    /// and "send the same value on every request for a call". A request
+    /// from another Messaging Account for a call one already handles is not
+    /// processed. Keep one handle per call, or make one per action with the
+    /// same id. It applies to `connect`, `pre_accept`, `accept`, `reject`
+    /// and `terminate`, never to the settings or the permission read (their
+    /// pages carry no such field). It is a WABA id, as for
+    /// [`OutboundMessage::messaging_account_id`](crate::messages::OutboundMessage::messaging_account_id),
+    /// sent as a JSON string as the pages' examples show, and checked as
+    /// digits when an action is built: a value that is not digits fails with
+    /// a validation error on `messaging_account_id` before any request.
+    /// Without it no key is sent. The page gives no phase for it.
+    #[must_use]
+    pub fn messaging_account_id(mut self, id: impl Into<WabaId>) -> Self {
+        self.messaging_account_id = Some(id.into());
+        self
+    }
+
+    /// The checked `messaging_account_id` of this handle, for a body.
+    fn account(&self) -> Result<Option<&WabaId>> {
+        if let Some(id) = &self.messaging_account_id {
+            validate_messaging_account_id(id)?;
+        }
+        Ok(self.messaging_account_id.as_ref())
     }
 
     /// Calling settings: `GET /{phone-number-id}/settings`, the `calling`
@@ -181,6 +218,7 @@ impl Calling {
             biz_opaque_callback_data: opaque(call.biz_opaque_callback_data.as_deref())?,
             recording: checked(call.recording.as_ref(), CallRecording::validate)?,
             transcription: checked(call.transcription.as_ref(), CallTranscription::validate)?,
+            messaging_account_id: self.account()?,
             ..CallsBody::new(Action::Connect)
         };
         self.client
@@ -199,6 +237,7 @@ impl Calling {
         let body = CallsBody {
             call_id: Some(check_call_id(call_id)?),
             session: Some(Session::new(SdpType::Answer, sdp_answer)?),
+            messaging_account_id: self.account()?,
             ..CallsBody::new(Action::PreAccept)
         };
         self.send_action(&body, "pre-accept call response").await
@@ -244,6 +283,7 @@ impl Calling {
             biz_opaque_callback_data: opaque(options.biz_opaque_callback_data.as_deref())?,
             recording: checked(options.recording.as_ref(), CallRecording::validate)?,
             transcription: checked(options.transcription.as_ref(), CallTranscription::validate)?,
+            messaging_account_id: self.account()?,
             ..CallsBody::new(Action::Accept)
         };
         self.send_action(&body, "accept call response").await
@@ -254,6 +294,7 @@ impl Calling {
     pub async fn reject(&self, call_id: &CallId) -> Result<()> {
         let body = CallsBody {
             call_id: Some(check_call_id(call_id)?),
+            messaging_account_id: self.account()?,
             ..CallsBody::new(Action::Reject)
         };
         self.send_action(&body, "reject call response").await
@@ -265,6 +306,7 @@ impl Calling {
     pub async fn terminate(&self, call_id: &CallId) -> Result<()> {
         let body = CallsBody {
             call_id: Some(check_call_id(call_id)?),
+            messaging_account_id: self.account()?,
             ..CallsBody::new(Action::Terminate)
         };
         self.send_action(&body, "terminate call response").await
@@ -317,6 +359,19 @@ fn opaque(data: Option<&str>) -> Result<Option<&str>> {
     Ok(data)
 }
 
+/// A Messaging Account's id is a WABA id, a Graph object id: digits only.
+/// Checked here so a stray value (a phone number with `+`, a name) fails
+/// before the call instead of being resolved by Meta to something else.
+fn validate_messaging_account_id(id: &WabaId) -> Result<()> {
+    let field = "messaging_account_id";
+    if id.as_str().is_empty() || !id.as_str().bytes().all(|b| b.is_ascii_digit()) {
+        return Err(
+            ValidationError::new(field, "must be a Messaging Account id: digits only").into(),
+        );
+    }
+    Ok(())
+}
+
 /// `option`, after `validate` passes on it.
 fn checked<T>(option: Option<&T>, validate: fn(&T) -> Result<()>) -> Result<Option<&T>> {
     if let Some(o) = option {
@@ -343,6 +398,8 @@ struct CallsBody<'a> {
     recording: Option<&'a CallRecording>,
     #[serde(skip_serializing_if = "Option::is_none")]
     transcription: Option<&'a CallTranscription>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    messaging_account_id: Option<&'a WabaId>,
 }
 
 impl CallsBody<'_> {
@@ -357,6 +414,7 @@ impl CallsBody<'_> {
             biz_opaque_callback_data: None,
             recording: None,
             transcription: None,
+            messaging_account_id: None,
         }
     }
 }
