@@ -567,8 +567,7 @@ async fn a_claim_that_failed_after_meta_onboarded_keeps_its_key() {
 
     let again = h.call(keyed(HOSTED, &admin, "moved-1", &body)).await;
     assert_eq!(
-        again.headers["idempotent-replayed"],
-        "true",
+        again.headers["idempotent-replayed"], "true",
         "{}",
         again.text
     );
