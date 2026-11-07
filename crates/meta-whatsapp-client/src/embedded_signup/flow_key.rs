@@ -203,5 +203,4 @@ impl TokenVault {
 }
 
 #[cfg(test)]
-#[path = "flow_key_tests.rs"]
 mod tests;

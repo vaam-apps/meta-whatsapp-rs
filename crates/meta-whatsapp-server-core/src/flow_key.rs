@@ -21,7 +21,7 @@
 //! 66).
 //!
 //! **The key is the tenant's.** The vault record names the tenant that
-//! set it ([`crate::authz::Authorizer::store_flow_key`]): another tenant
+//! set it (`Authorizer::store_flow_key`): another tenant
 //! reads none, and a WABA that changed hands never serves its previous
 //! holder's key. The data endpoint reads the tenant of the request's WABA
 //! first and that tenant's key only

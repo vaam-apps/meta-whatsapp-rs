@@ -875,7 +875,7 @@ impl TokenVault {
     /// Re-encrypt the record of `waba_id` under the active key if it is
     /// under an older one, and likewise its Solution Partner credit record
     /// and the revocation marker of the business that record names, and
-    /// the WABA's Flow key (roadmap M5d2, [`Self::store_flow_key`]). Returns
+    /// the WABA's Flow key (roadmap M5d2, feature `flows-endpoint`). Returns
     /// whether anything was rewritten (`false` also when a concurrent write
     /// got there first, or there is no record).
     ///
@@ -888,7 +888,10 @@ impl TokenVault {
     pub async fn rotate(&self, waba_id: &WabaId) -> Result<bool> {
         let token = self.rotate_token(waba_id).await;
         let ledger = self.rotate_ledger(waba_id).await;
+        #[cfg(feature = "flows-endpoint")]
         let flow_key = self.rotate_flow_key(waba_id).await;
+        #[cfg(not(feature = "flows-endpoint"))]
+        let flow_key: Result<bool> = Ok(false);
         Ok(token? | ledger? | flow_key?)
     }
 

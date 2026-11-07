@@ -408,6 +408,7 @@
 
 mod coexistence;
 mod event;
+#[cfg(feature = "flows-endpoint")]
 mod flow_key;
 mod hosted;
 mod launch;
@@ -424,6 +425,7 @@ pub use event::{
     CancelInfo, CurrentStep, EmbeddedSignupEvent, FinishKind, MESSAGE_TYPE, ReportedError,
     SessionInfo,
 };
+#[cfg(feature = "flows-endpoint")]
 pub use flow_key::MAX_FLOW_KEY_OWNER_CHARS;
 pub use hosted::HostedSignup;
 pub use launch::{

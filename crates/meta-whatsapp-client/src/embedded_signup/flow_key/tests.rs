@@ -8,10 +8,11 @@ use meta_whatsapp_core::store::KvStore;
 use super::*;
 use crate::embedded_signup::{VaultKey, VaultKeys};
 
-const PKCS8: &str = include_str!("../flows/endpoint/testdata/test_rsa2048_pkcs8.pem");
-const PKCS1: &str = include_str!("../flows/endpoint/testdata/test_rsa2048_pkcs1.pem");
-const SMALL: &str = include_str!("../flows/endpoint/testdata/test_rsa1024_pkcs8.pem");
-const ENCRYPTED: &str = include_str!("../flows/endpoint/testdata/test_rsa2048_pkcs8_encrypted.pem");
+const PKCS8: &str = include_str!("../../flows/endpoint/testdata/test_rsa2048_pkcs8.pem");
+const PKCS1: &str = include_str!("../../flows/endpoint/testdata/test_rsa2048_pkcs1.pem");
+const SMALL: &str = include_str!("../../flows/endpoint/testdata/test_rsa1024_pkcs8.pem");
+const ENCRYPTED: &str =
+    include_str!("../../flows/endpoint/testdata/test_rsa2048_pkcs8_encrypted.pem");
 
 fn kv() -> Arc<dyn KvStore> {
     Arc::new(MemoryKvStore::new())

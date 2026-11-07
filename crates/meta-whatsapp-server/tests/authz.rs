@@ -631,7 +631,16 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 14] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 17] = [
+    // A WABA's Flow key (roadmap M5d2) is the service's own: the vault
+    // is read for the capability, Meta is never asked.
+    (Method::PUT, "/v1/wabas/{waba_id}/flow-key", StatusCode::OK),
+    (Method::GET, "/v1/wabas/{waba_id}/flow-key", StatusCode::OK),
+    (
+        Method::DELETE,
+        "/v1/wabas/{waba_id}/flow-key",
+        StatusCode::NO_CONTENT,
+    ),
     // A resumable upload's chunk and status name an upload the sample
     // does not hold: refused after the vault, before Meta (roadmap M5c1).
     (
