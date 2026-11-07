@@ -631,7 +631,16 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 17] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 18] = [
+    // The SIP password read is off unless the deployment enables it
+    // (roadmap M5e2, D410): the harness's default, so A's own call is
+    // refused after the vault and Meta is not asked. `tests/calls.rs` has
+    // it on.
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/call-settings/sip-credentials",
+        StatusCode::FORBIDDEN,
+    ),
     // A WABA's Flow key (roadmap M5d2) is the service's own: the vault
     // is read for the capability, Meta is never asked.
     (Method::PUT, "/v1/wabas/{waba_id}/flow-key", StatusCode::OK),

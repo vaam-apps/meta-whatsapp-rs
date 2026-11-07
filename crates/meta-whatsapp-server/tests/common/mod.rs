@@ -1514,6 +1514,17 @@ pub const SAMPLE_PIN: &str = "212834";
 /// The file every sample upload sends: a PNG signature.
 pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
 
+/// An Ogg page with an Opus identification header (`OggS` ... `OpusHead`)
+/// and `filler` after it: what the service reads of a voicemail
+/// announcement (roadmap M5e2) and Meta would refuse to decode.
+pub fn ogg_opus(filler: &[u8]) -> Vec<u8> {
+    let mut out = b"OggS\x00\x02".to_vec();
+    out.extend([0u8; 20]);
+    out.extend(b"\x01\x13OpusHead\x01\x01\x38\x01\x80\x3e\x00\x00\x00\x00\x00");
+    out.extend(filler);
+    out
+}
+
 /// A JPEG's headers (SOI, JFIF, a start-of-frame of `width` by `height`),
 /// `filler` where the scan would be, and the end marker: what the service
 /// reads of a group's picture (roadmap M5f2) and Meta would refuse to
@@ -1554,6 +1565,15 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
         == ("PUT", "/v1/numbers/{pn}/groups/{group_id}/picture")
     {
         return call.multipart(&[("file", Some("group.jpg"), &jpeg(192, 192, b"scan"))]);
+    }
+    // A voicemail announcement is Ogg with Opus (roadmap M5e2).
+    if (operation.method.as_str(), operation.template.as_str())
+        == (
+            "POST",
+            "/v1/numbers/{pn}/call-settings/voicemail-announcement",
+        )
+    {
+        return call.multipart(&[("file", Some("announcement.ogg"), &ogg_opus(b"audio"))]);
     }
     // A deregistration confirms the path's number (roadmap M3d).
     if (operation.method.as_str(), operation.template.as_str())
