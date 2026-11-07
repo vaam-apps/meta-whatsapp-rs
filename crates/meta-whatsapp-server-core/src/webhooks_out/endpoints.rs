@@ -437,6 +437,12 @@ impl OpenEndpoints<'_> {
             types,
             enabled: change.enabled,
             tenants,
+            // Written only while the set the key was checked against is
+            // still the endpoint's (D342).
+            reached_through: found
+                .tenants
+                .as_ref()
+                .map(|named| named.iter().map(|t| t.tenant.clone()).collect()),
         };
         let updated = self
             .store()

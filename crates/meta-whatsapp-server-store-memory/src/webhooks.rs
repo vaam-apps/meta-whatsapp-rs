@@ -15,7 +15,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId, TenantSta
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, ClaimToken, Claimed, CreateOutcome, EndpointChange, NewDelivery,
-    NewEndpoint, Outcome, PendingDeliveries, WebhookStore,
+    NewEndpoint, Outcome, PendingDeliveries, WebhookStore, reached_through_holds,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId, SealedSecret,
@@ -209,6 +209,8 @@ impl WebhookStore for MemoryWebhookStore {
         change: &EndpointChange,
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
+        // The records' lock first, as `create_endpoint` takes them.
+        let records = lock_state(&self.records);
         let mut guard = self.lock();
         let WebhookState {
             endpoints,
@@ -220,6 +222,12 @@ impl WebhookStore for MemoryWebhookStore {
         else {
             return Ok(None);
         };
+        if !reached_through_holds(
+            endpoint.tenants.as_deref(),
+            change.reached_through.as_deref(),
+        ) {
+            return Ok(None);
+        }
         if let Some(url) = &change.url {
             endpoint.url.clone_from(url);
         }
@@ -229,8 +237,10 @@ impl WebhookStore for MemoryWebhookStore {
         if let (Some(named), Some(kept)) = (&change.tenants, endpoint.tenants.clone()) {
             // A tenant kept keeps its cursor, a new one starts at the one
             // given; one left out stops, its pending deliveries with it.
+            // (One deleted meanwhile is left out, never added.)
             let set: Vec<TenantCursor> = named
                 .iter()
+                .filter(|n| records.tenants.contains_key(n.tenant.as_str()))
                 .map(|n| {
                     kept.iter()
                         .find(|k| k.tenant == n.tenant)

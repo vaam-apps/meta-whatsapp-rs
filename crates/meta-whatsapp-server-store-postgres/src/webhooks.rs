@@ -36,7 +36,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId};
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, Claimed, CreateOutcome, EndpointChange, NewDelivery, NewEndpoint,
-    Outcome, PendingDeliveries, WebhookStore,
+    Outcome, PendingDeliveries, WebhookStore, reached_through_holds,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     AttemptError, Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId,
@@ -332,6 +332,32 @@ impl WebhookStore for PgWebhookStore {
         let Some(has_set) = has_set else {
             return Ok(None);
         };
+        // The set the caller was checked against must still be the
+        // endpoint's (D342): read under the row's lock, so no other change
+        // of the set slips in between.
+        let current: Option<Vec<TenantCursor>> = if has_set {
+            let rows: Vec<String> = sqlx::query_scalar(
+                "SELECT tenant_id FROM wa_server_webhook_endpoint_tenants WHERE endpoint_id = $1",
+            )
+            .bind(id.as_str())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(backend)?;
+            Some(
+                rows.iter()
+                    .map(|t| {
+                        TenantId::parse(t)
+                            .map(|tenant| TenantCursor { tenant, cursor: 0 })
+                            .ok_or_else(|| corrupt("tenant_id"))
+                    })
+                    .collect::<StoreResult<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        if !reached_through_holds(current.as_deref(), change.reached_through.as_deref()) {
+            return Ok(None);
+        }
         if let (true, Some(set)) = (has_set, &change.tenants) {
             let names: Vec<String> = set.iter().map(|t| t.tenant.as_str().to_owned()).collect();
             // A tenant left out stops: its row first (a fan-out holding it

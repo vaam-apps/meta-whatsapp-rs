@@ -114,6 +114,16 @@ pub struct EndpointChange {
     /// (settled ones stay as the log). Ignored for an endpoint without a
     /// set: an endpoint never gains or loses its set.
     pub tenants: Option<Vec<TenantCursor>>,
+    /// The set of tenants the caller's key was checked against before
+    /// asking (roadmap M2m, D342): the change applies only while the
+    /// endpoint's set is still exactly this (as a set, whatever the
+    /// order), `None` meaning an endpoint without one; otherwise the
+    /// store changes nothing and answers `None`, as for a missing
+    /// endpoint. It closes the window between the reach check and the
+    /// write, in which another key could have added a tenant the first
+    /// key may not name. The default, `None`, is the safe one: it
+    /// never applies to an endpoint that has a set.
+    pub reached_through: Option<Vec<TenantId>>,
 }
 
 impl std::fmt::Debug for EndpointChange {
@@ -123,7 +133,31 @@ impl std::fmt::Debug for EndpointChange {
             .field("types", &self.types.as_ref().map(Vec::len))
             .field("enabled", &self.enabled)
             .field("tenants", &self.tenants.as_ref().map(Vec::len))
+            .field(
+                "reached_through",
+                &self.reached_through.as_ref().map(Vec::len),
+            )
             .finish()
+    }
+}
+
+/// Whether an endpoint's current set of named tenants is the one
+/// `reached_through` says the caller was checked against
+/// ([`EndpointChange::reached_through`]): the same tenants, order apart.
+pub fn reached_through_holds(
+    current: Option<&[TenantCursor]>,
+    through: Option<&[TenantId]>,
+) -> bool {
+    match (current, through) {
+        (None, None) => true,
+        (Some(current), Some(through)) => {
+            current.len() == through.len()
+                && current.iter().all(|c| through.contains(&c.tenant))
+                && through
+                    .iter()
+                    .all(|t| current.iter().any(|c| &c.tenant == t))
+        }
+        _ => false,
     }
 }
 

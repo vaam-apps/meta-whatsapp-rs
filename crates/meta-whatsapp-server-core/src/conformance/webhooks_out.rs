@@ -93,6 +93,7 @@ pub async fn run(backend: &dyn Backend) {
     a_platform_endpoint_is_reached_by_a_key_naming_all_its_tenants(backend).await;
     a_platform_endpoint_changes_its_tenants(backend).await;
     a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(backend).await;
+    a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set_checked(backend).await;
 }
 
 /// The instant the fake clocks start at: whole seconds, which every
@@ -348,6 +349,7 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
                 types: Some(vec!["status_updated".to_owned()]),
                 enabled: Some(false),
                 tenants: None,
+                reached_through: None,
             },
             START + time::Duration::seconds(1),
         )
@@ -3077,4 +3079,227 @@ pub async fn a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(
     let x1 = event_for(backend, &x, &digits[2]).await;
     assert_eq!(round(&rig).await, 0);
     assert!(!got(&rig, "a.example.net").contains(&x1.id));
+}
+
+/// M2m at the store (D342, D344, D347): a change applies only while the
+/// endpoint's set is the one the caller was checked against (a set moved
+/// meanwhile answers as a missing endpoint, the URL untouched); a tenant
+/// kept keeps its cursor and its pending delivery, one dropped loses its
+/// pending delivery, one added starts at the cursor given; a fan-out is
+/// for a tenant the endpoint receives, from that tenant's cursor; a named
+/// tenant that does not exist refuses the creation.
+pub async fn a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set_checked(
+    backend: &dyn Backend,
+) {
+    use crate::webhooks_out::TenantCursor;
+    let store = backend.webhooks();
+    drain(store.as_ref()).await;
+    let (x, a, b, c, gone) = (
+        unique_tenant("wh-ps-x"),
+        unique_tenant("wh-ps-a"),
+        unique_tenant("wh-ps-b"),
+        unique_tenant("wh-ps-c"),
+        unique_tenant("wh-ps-g"),
+    );
+    for t in [&x, &a, &b, &c] {
+        let _ = backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let cursor = |t: &str, n: i64| TenantCursor {
+        tenant: tenant(t),
+        cursor: n,
+    };
+    // A named tenant that does not exist: nothing is created.
+    let mut refused = new_endpoint(&x, 0);
+    refused.tenants = Some(vec![cursor(&a, 1), cursor(&gone, 1)]);
+    assert!(matches!(
+        store.create_endpoint(&refused, 10).await.unwrap(),
+        CreateOutcome::NamedTenantGone
+    ));
+    assert!(
+        store
+            .endpoint(&tenant(&x), &refused.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut named = new_endpoint(&x, 0);
+    named.tenants = Some(vec![cursor(&a, 10), cursor(&b, 20)]);
+    let endpoint = created(store.as_ref(), &named).await;
+    let own = created(store.as_ref(), &new_endpoint(&x, 0)).await;
+    let at = START;
+    // A fan-out names a tenant of the endpoint and that tenant's cursor.
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&c), 10, 11, &[])
+            .await
+            .unwrap(),
+        "C is not one it receives, though 10 is A's cursor"
+    );
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&b), 10, 11, &[])
+            .await
+            .unwrap(),
+        "10 is A's cursor, not B's"
+    );
+    assert!(
+        !store
+            .fan_out(&endpoint.id, &tenant(&x), 0, 1, &[])
+            .await
+            .unwrap(),
+        "the owner is not named: its endpoint cursor is not a stream of this one"
+    );
+    assert!(
+        store
+            .fan_out(
+                &endpoint.id,
+                &tenant(&a),
+                10,
+                11,
+                &[delivery("evt-ps-a1", 11, at)]
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .fan_out(
+                &endpoint.id,
+                &tenant(&b),
+                20,
+                21,
+                &[delivery("evt-ps-b1", 21, at)]
+            )
+            .await
+            .unwrap()
+    );
+    let pending = |tenants: Vec<crate::webhooks_out::Delivery>| {
+        let mut ids: Vec<String> = tenants
+            .iter()
+            .map(|d| format!("{}:{}", d.tenant, d.event_id.clone().unwrap_or_default()))
+            .collect();
+        ids.sort();
+        ids
+    };
+    let listed = |store: std::sync::Arc<dyn WebhookStore>, id: EndpointId| {
+        let owner = tenant(&x);
+        async move {
+            store
+                .deliveries(&owner, &id, &page(50))
+                .await
+                .unwrap()
+                .unwrap()
+                .items
+        }
+    };
+    let change =
+        |through: Option<Vec<&str>>, url: &str, set: Option<Vec<TenantCursor>>| EndpointChange {
+            url: Some(url.to_owned()),
+            tenants: set,
+            reached_through: through.map(|t| t.into_iter().map(tenant).collect()),
+            ..EndpointChange::default()
+        };
+    let now = START;
+    // The set moved meanwhile, or the caller was checked against another:
+    // nothing changes.
+    for stale in [
+        None,
+        Some(vec![a.as_str()]),
+        Some(vec![a.as_str(), b.as_str(), c.as_str()]),
+        Some(vec![a.as_str(), c.as_str()]),
+    ] {
+        assert!(
+            store
+                .update_endpoint(
+                    &tenant(&x),
+                    &endpoint.id,
+                    &change(stale.clone(), "https://evil.example.net/hook", None),
+                    now
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "{stale:?}"
+        );
+    }
+    assert!(
+        store
+            .update_endpoint(
+                &tenant(&x),
+                &own.id,
+                &change(
+                    Some(vec![a.as_str()]),
+                    "https://evil.example.net/hook",
+                    None
+                ),
+                now
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "an endpoint without a set is not one with it"
+    );
+    let untouched = store
+        .endpoint(&tenant(&x), &endpoint.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(untouched.url, "https://hooks.example.com/wa");
+    assert_eq!(
+        store
+            .endpoint(&tenant(&x), &own.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://hooks.example.com/wa"
+    );
+    // The set as checked (in another order): applied. A kept (its cursor
+    // as it is, whatever the change gives), B dropped, C added at 5.
+    let changed = store
+        .update_endpoint(
+            &tenant(&x),
+            &endpoint.id,
+            &change(
+                Some(vec![b.as_str(), a.as_str()]),
+                "https://ok.example.net/hook",
+                Some(vec![cursor(&a, 999), cursor(&c, 5)]),
+            ),
+            now,
+        )
+        .await
+        .unwrap()
+        .expect("the set is the one checked");
+    assert_eq!(changed.url, "https://ok.example.net/hook");
+    let mut set: Vec<(String, i64)> = changed
+        .tenants
+        .unwrap()
+        .iter()
+        .map(|t| (t.tenant.to_string(), t.cursor))
+        .collect();
+    set.sort();
+    let mut want = vec![(a.clone(), 11), (c.clone(), 5)];
+    want.sort();
+    assert_eq!(set, want, "A keeps its cursor, C starts at the one given");
+    assert_eq!(
+        pending(listed(store.clone(), endpoint.id.clone()).await),
+        [format!("{a}:evt-ps-a1")],
+        "B's pending delivery went with B; A's stays"
+    );
+    // And the endpoint without a set takes its own change.
+    let own_changed = store
+        .update_endpoint(
+            &tenant(&x),
+            &own.id,
+            &change(None, "https://ok.example.net/own", None),
+            now,
+        )
+        .await
+        .unwrap()
+        .expect("no set expected, none held");
+    assert_eq!(own_changed.url, "https://ok.example.net/own");
 }
