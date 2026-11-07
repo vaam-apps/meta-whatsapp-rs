@@ -86,6 +86,8 @@ use crate::uploads::NewUpload;
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
+/// | `enable_template_insights` ([`Self::enable_template_insights`]; roadmap M5g2) | the WABA's id (the request has no body) |
+/// | `set_template_click_tracking` ([`Self::set_template_click_tracking`]; roadmap M5g2) | the WABA's id; the template's id; the JSON body, canonical as above |
 /// | `send_marketing_message` ([`Self::send_marketing_message`]; roadmap M5h) | the number's id; the JSON body, canonical as above |
 /// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
@@ -433,6 +435,30 @@ impl Fingerprint {
         Self::json(
             Operation::SendMarketingMessage,
             &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `enable_template_insights` in `waba` (roadmap M5g2; the request has
+    /// no body; no legacy fingerprint).
+    pub fn enable_template_insights(waba: &WabaId) -> Self {
+        Self::json(
+            Operation::EnableTemplateInsights,
+            &[("waba_id", waba.as_str())],
+            &serde_json::Value::Null,
+        )
+    }
+
+    /// `set_template_click_tracking` of `template` in `waba`, with the JSON
+    /// body the request carried (roadmap M5g2; no legacy fingerprint).
+    pub fn set_template_click_tracking(
+        waba: &WabaId,
+        template: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::SetTemplateClickTracking,
+            &[("waba_id", waba.as_str()), ("template_id", template)],
             body,
         )
     }

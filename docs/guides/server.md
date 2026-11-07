@@ -145,7 +145,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
-| `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
+| `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) and every [calling](#calling) action on it names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
 | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration, and the operator's signing of the max price agreement ([Marketing](#marketing-messages-api-max-price-and-welcome-message-sequences)). Off, each answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
@@ -485,9 +485,9 @@ concluding the message never went out.
   choose it: `messaging_account_id` (or Meta's deprecated alias
   `paid_messaging_account_id`) in a send or a reply is `422
   invalid_request` on `body`, nothing sent. The OTP issue (`POST /v1/otp/issue`)
-  names it too, the sending number's binding's. Not yet named: the
-  calling actions (the library's calls do not carry it; roadmap L29) and
-  the marketing send (Meta documents the field on `/messages` only).
+  names it too, the sending number's binding's, and so do the
+  [calling](#calling) actions (roadmap L29, design D310). Not named: the
+  marketing send (Meta documents the field on `/messages` only).
 - **A number shared by several Messaging Accounts** is held by one
   binding. Attaching a WABA that lists a number your tenant already
   holds under another WABA moves the number to the new binding, so
@@ -1086,6 +1086,24 @@ webhook endpoints, as before.
 | `POST /v1/numbers/{pn}/calls/{call_id}/reject`, `…/terminate` | reject a user's call; end a call in either direction (`204`; do it also after the media ended, for an accurate price) |
 | `GET /v1/wabas/{waba_id}/analytics/calls` | call analytics, scope `analytics`: `start`, `end`, `granularity` (`HALF_HOUR`, `DAILY`, `MONTHLY`), `phone_numbers`, `country_codes`, `directions` (`USER_INITIATED`, `BUSINESS_INITIATED`), `dimensions` (`phone`, `direction`, `country`), `metric_types` (`COUNT`, `COST`, `AVERAGE_DURATION`) |
 
+**The Messaging Account of a call** (roadmap L29, design D310-D312).
+Meta's `calling` pages take `messaging_account_id` on every action of a
+call (`connect`, `pre_accept`, `accept`, `reject`, `terminate`), the same
+value on each, and refuse an action from another Messaging Account for a
+call one already handles. Under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on;
+the setting of the sends, see [Send messages](#send-messages)) the service
+names the number's binding's WABA id on every action, so a token that
+reaches several Messaging Accounts on the number still acts as one. Your
+body cannot choose it: `messaging_account_id` (or the deprecated
+`paid_messaging_account_id`) in a connect, pre-accept or accept body is
+`422 invalid_request` on `body`, nothing sent; reject and terminate take no
+body. The value is the binding's as it stands for each request, and
+nothing of it is kept with the call: if a same-tenant attach moves the
+number to another WABA in the middle of a call, the next action names the
+new one (the token it is sent with is the new binding's), and Meta may
+refuse it as another account's call. The settings and permission routes
+carry no such field. With the setting `off` no action names one.
+
 **A call is the number's, or it does not exist** (design D210). Meta
 documents no way to read a call by its id, so the service keeps a record
 of the calls each number holds, and a call action looks the call up there
@@ -1146,9 +1164,13 @@ token.
 | Scope | Route | Does |
 | --- | --- | --- |
 | `commerce` | `GET`, `PATCH /v1/numbers/{pn}/commerce-settings` | the cart and the catalog's visibility; the change takes `is_cart_enabled` and/or `is_catalog_visible` (at least one), `204` |
-| `commerce` | `GET /v1/wabas/{waba_id}/catalogs`, `…/catalogs/{catalog_id}`, `…/catalogs/{catalog_id}/products` | the catalog the WABA connects, and its products, a page of 1 to 100 (`limit`, `cursor`, `return_only_approved_products`) |
+| `commerce` | `GET /v1/wabas/{waba_id}/catalogs`, `…/catalogs/{catalog_id}`, `…/catalogs/{catalog_id}/products` | the catalog the WABA connects, and its products, a page of 1 to 100 (`limit`, `cursor`, `return_only_approved_products`, and `filter`: Meta's product set filter rules as JSON text, e.g. `{"product_type": {"i_contains": "shirt"}}`, parsed and bounded first, `422` on `filter` otherwise) |
+| `commerce` | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`, `…/product-sets/{set_id}`, `…/products/{product_id}` | a catalog's product sets (a page of 1 to 100), one set and one product; a set or a product of another catalog is `404`, with only the checks sent (D281) |
 | `qr_codes` | `POST`, `GET /v1/numbers/{pn}/qr-codes` | create (`prefilled_message`, 1 to 140 characters; `generate_qr_image`, `PNG` or `SVG`; takes an `Idempotency-Key`), `201`; list, a page of 1 to 25 |
 | `qr_codes` | `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/qr-codes/{code}` | read, change the message, delete (`204`, audited as `qr_code_deleted`) |
+| `analytics` | `GET /v1/wabas/{waba_id}/analytics/template-groups` | per template group, daily: `start`, `end` (as template analytics, 90 days), `group_ids` (1 to 10, each read first and found to be the WABA's: another's is `404`, the analytics not asked for), `metric_types` (lowercase) |
+| `analytics` | `POST /v1/wabas/{waba_id}/analytics/template-insights` | confirms template insights, `204`, under an `Idempotency-Key`, audited. **A legal act**: Meta's page says it directs Meta to add link tracking and to collect and anonymize chat data and cannot be undone, so it is `403 feature_not_available`, nothing asked of Meta, until `WA_SERVER_LEGAL_ACTS=on` |
+| `analytics` | `PUT /v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking` | `{"opted_out": true}` turns button click tracking off for one of the WABA's templates (`false`: back on); the service sends the template's current category, `204`, under an `Idempotency-Key`, audited; no text of Meta's in any answer |
 | `analytics` | `GET /v1/wabas/{waba_id}/analytics/messaging`, `…/conversations`, `…/pricing`, `…/templates` | the four analytics: `start` and `end` (RFC 3339; template analytics also take `YYYY-MM-DD` days), `granularity`, the filters as comma-separated lists |
 | `contacts` | `GET`, `POST /v1/numbers/{pn}/blocked-users`, `POST …/blocked-users/unblock` | the block list (a page of 1 to 100); block or unblock 1 to 1,000 people, `{"users": [{"phone": "+1650…", "user_id": "US.…"}]}` (a phone with its `+`, a BSUID, or both); both take an `Idempotency-Key` |
 

@@ -312,6 +312,12 @@ pub enum Operation {
     ListCatalogProducts,
     /// `create_qr_code`: a QR code and short link created (roadmap M5g).
     CreateQrCode,
+    /// `list_catalog_product_sets`: a page of the product sets of a WABA's catalog (roadmap M5g2; pending the owner's confirmation before the first release).
+    ListCatalogProductSets,
+    /// `get_catalog_product_set`: one product set of a WABA's catalog, by id (roadmap M5g2; pending the owner's confirmation before the first release).
+    GetCatalogProductSet,
+    /// `get_catalog_product`: one product of a WABA's catalog, by id (roadmap M5g2; pending the owner's confirmation before the first release).
+    GetCatalogProduct,
     /// `list_qr_codes`: a number's QR codes (roadmap M5g).
     ListQrCodes,
     /// `get_qr_code`: one of a number's QR codes (roadmap M5g).
@@ -328,6 +334,12 @@ pub enum Operation {
     GetPricingAnalytics,
     /// `get_template_analytics`: analytics of templates of a WABA (roadmap M5g).
     GetTemplateAnalytics,
+    /// `get_template_group_analytics`: analytics of template groups of a WABA (roadmap M5g2; pending the owner's confirmation before the first release).
+    GetTemplateGroupAnalytics,
+    /// `enable_template_insights`: template insights confirmed for a WABA, which directs Meta to add link tracking and to collect and anonymize chat data and cannot be undone: a legal act (roadmap M5g2; pending the owner's confirmation before the first release).
+    EnableTemplateInsights,
+    /// `set_template_click_tracking`: a template opted out of, or back into, button click tracking (roadmap M5g2; pending the owner's confirmation before the first release).
+    SetTemplateClickTracking,
     /// `list_blocked_users`: a number's block list (roadmap M5g).
     ListBlockedUsers,
     /// `block_users`: people blocked on a number (roadmap M5g).
@@ -374,7 +386,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 160] = [
+    pub const ALL: [Self; 166] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -506,6 +518,9 @@ impl Operation {
         Self::GetCatalog,
         Self::ListCatalogProducts,
         Self::CreateQrCode,
+        Self::ListCatalogProductSets,
+        Self::GetCatalogProductSet,
+        Self::GetCatalogProduct,
         Self::ListQrCodes,
         Self::GetQrCode,
         Self::UpdateQrCode,
@@ -514,6 +529,9 @@ impl Operation {
         Self::GetConversationAnalytics,
         Self::GetPricingAnalytics,
         Self::GetTemplateAnalytics,
+        Self::GetTemplateGroupAnalytics,
+        Self::EnableTemplateInsights,
+        Self::SetTemplateClickTracking,
         Self::ListBlockedUsers,
         Self::BlockUsers,
         Self::UnblockUsers,
@@ -672,6 +690,9 @@ impl Operation {
             Self::GetCatalog => "get_catalog",
             Self::ListCatalogProducts => "list_catalog_products",
             Self::CreateQrCode => "create_qr_code",
+            Self::ListCatalogProductSets => "list_catalog_product_sets",
+            Self::GetCatalogProductSet => "get_catalog_product_set",
+            Self::GetCatalogProduct => "get_catalog_product",
             Self::ListQrCodes => "list_qr_codes",
             Self::GetQrCode => "get_qr_code",
             Self::UpdateQrCode => "update_qr_code",
@@ -680,6 +701,9 @@ impl Operation {
             Self::GetConversationAnalytics => "get_conversation_analytics",
             Self::GetPricingAnalytics => "get_pricing_analytics",
             Self::GetTemplateAnalytics => "get_template_analytics",
+            Self::GetTemplateGroupAnalytics => "get_template_group_analytics",
+            Self::EnableTemplateInsights => "enable_template_insights",
+            Self::SetTemplateClickTracking => "set_template_click_tracking",
             Self::ListBlockedUsers => "list_blocked_users",
             Self::BlockUsers => "block_users",
             Self::UnblockUsers => "unblock_users",
@@ -800,7 +824,10 @@ impl Operation {
             | Self::UpdateCommerceSettings
             | Self::ListCatalogs
             | Self::GetCatalog
-            | Self::ListCatalogProducts => Scope::Commerce,
+            | Self::ListCatalogProducts
+            | Self::ListCatalogProductSets
+            | Self::GetCatalogProductSet
+            | Self::GetCatalogProduct => Scope::Commerce,
             Self::CreateQrCode
             | Self::ListQrCodes
             | Self::GetQrCode
@@ -810,7 +837,10 @@ impl Operation {
             | Self::GetConversationAnalytics
             | Self::GetPricingAnalytics
             | Self::GetTemplateAnalytics
-            | Self::GetCallAnalytics => Scope::Analytics,
+            | Self::GetCallAnalytics
+            | Self::GetTemplateGroupAnalytics
+            | Self::EnableTemplateInsights
+            | Self::SetTemplateClickTracking => Scope::Analytics,
             Self::ListBlockedUsers | Self::BlockUsers | Self::UnblockUsers => Scope::Contacts,
             Self::CreateWebhookEndpoint
             | Self::ListWebhookEndpoints

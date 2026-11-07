@@ -466,6 +466,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/thread-control/release",
             "POST /v1/numbers/{pn}/thread-control/take",
             "POST /v1/otp/issue",
+            "POST /v1/wabas/{waba_id}/analytics/template-insights",
             "POST /v1/wabas/{waba_id}/billing-migrations",
             "POST /v1/wabas/{waba_id}/flows",
             "POST /v1/wabas/{waba_id}/marketing/template-duplicates",
@@ -478,6 +479,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/wabas/{waba_id}/templates/library",
             "POST /v1/wabas/{waba_id}/templates/migrations",
             "POST /v1/wabas/{waba_id}/welcome-sequences",
+            "PUT /v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking",
         ]
     );
     let upload = &spec["paths"]["/v1/numbers/{pn}/media"]["post"]["requestBody"]["content"];

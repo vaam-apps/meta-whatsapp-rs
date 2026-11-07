@@ -12,6 +12,37 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap L29)
+
+- **The Messaging Account on the calling actions** (roadmap L29, parity row
+  140; from Meta's `account-model-evolution/messaging#calling-api` and the
+  `calling` pages, read on 2026-11-06). Library:
+  `Client::calling(..).messaging_account_id(WabaId)` names the Messaging
+  Account in the body of `connect`, `pre_accept`, `accept`, `reject` and
+  `terminate` (a JSON string, as the pages' examples show), checked as
+  digits before any request; unset, no key is sent. Additive (no struct
+  gained a field). Service (choices D310-D313, decided by the coordinator
+  under the owner's delegation, swappable): the call routes name the number's binding's WABA id on every
+  action under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (the sends' setting, on);
+  a body naming the field, or the deprecated alias, is `422 invalid_request`.
+  No new setting, scope, route, error code or stored name; the OpenAPI
+  document is unchanged.
+
+### Added (roadmap M5g2)
+
+- What M5g did not route (design D280 to D287, decided by the
+  coordinator under the owner's delegation, swappable; names pending the owner's confirmation before
+  the first release): `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`,
+  `…/product-sets/{set_id}` and `…/products/{product_id}` (a set or a
+  product of another catalog is `404`, with only the checks sent), the
+  products edge's `filter` (Meta's documented rules, parsed and bounded,
+  `422` with zero requests), `GET …/analytics/template-groups` (each
+  group found to be the WABA's first), and the two switches
+  `POST …/analytics/template-insights` (**a legal act**: off until
+  `WA_SERVER_LEGAL_ACTS=on`) and `PUT …/analytics/templates/{template_id}/click-tracking`,
+  each under an `Idempotency-Key`, audited, answering no text of Meta's.
+  Six operations, no new scope; OpenAPI additive.
+
 ### Added (roadmap M2k)
 
 - The webhooks-out backlog on `/metrics`: the gauges
@@ -59,8 +90,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   Accounts is held: one binding, the latest same-tenant attach is the one
   billed, another tenant's is `409 waba_owned_by_another_tenant`. The OTP
   issue names it too, through a new option of the library's `OtpService`
-  (`messaging_account_id`, additive). Not named yet: the calling actions,
-  for want of an option in the library (roadmap L29), and the marketing
+  (`messaging_account_id`, additive). Not named yet: the calling actions
+  (named since roadmap L29, above), and the marketing
   send, whose Meta pages document no such field. Several bindings per number stay OPEN_QUESTIONS #46
   (the owner's). No new scope, route, error code or stored name; the
   OpenAPI document is unchanged.

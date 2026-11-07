@@ -105,6 +105,10 @@ impl RouteClass {
             | Operation::ListCatalogs
             | Operation::GetCatalog
             | Operation::ListCatalogProducts
+            | Operation::ListCatalogProductSets
+            | Operation::GetCatalogProductSet
+            | Operation::GetCatalogProduct
+            | Operation::GetTemplateGroupAnalytics
             | Operation::ListQrCodes
             | Operation::GetQrCode
             | Operation::GetMessagingAnalytics
@@ -179,6 +183,8 @@ impl RouteClass {
             | Operation::TestWebhookEndpoint
             | Operation::RetryWebhookDelivery
             | Operation::UpdateCommerceSettings
+            | Operation::EnableTemplateInsights
+            | Operation::SetTemplateClickTracking
             | Operation::CreateQrCode
             | Operation::UpdateQrCode
             | Operation::DeleteQrCode
@@ -686,6 +692,9 @@ mod tests {
             ("list_catalogs", RouteClass::Read),
             ("get_catalog", RouteClass::Read),
             ("list_catalog_products", RouteClass::Read),
+            ("list_catalog_product_sets", RouteClass::Read),
+            ("get_catalog_product_set", RouteClass::Read),
+            ("get_catalog_product", RouteClass::Read),
             ("create_qr_code", RouteClass::Send),
             ("list_qr_codes", RouteClass::Read),
             ("get_qr_code", RouteClass::Read),
@@ -695,6 +704,9 @@ mod tests {
             ("get_conversation_analytics", RouteClass::Read),
             ("get_pricing_analytics", RouteClass::Read),
             ("get_template_analytics", RouteClass::Read),
+            ("get_template_group_analytics", RouteClass::Read),
+            ("enable_template_insights", RouteClass::Send),
+            ("set_template_click_tracking", RouteClass::Send),
             ("list_blocked_users", RouteClass::Read),
             ("block_users", RouteClass::Send),
             ("unblock_users", RouteClass::Send),

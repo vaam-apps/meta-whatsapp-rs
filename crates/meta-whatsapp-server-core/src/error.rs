@@ -527,6 +527,17 @@ impl ServiceError {
         self
     }
 
+    /// The same error without Meta's `details`: for an answer that holds
+    /// no text of Meta's (the analytics switches, roadmap M5g2), whatever
+    /// a step before it added.
+    #[must_use]
+    pub fn without_details(mut self) -> Self {
+        if let Some(graph) = self.0.graph.as_mut() {
+            graph.details = None;
+        }
+        self
+    }
+
     /// Add Meta's `error_data.details` (or a string `error_data`) to
     /// `graph`, for a route whose design keeps it (section 5.1: every route
     /// but OTP and signup), stripped of control and format characters and
