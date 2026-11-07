@@ -49,6 +49,10 @@ use time::OffsetDateTime;
 
 use crate::Client;
 
+/// The body snippet of a decode error for an answer that carries SIP
+/// passwords.
+const SIP_WITHHELD: &[u8] = b"(withheld: the response carries SIP passwords)";
+
 pub mod recording;
 pub mod settings;
 #[cfg(test)]
@@ -128,23 +132,30 @@ impl Calling {
     /// here. `None` when the answer has no `calling` object.
     ///
     /// With `include_sip_credentials`, SIP servers carry the Meta-generated
-    /// digest password ([`settings::SipServer::sip_user_password`]).
+    /// digest password ([`settings::SipServer::sip_user_password`]); an
+    /// answer that then does not decode is reported without its body or
+    /// serde's message, which would quote the passwords.
     pub async fn settings(&self, include_sip_credentials: bool) -> Result<Option<CallingSettings>> {
         #[derive(Deserialize)]
         struct Envelope {
             #[serde(default)]
             calling: Option<CallingSettings>,
         }
-        let env: Envelope = self
+        let request = self
             .client
             .get_at(&self.segments("settings"))
             .query_opt(
                 "include_sip_credentials",
                 include_sip_credentials.then_some(true),
             )
-            .context("calling settings response")
-            .send()
-            .await?;
+            .context("calling settings response");
+        let env: Envelope = if include_sip_credentials {
+            // A body that does not decode holds passwords: it stays out of
+            // the error, as does serde's message, which quotes values.
+            request.send_withheld(SIP_WITHHELD).await?
+        } else {
+            request.send().await?
+        };
         Ok(env.calling)
     }
 

@@ -173,8 +173,10 @@ async fn with_the_setting_off_the_read_is_refused_and_nothing_is_sent() {
         "off unless the deployment enables it"
     );
     let w = world(false).await;
+    let reads = w.h.kv.vault_reads();
     w.h.graph.push_json(200, meta_sip_answer());
     let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    assert_eq!(w.h.kv.vault_reads(), reads, "no token was opened");
     assert_eq!(
         (reply.status, reply.code().as_str()),
         (StatusCode::FORBIDDEN, "feature_not_available"),

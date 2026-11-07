@@ -5,6 +5,8 @@
 //! | Operation | Graph call |
 //! | --- | --- |
 //! | [`Calls::settings`] | `GET /{pn}/settings` (the `calling` object; **never** with `include_sip_credentials`) |
+//! | [`Calls::sip_credentials`] | `GET /{pn}/settings?include_sip_credentials=true`: the one place it is sent (scope `call_credentials` and the deployment's setting; roadmap M5e2) |
+//! | [`Calls::upload_voicemail_announcement`] | `POST /{pn}/media` with `use_case=call_voicemail_announcement` (roadmap M5e2) |
 //! | [`Calls::update_settings`] | `POST /{pn}/settings` with `{"calling": …}` (a voicemail announcement's media looked up first, as the number's own) |
 //! | [`Calls::permissions`] | `GET /{pn}/call_permissions?user_wa_id=…` or `?recipient=…` |
 //! | [`Calls::connect`] | `POST /{pn}/calls` with `action: connect` and the caller's SDP offer |
@@ -42,8 +44,9 @@
 //! **Secrets.** An SDP offer or answer carries the endpoint's addresses and
 //! its ICE credentials, and a SIP server's password authenticates the
 //! business to Meta. Neither reaches a log, an error, an audit event or
-//! `Debug`; the SIP password is never asked of Meta (`include_sip_credentials`
-//! is never sent) and never answered; a failed call answers Meta's code and
+//! `Debug`; the SIP password is asked of Meta (`include_sip_credentials`) and
+//! answered only by [`Calls::sip_credentials`], never by [`Calls::settings`];
+//! a failed call answers Meta's code and
 //! the service's kind, never Meta's text (it may quote an SDP line).
 //!
 //! **Recording and transcription are the caller's per-call choice** and the
@@ -692,7 +695,7 @@ pub struct Restriction {
 }
 
 /// `settings` with every SIP server's password removed: the second lock
-/// after the request's (`include_sip_credentials` is never sent), for a
+/// after the request's (`include_sip_credentials` is not sent), for a
 /// password Meta answers anyway. Decisive: the unit test sets one and reads
 /// it back through the field, which no serializer can hide.
 fn without_sip_passwords(mut settings: CallingSettings) -> CallingSettings {
