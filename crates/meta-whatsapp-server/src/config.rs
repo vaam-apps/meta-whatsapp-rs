@@ -34,6 +34,7 @@
 //! | `WA_SERVER_MEDIA_CONVERTER` | `none` | the converter an upload may ask for (`convert`; roadmap M5c1): `none`, or `ffmpeg` (the library's `FfmpegConverter`, in a build with the `ffmpeg` feature, over an `ffmpeg` the deployment installs); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `ffmpeg` from `PATH` | with `ffmpeg` only: the program to run (an absolute path is safest); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply) names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches (roadmap M5c5, design D37); `off`: a send names none and Meta resolves the account from the token; pending the owner's confirmation before the first release |
+//! | `WA_SERVER_BROADCAST_RATE`, `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`, `WA_SERVER_BROADCAST_WORKERS` | 10, 1000, 3, 2 | broadcasts (roadmap M5k, design D421, D425): messages a second for each number, shared by every replica; the most people one broadcast may be for; the most broadcasts a tenant may have queued or running at once; the broadcasts a replica sends at once; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow: the India compliance information declaration (`PUT /v1/numbers/{pn}/compliance-info`; roadmap M5c3, design D192), and the operator the max price agreement's signing (`POST /v1/admin/businesses/{business_id}/max-price-agreement`; roadmap M5h, design D231); off, each is `403 feature_not_available` with nothing asked of Meta (the Official Business Account application and the contact book erasure are not gated by it); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
 //! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
@@ -102,6 +103,7 @@ use meta_whatsapp_rs::core::ids::{AppId, BusinessId};
 use meta_whatsapp_rs::core::media::MediaConverter;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
+use meta_whatsapp_server_core::broadcasts::BroadcastSettings;
 use meta_whatsapp_server_core::erasure::ErasureKey;
 use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 use meta_whatsapp_server_core::live::LiveSettings;
@@ -1092,6 +1094,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         legal_acts: legal_acts(r)?,
         flows_deployment_key_fallback: flows_deployment_key_fallback(r)?,
         send_messaging_account_id: send_messaging_account_id(r)?,
+        broadcasts: broadcast_settings(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
@@ -1105,6 +1108,42 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
                 })?
             }
         },
+        ..defaults
+    })
+}
+
+/// `WA_SERVER_BROADCAST_RATE`, `…_MAX_RECIPIENTS`, `…_MAX_CONCURRENT` and
+/// `…_WORKERS` (roadmap M5k, design D421, D425): each a positive whole
+/// number, the defaults conservative
+/// ([`BroadcastSettings::default`]).
+fn broadcast_settings(r: &Reader<'_>) -> Result<BroadcastSettings, ConfigError> {
+    fn number<T: TryFrom<u64>>(
+        r: &Reader<'_>,
+        name: &'static str,
+        default: T,
+    ) -> Result<T, ConfigError> {
+        match positive(r, name)? {
+            None => Ok(default),
+            Some(n) => T::try_from(n).map_err(|_| ConfigError::Invalid {
+                name,
+                reason: "too large",
+            }),
+        }
+    }
+    let defaults = BroadcastSettings::default();
+    Ok(BroadcastSettings {
+        rate_per_second: number(r, "WA_SERVER_BROADCAST_RATE", defaults.rate_per_second)?,
+        max_recipients: number(
+            r,
+            "WA_SERVER_BROADCAST_MAX_RECIPIENTS",
+            defaults.max_recipients,
+        )?,
+        max_concurrent: number(
+            r,
+            "WA_SERVER_BROADCAST_MAX_CONCURRENT",
+            defaults.max_concurrent,
+        )?,
+        workers: number(r, "WA_SERVER_BROADCAST_WORKERS", defaults.workers)?,
         ..defaults
     })
 }

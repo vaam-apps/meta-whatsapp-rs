@@ -985,7 +985,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 21] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 22] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 

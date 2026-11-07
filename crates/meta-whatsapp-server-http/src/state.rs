@@ -10,6 +10,7 @@ use crate::events::{Events, Inbound};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiter, RateLimits, Slots};
 use crate::store::{Backend, IdempotencyRecords, Outbox, RecordStore};
+use meta_whatsapp_rs::bot::JobRunner;
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::clock::Clock;
@@ -20,6 +21,7 @@ use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::broadcasts::{BroadcastRecords, BroadcastSettings};
 use meta_whatsapp_server_core::calls::CallRecords;
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
 use meta_whatsapp_server_core::flows_endpoint::{FlowsDeployment, FlowsEndpoint};
@@ -163,6 +165,9 @@ pub struct Settings {
     /// (the default); off, a send names none and Meta resolves the account
     /// from the token.
     pub send_messaging_account_id: bool,
+    /// Broadcasts (roadmap M5k, D420 to D425): the rate each number is held
+    /// to, the bounds on a broadcast and the workers a replica runs.
+    pub broadcasts: BroadcastSettings,
 }
 
 impl Default for Settings {
@@ -188,6 +193,7 @@ impl Default for Settings {
             flows_deployment_key_fallback: true,
             legal_acts: false,
             send_messaging_account_id: true,
+            broadcasts: BroadcastSettings::default(),
         }
     }
 }
@@ -223,6 +229,7 @@ struct Inner {
     uploads: UploadSessions,
     group_records: GroupRecords,
     call_records: CallRecords,
+    broadcasts: BroadcastRecords,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -330,6 +337,15 @@ impl AppState {
         let uploads = UploadSessions::new(backend.kv(), clock.clone());
         // And the calls each number holds (roadmap M5e), the same way.
         let call_records = CallRecords::new(backend.kv());
+        // The broadcasts' records and their jobs in the same store, on the
+        // service's one clock (roadmap M5k).
+        let broadcasts =
+            BroadcastRecords::new(&backend.kv(), clock.clone(), settings.broadcasts.clone())
+                .map_err(|_| {
+                    Error::from(meta_whatsapp_rs::core::error::ConfigError::new(
+                        "the broadcast settings are invalid (a rate of zero messages a second)",
+                    ))
+                })?;
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -347,6 +363,7 @@ impl AppState {
                 uploads,
                 group_records,
                 call_records,
+                broadcasts,
                 otp,
                 signups,
                 streams,
@@ -405,6 +422,26 @@ impl AppState {
     }
 
     /// The tokenless Graph client.
+    /// The workers a replica runs for the broadcasts (roadmap M5k): the
+    /// binary spawns each one's `run_until`.
+    ///
+    /// # Errors
+    ///
+    /// A runner that cannot be built.
+    pub fn broadcast_workers(&self) -> Result<Vec<JobRunner>, Error> {
+        self.inner
+            .broadcasts
+            .workers(
+                &self.inner.authz,
+                self.inner.settings.send_messaging_account_id,
+            )
+            .map_err(|_| {
+                Error::from(meta_whatsapp_rs::core::error::ConfigError::new(
+                    "the broadcast workers could not be built",
+                ))
+            })
+    }
+
     pub(crate) fn client(&self) -> &Client {
         self.inner.authz.client()
     }
@@ -616,6 +653,11 @@ impl Grant {
     /// (`meta_whatsapp_server_core::calls::CallRecords::owned`).
     pub fn call_records(&self) -> &CallRecords {
         self.0.call_records()
+    }
+
+    /// The broadcasts' records and jobs (roadmap M5k).
+    pub fn broadcasts(&self) -> &BroadcastRecords {
+        &self.0.inner.broadcasts
     }
 
     /// The OTP services (roadmap M3c): codes in the backend's key/value

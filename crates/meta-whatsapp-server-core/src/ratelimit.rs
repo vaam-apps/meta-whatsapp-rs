@@ -17,8 +17,8 @@
 //!
 //! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
-//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `start_media_upload`, `upload_media_chunk`, `delete_media`, `update_profile`, `request_display_name_change`, `update_number_settings`, `enable_payload_encryption`, `disable_payload_encryption`, `set_username`, `delete_username`, `request_official_business_account`, `set_compliance_info`, `set_conversational_components`, `delete_contact_book_entry` (roadmap M5c3), `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read`, `request_verification_code`, `verify_code`, `register_number`, `deregister_number`, `set_two_step_pin`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment`, `send_marketing_message`, `set_cloud_api_marketing`, `duplicate_marketing_template`, `set_template_max_price`, `clear_template_max_price`, `create_welcome_sequence`, `update_welcome_sequence`, `delete_welcome_sequence` (roadmap M5h), and Embedded Signup's `start_signup`, `complete_signup`, `resume_signup` (roadmap M3a: the design names no class for them), and `erase_customer` (roadmap M2f) | 20/s, burst 40 (the design's "sends") |
-//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `get_display_name`, `get_number_settings`, `get_username`, `list_username_suggestions`, `get_official_business_account`, `get_compliance_info`, `get_health_status`, `get_conversational_components`, `download_media`, `get_media_upload`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `get_conversation_window`, `get_inbox_message`, `list_payment_configurations`, `get_payment_configuration`, `get_payment`, `list_signup_attempts`, `get_marketing_onboarding`, `get_cloud_api_marketing`, `get_reach_estimate`, `get_template_max_price`, `list_welcome_sequences`, `get_welcome_sequence` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
+//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `start_media_upload`, `upload_media_chunk`, `delete_media`, `update_profile`, `request_display_name_change`, `update_number_settings`, `enable_payload_encryption`, `disable_payload_encryption`, `set_username`, `delete_username`, `request_official_business_account`, `set_compliance_info`, `set_conversational_components`, `delete_contact_book_entry` (roadmap M5c3), `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read`, `request_verification_code`, `verify_code`, `register_number`, `deregister_number`, `set_two_step_pin`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment`, `send_marketing_message`, `set_cloud_api_marketing`, `duplicate_marketing_template`, `set_template_max_price`, `clear_template_max_price`, `create_welcome_sequence`, `update_welcome_sequence`, `delete_welcome_sequence` (roadmap M5h), `create_broadcast`, `cancel_broadcast` (roadmap M5k), and Embedded Signup's `start_signup`, `complete_signup`, `resume_signup` (roadmap M3a: the design names no class for them), and `erase_customer` (roadmap M2f) | 20/s, burst 40 (the design's "sends") |
+//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `get_display_name`, `get_number_settings`, `get_username`, `list_username_suggestions`, `get_official_business_account`, `get_compliance_info`, `get_health_status`, `get_conversational_components`, `download_media`, `get_media_upload`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `get_conversation_window`, `get_inbox_message`, `list_payment_configurations`, `get_payment_configuration`, `get_payment`, `list_signup_attempts`, `get_marketing_onboarding`, `get_cloud_api_marketing`, `get_reach_estimate`, `get_template_max_price`, `list_welcome_sequences`, `get_welcome_sequence`, `get_broadcast` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
 //! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates`, `create_authentication_template` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //! | `otp_issue` | `issue_otp` (roadmap M3c) | 5/s, burst 5 (the design's "OTP issue"; it states no burst) |
 //! | `otp_verify` | `verify_otp` (roadmap M3c) | 20/s, burst 20 (the service's default: the design names no limit for checking a code, whose brute force the library's attempt and issue limits bound per recipient) |
@@ -123,6 +123,7 @@ impl RouteClass {
             | Operation::ListGroupJoinRequests
             | Operation::GetGroupAnalytics
             | Operation::GetRoutingRoles
+            | Operation::GetBroadcast
             | Operation::GetDisplayName
             | Operation::GetCallSettings
             | Operation::GetCallPermissions
@@ -193,6 +194,8 @@ impl RouteClass {
             | Operation::PassThread
             | Operation::TakeThread
             | Operation::ReleaseThread
+            | Operation::CreateBroadcast
+            | Operation::CancelBroadcast
             | Operation::CreateGroup
             | Operation::UpdateGroup
             | Operation::SetGroupPicture
@@ -734,6 +737,9 @@ mod tests {
             ("pass_thread", RouteClass::Send),
             ("take_thread", RouteClass::Send),
             ("release_thread", RouteClass::Send),
+            ("create_broadcast", RouteClass::Send),
+            ("get_broadcast", RouteClass::Read),
+            ("cancel_broadcast", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {
