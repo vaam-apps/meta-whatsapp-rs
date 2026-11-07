@@ -149,7 +149,8 @@ pub struct Settings {
     pub legal_acts: bool,
     /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (roadmap M5c5, design D37,
     /// pending the owner's confirmation before the first release): whether
-    /// a send from a number (a message, an inbox reply) names its
+    /// a send from a number (a message, an inbox reply, an OTP code) or a
+    /// calling action (roadmap L29) names its
     /// binding's WABA id as `messaging_account_id`, so that Meta bills the
     /// binding's Messaging Account whichever ones the token reaches. On
     /// (the default); off, a send names none and Meta resolves the account

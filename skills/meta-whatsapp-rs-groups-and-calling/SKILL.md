@@ -5,7 +5,7 @@ description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-t
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs 42af67b96a29a2c24289e0aed99eca79892ea1da (2026-10-31).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 4919b5caba4ae08b86755c2b0391bcdf64edf677 (2026-11-06).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
@@ -102,6 +102,11 @@ merchant
 
 Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 (field `calls`); calling is not supported in groups.
+
+If your token reaches several Messaging Accounts on the number, name
+the one handling the calls: `calling(number).messaging_account_id(waba_id)`
+adds it to every action, the same value throughout a call, digits-checked
+(settings and permissions never carry it).
 
 With a media stack, recording and transcription are opt-in per call and
 off unless you set them: on an accept through `accept_with`,
