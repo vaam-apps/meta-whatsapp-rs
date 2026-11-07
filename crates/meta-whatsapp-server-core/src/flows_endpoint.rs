@@ -11,7 +11,8 @@
 //!      loaded or the body parsed
 //!   2. the WABA's tenant, by the service's records (unbound, or a
 //!      suspended tenant's: Refusal::NotFound, 404) and the tenant's
-//!      Flow key (FlowKeys; none: 404)
+//!      Flow key (FlowKeys: the tenant's own, else the deployment's if
+//!      the deployment allows it; none: 404)
 //!   3. decryption (RSA-OAEP key unwrap, AES-128-GCM): Refusal::Undecryptable
 //!      (421, one answer for every cause: Meta's client then downloads the
 //!      public key again and retries)
@@ -34,10 +35,26 @@
 //!
 //! **The key** is the business RSA private key the Flows encryption uses
 //! (`flows/guides/whatsapp-business-encryption`): the [`FlowKeys`] port
-//! gives the key for a tenant's WABA ([`DeploymentKey`]: one key for the
-//! deployment, loaded from a file at startup). A secret: it never reaches
-//! `Debug` (the library's `FlowEndpointKey` shows its size only), a log,
-//! an error or the OpenAPI document.
+//! gives the key for a tenant's WABA. Since roadmap M5d2 that is, in
+//! order (design D370 to D372):
+//!
+//! 1. the tenant's **own** key, a vault record the tenant set for the
+//!    WABA ([`VaultFlowKeys`]; the library's `TokenVault::store_flow_key`,
+//!    owned by the tenant's id, so a WABA that changed hands never serves
+//!    its previous holder's key);
+//! 2. otherwise the **deployment's** key ([`DeploymentKey`]: one key for
+//!    the deployment, loaded from a file at startup), only while the
+//!    deployment allows it ([`FlowsDeployment::deployment_key_fallback`],
+//!    default allowed);
+//! 3. otherwise none: `404`, as before the first key existed.
+//!
+//! **Never another tenant's key.** The tenant is the WABA's, from the
+//! service's records, before any key is read; a tenant that has a key of
+//! its own is decrypted with it only (a request that key cannot decrypt
+//! is `421`, never retried with the deployment's), and one that has none
+//! never reads another's. A key is a secret: it never reaches `Debug`
+//! (the library's `FlowEndpointKey` shows its size only), a log, an error
+//! or the OpenAPI document.
 //!
 //! **What is logged** is the outcome, the WABA, the action and the screen
 //! of a request, never its `data` (a user's answers), its `flow_token` or
@@ -53,6 +70,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 pub use meta_whatsapp_rs::client::flows::endpoint::RESPONSE_CONTENT_TYPE;
 use meta_whatsapp_rs::client::flows::endpoint::{
     EncryptedFlowRequest, EndpointAction, EndpointStatus, FlowEndpointKey, FlowErrorNotification,
@@ -125,6 +143,102 @@ impl FlowKeys for DeploymentKey {
         _waba_id: &WabaId,
     ) -> Result<Option<Arc<FlowEndpointKey>>, StorageError> {
         Ok(Some(self.0.clone()))
+    }
+}
+
+/// No deployment key: a deployment whose Flow keys are all its tenants'
+/// own ([`VaultFlowKeys`]). Gives none.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoDeploymentKey;
+
+#[async_trait]
+impl FlowKeys for NoDeploymentKey {
+    async fn key_for(
+        &self,
+        _tenant: &TenantId,
+        _waba_id: &WabaId,
+    ) -> Result<Option<Arc<FlowEndpointKey>>, StorageError> {
+        Ok(None)
+    }
+}
+
+/// The Flow keys tenants set (roadmap M5d2): vault records the library's
+/// `TokenVault::store_flow_key` wrote, read for the tenant a request's
+/// WABA is bound to. Read-only; the writes are the service's
+/// ([`crate::flow_key`]). `Debug` shows nothing of the vault.
+#[derive(Clone)]
+pub struct VaultFlowKeys {
+    vault: TokenVault,
+}
+
+impl std::fmt::Debug for VaultFlowKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VaultFlowKeys").finish_non_exhaustive()
+    }
+}
+
+impl VaultFlowKeys {
+    /// Crate-private: only the [`crate::authz::Authorizer`] hands one out.
+    pub(crate) fn new(vault: TokenVault) -> Self {
+        Self { vault }
+    }
+}
+
+#[async_trait]
+impl FlowKeys for VaultFlowKeys {
+    /// `tenant`'s own key for `waba_id`, or `None`: none stored, or stored
+    /// by another tenant (the record names its owner).
+    ///
+    /// # Errors
+    ///
+    /// A record that cannot be opened (sealed under a vault key no longer
+    /// configured, or damaged) or the store failing: never "no key", so
+    /// that a request is not decrypted with a key that is not the
+    /// tenant's.
+    async fn key_for(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> Result<Option<Arc<FlowEndpointKey>>, StorageError> {
+        match self.vault.flow_key(waba_id, tenant.as_str()).await {
+            Ok(key) => Ok(key.map(Arc::new)),
+            Err(error) => {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    waba_id = waba_id.as_str(),
+                    kind = error.kind().as_str(),
+                    "a tenant's Flow key could not be read"
+                );
+                Err(StorageError::Backend(anyhow::anyhow!(
+                    "a Flow key record could not be read"
+                )))
+            }
+        }
+    }
+}
+
+/// The order of the keys: the tenant's own, then the deployment's if
+/// allowed. A tenant's own record that cannot be read is an error, not
+/// "none": the deployment's key is never tried in its place.
+struct TenantFirst {
+    own: VaultFlowKeys,
+    deployment: Option<Arc<dyn FlowKeys>>,
+}
+
+#[async_trait]
+impl FlowKeys for TenantFirst {
+    async fn key_for(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> Result<Option<Arc<FlowEndpointKey>>, StorageError> {
+        if let Some(own) = self.own.key_for(tenant, waba_id).await? {
+            return Ok(Some(own));
+        }
+        match &self.deployment {
+            Some(deployment) => deployment.key_for(tenant, waba_id).await,
+            None => Ok(None),
+        }
     }
 }
 
@@ -206,6 +320,7 @@ pub struct FlowsDeployment {
     keys: Arc<dyn FlowKeys>,
     handler: Arc<dyn FlowHandler>,
     handler_timeout: Duration,
+    deployment_key_fallback: bool,
 }
 
 impl std::fmt::Debug for FlowsDeployment {
@@ -213,6 +328,7 @@ impl std::fmt::Debug for FlowsDeployment {
         f.debug_struct("FlowsDeployment")
             .field("app_secrets", &self.app_secrets.len())
             .field("handler_timeout", &self.handler_timeout)
+            .field("deployment_key_fallback", &self.deployment_key_fallback)
             .finish_non_exhaustive()
     }
 }
@@ -232,7 +348,21 @@ impl FlowsDeployment {
             keys,
             handler,
             handler_timeout: HANDLER_TIMEOUT,
+            deployment_key_fallback: true,
         }
+    }
+
+    /// Whether a tenant with no Flow key of its own is decrypted with
+    /// `keys`, the deployment's (default `true`: what the endpoint did
+    /// before tenants could set keys, roadmap M5d2, design D371). `false`:
+    /// such a tenant's requests are `404`, whatever the deployment holds,
+    /// so that no tenant's Flow traffic is decrypted with a key shared
+    /// with others. It takes effect where the endpoint reads the tenants'
+    /// keys ([`FlowsEndpoint::with_tenant_keys`]).
+    #[must_use]
+    pub fn deployment_key_fallback(mut self, allowed: bool) -> Self {
+        self.deployment_key_fallback = allowed;
+        self
     }
 
     /// Give the handler `timeout` instead of [`HANDLER_TIMEOUT`] (tests).
@@ -325,6 +455,21 @@ impl FlowsEndpoint {
             records,
             places: Arc::new(Semaphore::new(MAX_IN_FLIGHT)),
         }
+    }
+
+    /// Read the tenants' own Flow keys first (roadmap M5d2, design D370):
+    /// `own`, then the deployment's keys if the deployment allows it
+    /// ([`FlowsDeployment::deployment_key_fallback`]). The state does this
+    /// for the vault it holds; an endpoint without it uses the
+    /// deployment's keys for every tenant, as before.
+    #[must_use]
+    pub fn with_tenant_keys(mut self, own: VaultFlowKeys) -> Self {
+        let deployment = self
+            .deployment
+            .deployment_key_fallback
+            .then(|| self.deployment.keys.clone());
+        self.deployment.keys = Arc::new(TenantFirst { own, deployment });
+        self
     }
 
     /// A place among the requests answered at once ([`MAX_IN_FLIGHT`]),

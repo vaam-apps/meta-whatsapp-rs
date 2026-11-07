@@ -127,7 +127,8 @@ read yet: set, it stops the start.
 | `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
 | `WA_SERVER_ERASURE_KEY` | unset: erasure off | at least 32 bytes from your secret manager, kept out of the database and for as long as your backups: the key the erasure journal's HMACs are made with (roadmap M2f). Unset, `POST /v1/numbers/{pn}/erasures` answers `409 erasure_not_configured` (memory storage in development: a throwaway one) |
-| `WA_SERVER_FLOWS_PRIVATE_KEY` | unset: the Flows data endpoint off | the deployment's Flow private key (roadmap M5d): an unencrypted 2048-bit RSA key in PEM, from your secret manager (`_FILE` works too). Unset, `POST /webhooks/flows/{waba_id}` answers `404`. A password-protected PEM (what Meta's `openssl genrsa -des3` writes) or a key of another size refuses the start; [Flows](#flows) says how to remove the password |
+| `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` | `allow` | `allow`: a tenant that set no Flow key of its own (`PUT /v1/wabas/{waba_id}/flow-key`) is decrypted with the deployment's; `deny`: it is answered `404`, so that no tenant's Flow traffic is decrypted with a key shared with others. Set `deny` on a multi-tenant deployment once every tenant has its own key (roadmap M5d2) |
+| `WA_SERVER_FLOWS_PRIVATE_KEY` | unset: no deployment key | the deployment's Flow private key (roadmap M5d): an unencrypted 2048-bit RSA key in PEM, from your secret manager (`_FILE` works too). Unset, a tenant with no key of its own is answered `404` at `POST /webhooks/flows/{waba_id}`. A password-protected PEM (what Meta's `openssl genrsa -des3` writes) or a key of another size refuses the start; [Flows](#flows) says how to remove the password |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
 | `WA_SIGNUP_EVERY_GRANTED_WABA` | `off` | `on`: a signup that grants several WABAs binds every one to its tenant ([Several WABAs](#several-wabas-in-one-signup)); pending the owner's confirmation before the first release |
@@ -860,10 +861,34 @@ messages](#send-messages)).
   (`…/webhooks/flows/<id>`) with another WABA's id is `422
   invalid_request` on `endpoint_uri`; any other `https` URL is yours.
 
+**A Flow key per tenant** (roadmap M5d2). Each tenant sets the private key
+its WABA's Flow requests are decrypted with, so that no tenant's traffic is
+decrypted with a key another tenant, or the deployment, can use:
+
+```sh
+curl -X PUT "$API/v1/wabas/$WABA_ID/flow-key" -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: flow-key-1" -H "Content-Type: application/json" \
+  -d "$(jq -n --rawfile k private.pem '{private_key: $k}')"
+```
+
+The answer is the key's **public** half (set it as the business public key
+of each number the Flow is sent from) and its SHA-256; the private key is
+stored sealed in the token vault and never answered, logged or audited
+(`GET` reads the public half again, `DELETE` removes the key; scope
+`flows`; audited as `flow_key_set` and `flow_key_deleted`). The key must be
+an unencrypted 2048-bit RSA key in PEM, else `422 invalid_request` on
+`private_key`. The service uses the tenant's own key first; a request that
+key cannot decrypt is `421`, never retried with another. Without one, the
+deployment's key serves only if `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK`
+is `allow`, else `404`. Replacing the key has no overlap: requests
+encrypted to the old public key are `421` until each number's public key is
+updated at Meta. Disconnecting the WABA deletes its key.
+
 **The data endpoint.** A Flow with an endpoint is called by Meta at its
 `endpoint_uri` on every screen that exchanges data. Either host your own
 endpoint and set its URL, or let the service decrypt and answer for
-you: set `WA_SERVER_FLOWS_PRIVATE_KEY`, give the Flow
+you: set your Flow key (above, or `WA_SERVER_FLOWS_PRIVATE_KEY` for the
+deployment), give the Flow
 `https://<your public host>/webhooks/flows/{waba_id}` as its
 `endpoint_uri`, and set the key's **public half** as the business public
 key of the number the Flow is sent from (Meta signs it on upload; the

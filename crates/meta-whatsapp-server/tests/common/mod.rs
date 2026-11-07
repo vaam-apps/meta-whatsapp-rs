@@ -1327,6 +1327,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"code_method": "SMS", "language": "en_US"})
         }
         ("POST", "/v1/numbers/{pn}/verify-code") => serde_json::json!({"code": "123830"}),
+        // A WABA's Flow private key (roadmap M5d2): the test key.
+        ("PUT", "/v1/wabas/{waba_id}/flow-key") => {
+            serde_json::json!({"private_key": flows::KEY_PEM})
+        }
         ("POST", "/v1/numbers/{pn}/register" | "/v1/numbers/{pn}/two-step-pin") => {
             serde_json::json!({"pin": SAMPLE_PIN})
         }

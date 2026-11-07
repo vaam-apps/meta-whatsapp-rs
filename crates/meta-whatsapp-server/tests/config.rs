@@ -1146,3 +1146,29 @@ fn sends_name_the_bindings_account_unless_the_deployment_turns_it_off() {
         }
     }
 }
+
+/// Roadmap M5d2 (design D371): `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` is
+/// `allow` (the default) or `deny`; anything else is refused naming the
+/// variable. Decisive: the parse.
+#[test]
+fn reads_whether_the_deployment_flow_key_is_a_fallback() {
+    let fallback = |value: Option<&str>| {
+        let env = match value {
+            Some(v) => production().set("WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK", v),
+            None => production(),
+        };
+        Config::from_env(&env)
+            .unwrap()
+            .settings
+            .flows_deployment_key_fallback
+    };
+    assert!(fallback(None));
+    assert!(fallback(Some("allow")));
+    assert!(!fallback(Some("deny")));
+    match refused(&production().set("WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK", "maybe")) {
+        ConfigError::Invalid { name, .. } => {
+            assert_eq!(name, "WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK");
+        }
+        other => panic!("{other:?}"),
+    }
+}

@@ -138,6 +138,13 @@ pub struct Settings {
     /// /webhooks/flows/{waba_id}` is `404` (the default, for tests;
     /// `serve` sets it when the key file is). `Debug` shows no secret.
     pub flows: Option<FlowsDeployment>,
+    /// `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` (roadmap M5d2, design
+    /// D371, pending the owner's confirmation before the first release):
+    /// whether a tenant with no Flow key of its own is decrypted with the
+    /// deployment's (`allow`, the default) or answered `404` (`deny`).
+    /// `serve` applies it to [`Self::flows`]; the field is the setting's
+    /// record.
+    pub flows_deployment_key_fallback: bool,
     /// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3, pending the owner's
     /// confirmation before the first release): whether the legal acts a
     /// tenant may ask for are taken: the compliance information
@@ -178,6 +185,7 @@ impl Default for Settings {
             erasure: None,
             webhooks_out: None,
             flows: None,
+            flows_deployment_key_fallback: true,
             legal_acts: false,
             send_messaging_account_id: true,
         }
@@ -311,11 +319,12 @@ impl AppState {
             clock.clone(),
             settings.webhooks_out.clone(),
         );
-        // The Flows data endpoint routes by the backend's records.
-        let flows = settings
-            .flows
-            .clone()
-            .map(|deployment| FlowsEndpoint::new(deployment, store.clone()));
+        // The Flows data endpoint routes by the backend's records, and
+        // reads the tenants' own Flow keys (vault records, roadmap M5d2)
+        // before the deployment's.
+        let flows = settings.flows.clone().map(|deployment| {
+            FlowsEndpoint::new(deployment, store.clone()).with_tenant_keys(authz.flow_keys())
+        });
         // Resumable upload sessions in the bundle's key/value store, on
         // the service's one clock (roadmap M5c1).
         let uploads = UploadSessions::new(backend.kv(), clock.clone());

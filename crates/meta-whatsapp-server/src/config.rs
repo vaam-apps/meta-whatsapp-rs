@@ -50,7 +50,8 @@
 //! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 //! | `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | 5, `72h` | a number's registrations and deregistrations, per number and fixed window, shared by every replica (roadmap M3d; Meta allows 10 of each in a moving 72 hours and locks the number on the 11th) |
 //! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
-//! | `WA_SERVER_FLOWS_PRIVATE_KEY` (secret) | unset: the Flows data endpoint off | the deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM (roadmap M5d; design D133); unset, `POST /webhooks/flows/{waba_id}` is `404`. Its public half is what each number's business public key is set to |
+//! | `WA_SERVER_FLOWS_PRIVATE_KEY` (secret) | unset: no deployment key | the deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM (roadmap M5d; design D133). Since roadmap M5d2 a tenant sets its own per WABA (`PUT /v1/wabas/{waba_id}/flow-key`), read first; unset, a tenant with none is answered `404`. Its public half is what each number's business public key is set to |
+//! | `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` | `allow` | `allow`: a tenant with no Flow key of its own is decrypted with the deployment's (`WA_SERVER_FLOWS_PRIVATE_KEY`), as before tenants could set keys; `deny`: such a tenant's Flow requests are `404`, so that no tenant's traffic is decrypted with a key shared with others (roadmap M5d2, design D371); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //! | `WA_SERVER_TOKEN_EXPIRY_LEAD` | `7d`, or `WA_SERVER_OUTBOX_RETENTION` when that is shorter | how long before a stored token's expiry the tenant is told (`token_expiring`, once per token and expiry; roadmap M3e): a positive duration no longer than `WA_SERVER_OUTBOX_RETENTION` (set past it, the start is refused), or `off` |
 //!
@@ -1089,6 +1090,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         media_streams,
         media_converter: media_converter(r)?,
         legal_acts: legal_acts(r)?,
+        flows_deployment_key_fallback: flows_deployment_key_fallback(r)?,
         send_messaging_account_id: send_messaging_account_id(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
@@ -1119,6 +1121,20 @@ fn legal_acts(r: &Reader<'_>) -> Result<bool, ConfigError> {
         Some(_) => Err(ConfigError::Invalid {
             name: "WA_SERVER_LEGAL_ACTS",
             reason: "expected `off` or `on`",
+        }),
+    }
+}
+
+/// `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` (roadmap M5d2, design
+/// D371): `allow` (the default) or `deny`.
+fn flows_deployment_key_fallback(r: &Reader<'_>) -> Result<bool, ConfigError> {
+    const NAME: &str = "WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK";
+    match r.plain(NAME)?.as_deref().map(str::trim) {
+        None | Some("" | "allow") => Ok(true),
+        Some("deny") => Ok(false),
+        Some(_) => Err(ConfigError::Invalid {
+            name: NAME,
+            reason: "expected `allow` or `deny`",
         }),
     }
 }
