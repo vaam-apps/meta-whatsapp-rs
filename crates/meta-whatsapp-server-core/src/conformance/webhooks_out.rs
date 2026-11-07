@@ -3211,6 +3211,14 @@ pub async fn a_fan_out_reads_no_event_data(backend: &dyn Backend) {
         .unwrap();
     let pn = super::unique_digits();
     bind(counted.records().as_ref(), &a, &pn).await;
+    // Creating the endpoint read the stream's high water: count from here.
+    for count in [
+        &counted.outbox.pages,
+        &counted.outbox.gets,
+        &counted.outbox.headers,
+    ] {
+        count.store(0, Ordering::SeqCst);
+    }
     let mut ids = Vec::new();
     for _ in 0..100 {
         let mut event = row(

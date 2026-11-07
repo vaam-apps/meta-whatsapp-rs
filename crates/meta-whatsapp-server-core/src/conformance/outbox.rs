@@ -355,8 +355,8 @@ pub async fn headers(backend: &dyn Backend) {
     let outbox = backend.outbox();
     let store = outbox.as_ref();
     let records = backend.records();
-    bind(records.as_ref(), "suite-h", "71").await;
-    bind(records.as_ref(), "suite-i", "72").await;
+    bind(records.as_ref(), "suite-h", "93").await;
+    bind(records.as_ref(), "suite-i", "94").await;
     let headers_of = |after: Option<i64>, types: Option<Vec<&str>>, limit: usize| HeaderQuery {
         tenant: tenant("suite-h"),
         after,
@@ -373,31 +373,31 @@ pub async fn headers(backend: &dyn Backend) {
 
     let big = NewEvent {
         data: format!("{{\"pad\":\"{}\"}}", "x".repeat(256 * 1024)),
-        ..row(Some("suite-h"), "history_synced", "71", None)
+        ..row(Some("suite-h"), "history_synced", "93", None)
     };
     store
-        .insert(&row(Some("suite-h"), "message_received", "71", None))
+        .insert(&row(Some("suite-h"), "message_received", "93", None))
         .await
         .unwrap()
         .unwrap();
     store.insert(&big).await.unwrap().unwrap();
     store
-        .insert(&row(None, "unknown", "71", None))
+        .insert(&row(None, "unknown", "93", None))
         .await
         .unwrap()
         .unwrap();
     store
-        .insert(&row(Some("suite-i"), "message_received", "72", None))
+        .insert(&row(Some("suite-i"), "message_received", "94", None))
         .await
         .unwrap()
         .unwrap();
     store
-        .insert(&row(Some("suite-h"), "status_updated", "71", None))
+        .insert(&row(Some("suite-h"), "status_updated", "93", None))
         .await
         .unwrap()
         .unwrap();
     store
-        .insert(&row(Some("suite-h"), "message_received", "71", None))
+        .insert(&row(Some("suite-h"), "message_received", "93", None))
         .await
         .unwrap()
         .unwrap();
