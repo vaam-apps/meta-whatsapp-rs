@@ -17,9 +17,24 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 - The service sends every legal act exactly once: the compliance
   information declaration (which the library marks idempotent, so the
   default retry policy could replay it after a timeout), the partner and
-  billing acts and the max price agreement now go through
+  billing acts, the template insights confirmation and the max price agreement now go through
   `number_settings::legal_client`, a client with `RetryPolicy::NONE`
   (design D192, D231, D250). The library's markings are unchanged.
+
+### Added (roadmap M5g2)
+
+- What M5g did not route (design D280 to D287, decided by the
+  coordinator under the owner's delegation, swappable; names pending the owner's confirmation before
+  the first release): `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`,
+  `…/product-sets/{set_id}` and `…/products/{product_id}` (a set or a
+  product of another catalog is `404`, with only the checks sent), the
+  products edge's `filter` (Meta's documented rules, parsed and bounded,
+  `422` with zero requests), `GET …/analytics/template-groups` (each
+  group found to be the WABA's first), and the two switches
+  `POST …/analytics/template-insights` (**a legal act**: off until
+  `WA_SERVER_LEGAL_ACTS=on`) and `PUT …/analytics/templates/{template_id}/click-tracking`,
+  each under an `Idempotency-Key`, audited, answering no text of Meta's.
+  Six operations, no new scope; OpenAPI additive.
 
 ### Added (roadmap M2k)
 

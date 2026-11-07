@@ -71,7 +71,7 @@ async fn fixture() -> Fixture {
     h.tenant(TENANT).await;
     h.connect(TENANT, WABA, &[PN], TOKEN).await;
     let key = h
-        .tenant_key(TENANT, &[Scope::Numbers, Scope::Partners])
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::Partners, Scope::Analytics])
         .await;
     let admin = h.admin_key().await;
     Fixture { h, key, admin }
@@ -123,6 +123,13 @@ fn call_of(act: Act, f: &Fixture) -> (Call, usize) {
                 .json(&json!({"currency": "INR"})),
             0,
         ),
+        Act::Tenant(Operation::EnableTemplateInsights) => (
+            tenant(
+                Method::POST,
+                format!("/v1/wabas/{WABA}/analytics/template-insights"),
+            ),
+            0,
+        ),
         // The migration must be the WABA's own: one is started first.
         Act::Tenant(Operation::ResumeBillingMigration) => (
             tenant(
@@ -168,10 +175,10 @@ fn set_up(h: &Harness) {
 
 #[tokio::test]
 async fn the_walk_covers_the_gated_operations() {
-    // The walk's list is the gate's: the four tenant acts and the five of
+    // The walk's list is the gate's: the five tenant acts and the five of
     // the operator today.
     let acts = every_legal_act();
-    assert_eq!(acts.len(), 9, "{acts:?}");
+    assert_eq!(acts.len(), 10, "{acts:?}");
 }
 
 #[tokio::test]
