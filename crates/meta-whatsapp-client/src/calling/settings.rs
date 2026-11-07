@@ -557,6 +557,7 @@ pub struct VoicemailAudioConfig {
 
 /// `restrictions` (response only).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallingRestrictions {
     /// Current restrictions. The table names it `restriction_list`, the
     /// example `restrictions_list`; both are read.
@@ -566,6 +567,7 @@ pub struct CallingRestrictions {
 
 /// One calling restriction.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CallingRestriction {
     /// What is restricted.
     #[serde(rename = "type")]

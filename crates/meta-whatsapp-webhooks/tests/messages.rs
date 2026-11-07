@@ -767,8 +767,8 @@ fn marketing_link_clicks_are_user_actions() {
 #[test]
 fn a_payment_status_carries_its_payment() {
     use meta_whatsapp_webhooks::fields::{
-        PaymentAmount, PaymentGatewayType, PaymentMethodType, PaymentTransactionStatus,
-        RefundSpeed, RefundStatus, StatusType,
+        PaymentGatewayType, PaymentMethodType, PaymentTransactionStatus, RefundSpeed,
+        RefundStatus, StatusType,
     };
 
     let name =
@@ -796,11 +796,8 @@ fn a_payment_status_carries_its_payment() {
     let p = status.payment.as_deref().unwrap();
     assert_eq!(p.reference_id, "BM345A-12");
     assert_eq!(
-        p.amount,
-        Some(PaymentAmount {
-            value: 21000,
-            offset: 100
-        })
+        p.amount.as_ref().map(|a| (a.value, a.offset)),
+        Some((21000, 100))
     );
     assert_eq!(p.currency.as_deref(), Some("INR"));
     let t = p.transaction.as_ref().unwrap();
@@ -832,11 +829,8 @@ fn a_payment_status_carries_its_payment() {
     };
     assert_eq!(refund.id, "rfnd_Om4XkB2tQ1aV9c");
     assert_eq!(
-        refund.amount,
-        Some(PaymentAmount {
-            value: 100,
-            offset: 100
-        })
+        refund.amount.as_ref().map(|a| (a.value, a.offset)),
+        Some((100, 100))
     );
     assert_eq!(refund.speed_processed, Some(RefundSpeed::Instant));
     assert_eq!(refund.status, Some(RefundStatus::Success));

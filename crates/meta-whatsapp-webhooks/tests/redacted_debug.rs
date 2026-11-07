@@ -114,11 +114,10 @@ fn no_signed_link_reaches_debug_of_a_payload_or_its_events() {
 #[test]
 fn media_content_debug_shows_the_link_redacted_and_keeps_it_whole() {
     let url = sign("https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133");
-    let media = MediaContent {
-        url: Some(url.clone()),
-        caption: Some("Taj Mahal".into()),
-        ..MediaContent::default()
-    };
+    // The payload structs are `#[non_exhaustive]` (roadmap L20b): read
+    // from JSON, as a delivery is.
+    let media: MediaContent =
+        serde_json::from_value(serde_json::json!({"url": url, "caption": "Taj Mahal"})).unwrap();
     let shown = format!("{media:?}");
     assert!(
         shown.contains(
@@ -148,24 +147,22 @@ fn media_content_debug_shows_the_link_redacted_and_keeps_it_whole() {
     assert_eq!(serde_json::to_value(&media).unwrap()["url"], url);
 
     // A link that does not parse is hidden whole; no link shows `None`.
-    let odd = MediaContent {
-        url: Some(format!("?hash={SENTINEL}")),
-        ..MediaContent::default()
-    };
+    let odd: MediaContent =
+        serde_json::from_value(serde_json::json!({"url": format!("?hash={SENTINEL}")})).unwrap();
     assert!(format!("{odd:?}").contains("url: Some(<redacted: not a URL>)"));
     assert!(format!("{:?}", MediaContent::default()).contains("url: None"));
 }
 
 #[test]
 fn referral_debug_redacts_the_cdn_links_only() {
-    let referral = Referral {
-        source_url: Some("https://fb.me/3cr4Wqqkv".into()),
-        image_url: Some(sign("https://scontent.xx.fbcdn.net/v/t45.1/img.jpg")),
-        video_url: Some(sign("https://scontent.xx.fbcdn.net/v/t42.1/vid.mp4")),
-        thumbnail_url: Some(sign("https://scontent.xx.fbcdn.net/v/t15.1/thumb.jpg")),
-        ctwa_clid: Some("ARAkLkA8rmlFeiCktEJQ".into()),
-        ..Referral::default()
-    };
+    let referral: Referral = serde_json::from_value(serde_json::json!({
+        "source_url": "https://fb.me/3cr4Wqqkv",
+        "image_url": sign("https://scontent.xx.fbcdn.net/v/t45.1/img.jpg"),
+        "video_url": sign("https://scontent.xx.fbcdn.net/v/t42.1/vid.mp4"),
+        "thumbnail_url": sign("https://scontent.xx.fbcdn.net/v/t15.1/thumb.jpg"),
+        "ctwa_clid": "ARAkLkA8rmlFeiCktEJQ",
+    }))
+    .unwrap();
     for shown in [format!("{referral:?}"), format!("{referral:#?}")] {
         assert!(!shown.contains(SENTINEL), "{shown}");
         assert!(shown.contains("https://fb.me/3cr4Wqqkv"), "{shown}");

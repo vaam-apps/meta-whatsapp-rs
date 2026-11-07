@@ -336,6 +336,7 @@ pub struct ListQrCodes {
 
 /// A QR code and short link (`QrCodeDetails` / `QrCodeResponse`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct QrCode {
     /// The 14-character id; use it to update or delete the code.
     pub code: QrCodeId,

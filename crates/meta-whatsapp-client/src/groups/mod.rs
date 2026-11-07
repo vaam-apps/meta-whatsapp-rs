@@ -833,6 +833,7 @@ impl CreateGroup {
 /// Answer of [`Groups::create`]. The group id is not in it: it arrives in
 /// the `group_lifecycle_update` webhook, correlated by `request_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupCreated {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -887,6 +888,7 @@ pub struct ListGroups {
 
 /// An active group, as listed by [`Groups::list`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupSummary {
     /// Group id.
     pub id: GroupId,
@@ -940,6 +942,7 @@ impl GroupField {
 /// `"<TOTAL_PARTICIPANT_COUNT>"`), the schema types them boolean/integer;
 /// both forms are accepted.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupInfo {
     /// Group id.
     #[serde(default)]
@@ -972,6 +975,7 @@ pub struct GroupInfo {
 
 /// A participant in [`GroupInfo::participants`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct GroupParticipant {
     /// Phone number; omitted when the user has a username and Meta cannot
     /// share the number.
@@ -995,6 +999,7 @@ pub struct GroupParticipant {
 /// whoever holds it join (or ask to join) the group. The field keeps it
 /// whole.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct InviteLink {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -1031,6 +1036,7 @@ pub struct ListJoinRequests {
 
 /// An open request to join a group.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct JoinRequest {
     /// Id to approve or reject.
     pub join_request_id: String,
@@ -1053,6 +1059,7 @@ pub struct JoinRequest {
 
 /// Answer of [`Group::approve_join_requests`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct ApprovedJoinRequests {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -1070,6 +1077,7 @@ pub struct ApprovedJoinRequests {
 
 /// Answer of [`Group::reject_join_requests`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct RejectedJoinRequests {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -1087,6 +1095,7 @@ pub struct RejectedJoinRequests {
 
 /// A join request an approve/reject could not process.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct FailedJoinRequest {
     /// The join request id.
     #[serde(default)]
@@ -1099,6 +1108,7 @@ pub struct FailedJoinRequest {
 /// Answer of [`Groups::pin_message`] / [`Groups::unpin_message`], shaped
 /// like a send-message answer.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct PinResponse {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -1113,6 +1123,7 @@ pub struct PinResponse {
 
 /// `contacts[]` of a [`PinResponse`]; both fields hold the group id.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct PinContact {
     /// What you sent in `to`.
     #[serde(default)]
@@ -1124,6 +1135,7 @@ pub struct PinContact {
 
 /// `messages[]` of a [`PinResponse`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct PinMessage {
     /// Message id.
     pub id: MessageId,

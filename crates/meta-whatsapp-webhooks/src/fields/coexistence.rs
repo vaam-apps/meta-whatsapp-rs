@@ -22,6 +22,7 @@ use super::messages::{InboundMessage, MessageContent};
 
 /// `value` of an `smb_message_echoes` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SmbMessageEchoesValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +40,7 @@ pub struct SmbMessageEchoesValue {
 
 /// A message the business sent outside Cloud API (`message_echoes[]`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MessageEcho {
     /// Business display phone number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +67,7 @@ pub struct MessageEcho {
 
 /// `value` of a `history` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +90,7 @@ pub struct HistoryValue {
 
 /// `history[]`: one chunk of synchronized chat history.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryChunk {
     /// Phase / chunk / progress; absent on the declined-sharing error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +109,7 @@ pub struct HistoryChunk {
 
 /// `history[].metadata`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryMetadata {
     /// `0` = day 0–1, `1` = day 1–90, `2` = day 90–180.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,6 +124,7 @@ pub struct HistoryMetadata {
 
 /// `history[].threads[]`: one chat.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryThread {
     /// The user's phone number; omitted when Meta may not share it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,6 +139,7 @@ pub struct HistoryThread {
 
 /// `threads[].context`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ThreadContext {
     /// Phone number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +157,7 @@ pub struct ThreadContext {
 
 /// `threads[].messages[]`: a message in either direction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryMessage {
     /// Business number (outgoing) or user number (incoming).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,6 +205,7 @@ open_enum! {
 
 /// `messages[].history_context`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HistoryContext {
     /// Latest delivery status.
     pub status: HistoryMessageStatus,
@@ -204,6 +213,7 @@ pub struct HistoryContext {
 
 /// `value` of an `smb_app_state_sync` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SmbAppStateSyncValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,6 +245,7 @@ open_enum! {
 
 /// `state_sync[]`: one address book change in the WhatsApp Business app.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StateSyncItem {
     /// What is synced.
     #[serde(rename = "type")]
@@ -251,6 +262,7 @@ pub struct StateSyncItem {
 
 /// `state_sync[].contact`. Names are omitted on removals.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SyncedContact {
     /// Full name in the business's address book.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,6 +286,7 @@ pub struct SyncedContact {
 
 /// `state_sync[].metadata`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StateSyncMetadata {
     /// When the webhook was triggered.
     #[serde(

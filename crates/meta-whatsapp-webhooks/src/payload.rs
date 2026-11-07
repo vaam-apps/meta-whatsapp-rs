@@ -35,6 +35,7 @@ use crate::fields::{
 
 /// A whole webhook POST body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WebhookPayload {
     /// `whatsapp_business_account` for every WhatsApp webhook.
     pub object: String,
@@ -52,6 +53,7 @@ impl WebhookPayload {
 
 /// `entry[]`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Entry {
     /// The WhatsApp Business Account id for every field except
     /// `partner_solutions`, where it is a business portfolio id. Accepted

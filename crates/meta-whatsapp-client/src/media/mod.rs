@@ -147,6 +147,7 @@ impl Client {
 /// `Debug` shows [`url`](Self::url) as [`SecretUrl`](crate::common::SecretUrl)
 /// shows a link: scheme, host and path, every query value `<redacted>`.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct MediaInfo {
     /// Always `whatsapp`.
     #[serde(default)]

@@ -166,6 +166,7 @@ fn is_alpha2(code: &str) -> bool {
 /// `{"key", "value"}` objects although it is written as a map; both shapes
 /// are read into the map here, and an empty list is an empty map.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[non_exhaustive]
 pub struct OptimizationSpec {
     /// Max price per 1,000 deliveries; `None` on a rate-card template.
     #[serde(default)]
@@ -246,6 +247,7 @@ impl DuplicateTemplate {
 /// says links the duplicate back to its source (its example omits it,
 /// hence the `Option`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DuplicatedTemplate {
     /// The duplicate's template id.
     pub id: TemplateId,
@@ -302,6 +304,7 @@ impl ReachEstimateQuery {
 /// (`GET /{WABA_ID}/reachestimate`). Meta's estimates come from history and
 /// are for planning only: they guarantee nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReachEstimate {
     /// The WABA's currency (`USD`): the unit of every amount below is its
     /// smallest unit.
@@ -314,6 +317,7 @@ pub struct ReachEstimate {
 
 /// One max price of a [`ReachEstimate`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReachEstimatePoint {
     /// Max price per 1,000 deliveries, in the currency's smallest unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -121,6 +121,7 @@ impl From<FlowValidationError> for FlowIssue {
             column_start,
             column_end,
             pointers,
+            ..
         } = error;
         Self {
             error,
@@ -183,6 +184,7 @@ impl From<FlowDetails> for FlowInfo {
             preview: _,
             whatsapp_business_account: _,
             application: _,
+            ..
         } = flow;
         Self {
             id,

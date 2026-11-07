@@ -290,6 +290,7 @@ impl From<CommerceSettings> for Settings {
             id,
             is_cart_enabled,
             is_catalog_visible,
+            ..
         } = settings;
         Self {
             id,

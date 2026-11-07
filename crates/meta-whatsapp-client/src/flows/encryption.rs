@@ -54,6 +54,7 @@ open_enum! {
 
 /// The stored business public key.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct BusinessPublicKey {
     /// The PEM public key, when one is stored.
     #[serde(default)]

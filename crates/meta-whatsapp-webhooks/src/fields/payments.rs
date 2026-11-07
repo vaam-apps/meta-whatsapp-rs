@@ -57,6 +57,7 @@ use time::OffsetDateTime;
 /// An amount of money: `value` is the amount multiplied by `offset`
 /// (₹210.00 is `value` 21000, `offset` 100).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PaymentAmount {
     /// The amount times `offset`.
     pub value: u64,
@@ -72,6 +73,7 @@ pub struct PaymentAmount {
 /// `udf4` for `PayU`, `additional_info1` to `additional_info7` for
 /// `BillDesk`, `extra1` and `extra2` for Zaakpay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StatusPayment {
     /// The `reference_id` of the `order_details` message.
     pub reference_id: String,
@@ -189,6 +191,7 @@ open_enum! {
 
 /// `payment.transaction`: one attempt to pay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PaymentTransaction {
     /// The payment gateway's order id.
     pub id: String,
@@ -233,6 +236,7 @@ pub struct PaymentTransaction {
 
 /// `transaction.method`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TransactionMethod {
     /// The kind of payment method.
     #[serde(rename = "type")]
@@ -242,6 +246,7 @@ pub struct TransactionMethod {
 /// `transaction.error`: the gateway's reason for a failure, passed on by
 /// Meta.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TransactionError {
     /// The gateway's error code.
     pub code: String,
@@ -273,6 +278,7 @@ open_enum! {
 
 /// `payment.refunds[]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PaymentRefund {
     /// The refund's id.
     pub id: String,
@@ -319,6 +325,7 @@ open_enum! {
 /// their confirmation, not a payment: charge the card through your PSP,
 /// then send an `order_status` message with the payment's status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PaymentMethodReply {
     /// The payment method chosen.
     pub payment_method: PaymentMethodKind,

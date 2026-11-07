@@ -218,6 +218,7 @@ impl From<ComparisonMetric> for ComparisonMetricView {
             order_by_relative_metric,
             number_values,
             string_values,
+            ..
         } = metric;
         Self {
             metric: wire(Some(&metric)),
@@ -329,6 +330,7 @@ impl From<ArchiveResult> for TemplatesArchived {
         let ArchiveResult {
             archived_templates,
             failed_templates,
+            ..
         } = result;
         Self {
             archived_templates: archived_templates
@@ -359,6 +361,7 @@ impl From<UnarchiveResult> for TemplatesUnarchived {
         let UnarchiveResult {
             unarchived_templates,
             failed_templates,
+            ..
         } = result;
         Self {
             unarchived_templates: unarchived_templates
@@ -546,6 +549,7 @@ impl From<LibraryTemplate> for LibraryTemplateView {
             body_params,
             body_param_types,
             buttons,
+            ..
         } = entry;
         Self {
             id,
@@ -776,6 +780,7 @@ impl From<MigrationResult> for TemplateMigrationResult {
         let MigrationResult {
             migrated_templates,
             failed_templates,
+            ..
         } = result;
         Self {
             migrated_templates: migrated_templates
@@ -864,8 +869,7 @@ pub(crate) async fn migrate_templates(
 
 #[cfg(test)]
 mod tests {
-    use meta_whatsapp_rs::client::templates::{ComparisonMetricKind, ComparisonValue};
-    use meta_whatsapp_rs::core::ids::TemplateId;
+        use meta_whatsapp_rs::core::ids::TemplateId;
     use serde_json::json;
 
     use super::*;
@@ -878,19 +882,16 @@ mod tests {
     /// Meta's names. Decisive: each field of the conversions.
     #[test]
     fn every_field_of_metas_answers_is_answered() {
-        let metric = ComparisonMetric {
-            metric: ComparisonMetricKind::MessageSends,
-            kind: "NUMBER_VALUES".to_owned(),
-            order_by_relative_metric: Some(vec![id("1533406637136032")]),
-            number_values: Some(vec![ComparisonValue {
-                key: id("5289179717853347"),
-                value: 1273,
-            }]),
-            string_values: Some(vec![ComparisonValue {
-                key: id("5289179717853347"),
-                value: "UNKNOWN_BLOCK_REASON".to_owned(),
-            }]),
-        };
+        // The library's answers are `#[non_exhaustive]` (roadmap L20b): read
+        // from Meta's JSON, as the library does.
+        let metric: ComparisonMetric = serde_json::from_value(json!({
+            "metric": "MESSAGE_SENDS",
+            "type": "NUMBER_VALUES",
+            "order_by_relative_metric": ["1533406637136032"],
+            "number_values": [{"key": "5289179717853347", "value": 1273}],
+            "string_values": [{"key": "5289179717853347", "value": "UNKNOWN_BLOCK_REASON"}],
+        }))
+        .unwrap();
         assert_eq!(
             serde_json::to_value(ComparisonMetricView::from(metric)).unwrap(),
             json!({"metric": "MESSAGE_SENDS", "type": "NUMBER_VALUES",
@@ -901,28 +902,36 @@ mod tests {
         let failed: BTreeMap<TemplateId, String> =
             [(id("1019496902803242"), "Incorrect category".to_owned())].into();
         assert_eq!(
-            serde_json::to_value(TemplateMigrationResult::from(MigrationResult {
-                migrated_templates: vec![id("1473688840035974")],
-                failed_templates: failed.clone(),
-            }))
+            serde_json::to_value(TemplateMigrationResult::from(
+                serde_json::from_value::<MigrationResult>(json!({
+                    "migrated_templates": ["1473688840035974"],
+                    "failed_templates": failed.clone(),
+                }))
+                .unwrap(),
+            ))
             .unwrap(),
             json!({"migrated_templates": ["1473688840035974"],
                    "failed_templates": {"1019496902803242": "Incorrect category"}})
         );
         assert_eq!(
-            serde_json::to_value(TemplatesArchived::from(ArchiveResult {
-                archived_templates: vec![id("1473688840035974")],
-                failed_templates: failed.clone(),
-            }))
+            serde_json::to_value(TemplatesArchived::from(
+                serde_json::from_value::<ArchiveResult>(json!({
+                    "archived_templates": ["1473688840035974"],
+                    "failed_templates": failed.clone(),
+                }))
+                .unwrap(),
+            ))
             .unwrap(),
             json!({"archived_templates": ["1473688840035974"],
                    "failed_templates": {"1019496902803242": "Incorrect category"}})
         );
         assert_eq!(
-            serde_json::to_value(TemplatesUnarchived::from(UnarchiveResult {
-                unarchived_templates: vec![id("1473688840035974")],
-                failed_templates: failed,
-            }))
+            serde_json::to_value(TemplatesUnarchived::from(
+                serde_json::from_value::<UnarchiveResult>(json!({
+                    "unarchived_templates": ["1473688840035974"],
+                    "failed_templates": failed,
+                }))
+                .unwrap()))
             .unwrap(),
             json!({"unarchived_templates": ["1473688840035974"],
                    "failed_templates": {"1019496902803242": "Incorrect category"}})

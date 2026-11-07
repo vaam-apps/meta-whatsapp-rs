@@ -46,6 +46,7 @@ use super::messages::{InboundMessage, Status};
 
 /// `value` of a `messaging_handovers` change: a thread changed owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MessagingHandoversValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +88,7 @@ impl MessagingHandoversValue {
 
 /// `sender` of a handover: the WhatsApp user.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HandoverSender {
     /// The user's phone number; optional per the page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +97,7 @@ pub struct HandoverSender {
 
 /// `recipient` of a handover: the business phone number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct HandoverRecipient {
     /// The business phone number id.
     #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]
@@ -144,6 +147,7 @@ open_enum! {
 /// `control_passed` / `control_taken`: who held the thread and who holds it
 /// now. Every property is optional per the page.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Handover {
     /// App that held the thread. Deprecated by Meta: read
     /// [`Self::previous_owner_role`].
@@ -195,6 +199,7 @@ open_enum! {
 /// ([`super::MessagesValue::conversation_context`]). Model-generated prose:
 /// show it to a person, never parse it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ConversationContext {
     /// Kind of context.
     #[serde(rename = "type")]
@@ -206,6 +211,7 @@ pub struct ConversationContext {
 
 /// `conversation_context.summary`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContextSummary {
     /// The summary text.
     pub text: String,
@@ -214,6 +220,7 @@ pub struct ContextSummary {
 /// `value` of a `standby` change: copies for a partner that observes a
 /// thread it does not own.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StandbyValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +233,7 @@ pub struct StandbyValue {
 
 /// `value.standby`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Standby {
     /// The senders of [`Self::messages`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -251,6 +259,7 @@ impl Standby {
 /// `standby.message_echoes[]`: a message the thread's owner sent through
 /// Cloud API.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StandbyEcho {
     /// Message id assigned at send time.
     pub id: MessageId,
