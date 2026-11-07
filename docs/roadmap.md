@@ -7390,7 +7390,7 @@ or WABA fails the family's own cross-tenant test).
     plants one and finds it in no line), refused with nothing sent when the
     setting is off if it acts for a business; no other route calls it.
   - **Landed (all but the GIF header; the item stays open for it):** three
-    admin routes, OpenAPI additive only (three paths, five schemas). `POST
+    admin routes, OpenAPI additive only (three paths, six schemas). `POST
     /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
     agreement's state with the operator's `token` in the body (a system or
     business token, used for the one call, stored nowhere) and answers

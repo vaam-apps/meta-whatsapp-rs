@@ -121,7 +121,11 @@ async fn with_the_legal_acts_off_the_invitation_is_refused_without_a_request_to_
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
         assert_eq!(reply.code(), "feature_not_available");
     }
-    assert!(f.h.graph.requests().is_empty(), "{:?}", f.h.graph.requests());
+    assert!(
+        f.h.graph.requests().is_empty(),
+        "{:?}",
+        f.h.graph.requests()
+    );
     assert_eq!(f.h.graph.remaining(), 0);
     // A tenant's key, whatever its scopes, is not an admin's.
     let tenant = f.h.tenant_key(TENANT, &common::ALL_SCOPES).await;
@@ -183,7 +187,7 @@ async fn the_invitation_checks_its_inputs_and_needs_the_partner_credentials() {
     let f = fixture(true, true).await;
     for (call, field) in [
         (onboard("not-an-id", &f), "business_id"),
-        (onboard("12 34", &f), "business_id"),
+        (onboard("12x34", &f), "business_id"),
         (
             onboard(END_BUSINESS, &f).json(&json!({"solution_id": "sol/1"})),
             "solution_id",
@@ -257,13 +261,17 @@ async fn the_client_wabas_are_listed_by_status_with_the_pages_request() {
                "next_cursor": "QVFJ"})
     );
     f.h.graph.push_json(200, json!({"data": []}));
-    let last = f.h.call(wabas("?onboarding_status=ELIGIBLE&cursor=QVFJ", &f)).await;
+    let last =
+        f.h.call(wabas("?onboarding_status=ELIGIBLE&cursor=QVFJ", &f))
+            .await;
     assert_eq!(last.json(), json!({"data": [], "next_cursor": null}));
     f.h.graph.push_json(200, json!({"data": []}));
     let both = f.h.call(wabas("", &f)).await;
     assert_eq!(both.status, StatusCode::OK, "{}", both.text);
     f.h.graph.push_json(200, json!({"data": []}));
-    let onboarded = f.h.call(wabas("?onboarding_status=ONBOARDED,ELIGIBLE", &f)).await;
+    let onboarded =
+        f.h.call(wabas("?onboarding_status=ONBOARDED,ELIGIBLE", &f))
+            .await;
     assert_eq!(onboarded.status, StatusCode::OK, "{}", onboarded.text);
     let requests = f.h.graph.requests();
     assert_eq!(requests.len(), 4);
@@ -285,8 +293,14 @@ async fn the_client_wabas_are_listed_by_status_with_the_pages_request() {
     assert_eq!(filtering(&requests[0]), one(json!(["ELIGIBLE"])));
     assert_eq!(requests[0].query("after"), None);
     assert_eq!(requests[1].query("after").as_deref(), Some("QVFJ"));
-    assert_eq!(filtering(&requests[2]), one(json!(["ELIGIBLE", "ONBOARDED"])));
-    assert_eq!(filtering(&requests[3]), one(json!(["ONBOARDED", "ELIGIBLE"])));
+    assert_eq!(
+        filtering(&requests[2]),
+        one(json!(["ELIGIBLE", "ONBOARDED"]))
+    );
+    assert_eq!(
+        filtering(&requests[3]),
+        one(json!(["ONBOARDED", "ELIGIBLE"]))
+    );
     assert_eq!(f.h.graph.remaining(), 0);
 }
 
@@ -388,6 +402,9 @@ async fn the_agreements_state_failures_keep_the_signer_and_the_token_out() {
         json!({"status": SIGNER_EMAIL, "signer_name": SIGNER_NAME, "extra": [SIGNER_EMAIL]}),
     );
     let odd = f.h.call(state(BUSINESS, &json!(BUSINESS_TOKEN), &f)).await;
+    // A status outside the three the page spells is not echoed.
+    assert_eq!(odd.status, StatusCode::OK, "{}", odd.text);
+    assert_eq!(odd.json(), json!({"status": null}));
     f.h.graph.push_bytes(
         502,
         "text/html",
@@ -397,7 +414,13 @@ async fn the_agreements_state_failures_keep_the_signer_and_the_token_out() {
     f.h.graph.push_json(200, json!([SIGNER_EMAIL]));
     let array = f.h.call(state(BUSINESS, &json!(BUSINESS_TOKEN), &f)).await;
     for reply in [&refused, &odd, &html, &array] {
-        for planted in [SIGNER_NAME, SIGNER_EMAIL, "Jane", "bsp.example", BUSINESS_TOKEN] {
+        for planted in [
+            SIGNER_NAME,
+            SIGNER_EMAIL,
+            "Jane",
+            "bsp.example",
+            BUSINESS_TOKEN,
+        ] {
             assert!(!reply.text.contains(planted), "{}", reply.text);
         }
     }
@@ -506,7 +529,10 @@ async fn no_other_route_sends_the_invitation_or_the_agreement() {
     for request in asked {
         let path = request.path();
         assert!(!path.contains("onboard_partners_to_mm_lite"), "{path}");
-        assert!(!path.contains("client_whatsapp_business_accounts"), "{path}");
+        assert!(
+            !path.contains("client_whatsapp_business_accounts"),
+            "{path}"
+        );
         assert!(!path.contains("max_price_agreements"), "{path}");
     }
 }
@@ -541,7 +567,8 @@ fn only_the_partners_core_names_the_invitation() {
                     .filter(|line| !line.trim_start().starts_with("//"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                if code.contains(".request_onboarding(") || code.contains("onboard_partners_to_mm_lite")
+                if code.contains(".request_onboarding(")
+                    || code.contains("onboard_partners_to_mm_lite")
                 {
                     found.push(path.strip_prefix(crates).unwrap().display().to_string());
                 }

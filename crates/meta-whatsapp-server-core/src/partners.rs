@@ -185,7 +185,9 @@ fn admin_act(action: PartnerAction) -> Option<AdminOperation> {
         PartnerAction::AcceptSolutionDeactivation => {
             Some(AdminOperation::AcceptPartnerSolutionDeactivation)
         }
-        PartnerAction::RequestMarketingOnboarding => Some(AdminOperation::RequestMarketingOnboarding),
+        PartnerAction::RequestMarketingOnboarding => {
+            Some(AdminOperation::RequestMarketingOnboarding)
+        }
         PartnerAction::ListBusinessVerifications
         | PartnerAction::CreateSolution
         | PartnerAction::ListSolutions

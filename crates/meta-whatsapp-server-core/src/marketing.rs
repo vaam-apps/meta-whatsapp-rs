@@ -61,9 +61,9 @@ use std::fmt;
 
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::marketing::{
-    BidStrategy, DateInterval, DuplicateTemplate, MAX_COUNTRY_MULTIPLIER, MAX_COUNTRY_MULTIPLIERS,
-    MarketingOptions, MaxPrice, MaxPriceAgreementSigner, ProductPolicy, ReachEstimateQuery,
-    WelcomeMessage, WelcomeSequence, WelcomeSequenceUpdate,
+    AgreementStatus, BidStrategy, DateInterval, DuplicateTemplate, MAX_COUNTRY_MULTIPLIER,
+    MAX_COUNTRY_MULTIPLIERS, MarketingOptions, MaxPrice, MaxPriceAgreementSigner, ProductPolicy,
+    ReachEstimateQuery, WelcomeMessage, WelcomeSequence, WelcomeSequenceUpdate,
 };
 use meta_whatsapp_rs::client::messages::{MessageContent, OutboundMessage};
 use meta_whatsapp_rs::client::templates::TemplateMessage;
@@ -1198,7 +1198,8 @@ pub struct AgreementSigned {
 /// are not here (roadmap M5h2, design D430).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgreementState {
-    /// `none`, `pending` or `accepted`, as Meta writes it.
+    /// `none`, `pending` or `accepted`, as Meta writes it; `None` for any
+    /// other value (the only three the page spells are kept).
     pub status: Option<String>,
 }
 
@@ -1381,7 +1382,15 @@ impl MaxPriceAgreements<'_> {
             .await
         {
             Ok(agreement) => Ok(AgreementState {
-                status: wire(Some(&agreement.status)),
+                // Only the three values the page spells: the field is
+                // Meta's, an open value could hold anything (a signer
+                // among it), and the signer is in no answer.
+                status: match agreement.status {
+                    AgreementStatus::NoAgreement
+                    | AgreementStatus::Pending
+                    | AgreementStatus::Accepted => wire(Some(&agreement.status)),
+                    _ => None,
+                },
             }),
             Err(error) => {
                 let api = ServiceError::from_library_withholding_texts(&error);

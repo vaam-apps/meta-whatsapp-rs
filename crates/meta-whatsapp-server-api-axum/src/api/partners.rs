@@ -42,20 +42,19 @@ use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::partners::{
-    AssignedWabaView, BillingMigrationView, BusinessVerificationView, ClientBusinessView,
-    CLIENT_WABA_STATUSES, ClientWabaView, MarketingOnboardingRequest,
-    DocumentInput, MigrationIntentView, NewSolution, Paged, Partners, SolutionPartnerView,
-    SolutionQuery, SolutionView, SubmissionQuery, SubmissionView, VerificationReceipt,
-    VerificationRequest,
+    AssignedWabaView, BillingMigrationView, BusinessVerificationView, CLIENT_WABA_STATUSES,
+    ClientBusinessView, ClientWabaView, DocumentInput, MarketingOnboardingRequest,
+    MigrationIntentView, NewSolution, Paged, Partners, SolutionPartnerView, SolutionQuery,
+    SolutionView, SubmissionQuery, SubmissionView, VerificationReceipt, VerificationRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
 use super::common::ApiJson;
+use super::messages::OptionalJson;
 use super::templates::ApiQuery;
 use crate::auth::{AdminCaller, Authorizer, Caller, OwnedWaba};
-use super::messages::OptionalJson;
 use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;

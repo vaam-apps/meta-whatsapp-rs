@@ -65,7 +65,8 @@ async fn the_invitation_is_audited_and_the_signer_is_in_no_line() {
         .json(&json!({ "token": token }))
     };
 
-    h.graph.push_json(200, json!({"request_id": "893436979557695"}));
+    h.graph
+        .push_json(200, json!({"request_id": "893436979557695"}));
     assert_eq!(h.call(onboard()).await.status, StatusCode::OK);
     h.graph.push_json(
         400,
