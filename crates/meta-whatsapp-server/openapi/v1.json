@@ -233,6 +233,123 @@
         ]
       }
     },
+    "/v1/admin/businesses/{business_id}/max-price-agreement/state": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /v1/admin/businesses/{business_id}/max-price-agreement/state`:\nread the state of Meta's max price beta agreement for a business\nportfolio. A read made with `POST` because the operator's `token`\ntravels in the body. Meta's answer names the signer (name and email);\nthe answer here, the logs and the errors never do. It signs nothing, so\n`WA_SERVER_LEGAL_ACTS` does not gate it; admin key only.",
+        "operationId": "read_max_price_agreement",
+        "parameters": [
+          {
+            "name": "business_id",
+            "in": "path",
+            "description": "Business portfolio id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadMaxPriceAgreement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The agreement's state, without the signer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaxPriceAgreementState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (not an admin key), or Meta's refusal (the token's holder has no access to the business)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `business_id`, `token` or `body`; Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/numbers/{phone_number_id}/group-records": {
       "delete": {
         "tags": [
@@ -554,6 +671,140 @@
         ]
       }
     },
+    "/v1/admin/partners/businesses/{business_id}/marketing-onboarding": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`:\nthe partner Intent API. Meta emails every admin of the business an\ninvitation to accept the Marketing Messages API's Terms of Service, and\nkeeps contacting them until they accept or decline, and sets a\nmigration intent on its on-behalf-of WABAs that lack one. **Treated as\na legal act** (it acts for the business and cannot be recalled; the\ninvitation is not the acceptance, which a person gives in Meta Business\nSuite): off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`,\naudited, sent once. Uses the deployment's partner credentials.",
+        "operationId": "request_marketing_onboarding",
+        "parameters": [
+          {
+            "name": "business_id",
+            "in": "path",
+            "description": "The end business portfolio to invite",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional; an empty body sends no solution",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RequestMarketingOnboarding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Meta sent the request; audited `marketing_onboarding_requested`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketingOnboardingRequested"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden` (not an admin key), or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `business_id`, `solution_id` or `body`; Meta's refusal (an ineligible business, a duplicate request)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent` (the request is never sent again by the service)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the invitation may have been sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/partners/client-businesses": {
       "get": {
         "tags": [
@@ -627,6 +878,112 @@
           },
           "422": {
             "description": "`invalid_request` on `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/client-wabas": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/client-wabas`: one page of the client WABAs\nshared with the deployment's business whose Marketing Messages API\nonboarding status is one of the requested.",
+        "operationId": "list_client_wabas",
+        "parameters": [
+          {
+            "name": "onboarding_status",
+            "in": "query",
+            "description": "Which onboarding statuses to list, comma separated: `ELIGIBLE`,\n`ONBOARDED` or both (the default). `ELIGIBLE` finds who the Intent\nAPI can onboard.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of client WABAs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientWabaList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `onboarding_status`, `cursor` or `query`",
             "content": {
               "application/json": {
                 "schema": {
@@ -31247,6 +31604,67 @@
           }
         }
       },
+      "ClientWaba": {
+        "type": "object",
+        "description": "A client WABA shared with the deployment's business.",
+        "required": [
+          "id",
+          "name",
+          "timezone_id",
+          "message_template_namespace"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The WABA's id."
+          },
+          "message_template_namespace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its template namespace."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "timezone_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its time zone id."
+          }
+        }
+      },
+      "ClientWabaList": {
+        "type": "object",
+        "description": "A page of the client WABAs shared with the deployment's business.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientWaba"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
       "CloudApiMarketing": {
         "type": "object",
         "description": "Whether marketing templates are blocked on Cloud API `/messages`.",
@@ -35406,6 +35824,19 @@
           }
         }
       },
+      "MarketingOnboardingRequested": {
+        "type": "object",
+        "description": "What Meta answered the partner Intent API.",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Meta's id of the request, for tracking."
+          }
+        }
+      },
       "MarketingOwnerBusiness": {
         "type": "object",
         "description": "The Terms of Service state of the business that owns the WABA.",
@@ -35459,6 +35890,22 @@
               "null"
             ],
             "description": "`pending` (Meta emailed the acceptance link), as Meta writes it."
+          }
+        }
+      },
+      "MaxPriceAgreementState": {
+        "type": "object",
+        "description": "Where the business is with the agreement. **The signer is not in it**:\nMeta's answer names the signer, and the service keeps that out.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`none`, `pending` or `accepted`, as Meta writes it."
           }
         }
       },
@@ -37766,6 +38213,20 @@
         },
         "additionalProperties": false
       },
+      "ReadMaxPriceAgreement": {
+        "type": "object",
+        "description": "The token to read an agreement's state with.",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "A system token or a business token of the business. Used for this\ncall only; never stored. It travels in the body so that no URL,\nheader log or access log holds it."
+          }
+        },
+        "additionalProperties": false
+      },
       "RefundAmount": {
         "type": "object",
         "description": "A refund's amount.",
@@ -38138,6 +38599,20 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "RequestMarketingOnboarding": {
+        "type": "object",
+        "description": "`POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`.\nThe body may be empty.",
+        "properties": {
+          "solution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A Multi-Partner Solution to migrate the business's on-behalf-of\nWABAs to, rather than leave them shared with the partner alone."
           }
         },
         "additionalProperties": false

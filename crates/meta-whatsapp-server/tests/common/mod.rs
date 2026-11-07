@@ -1473,6 +1473,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "signer_email": "jane.doe@example.com",
             "token": "EAAA-sample-business-token"
         }),
+        // Roadmap M5h2: the agreement's state read carries the token.
+        ("POST", "/v1/admin/businesses/{business_id}/max-price-agreement/state") => {
+            serde_json::json!({"token": "EAAA-sample-business-token"})
+        }
         // Roadmap M5e: the calling settings (`calling/call-settings`), a
         // call to a user, and the answers to a user's call.
         ("PATCH", "/v1/numbers/{pn}/call-settings") => {

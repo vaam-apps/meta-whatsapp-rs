@@ -15,6 +15,8 @@
 //! | `POST /v1/admin/partners/solutions/{id}/accept`, `…/reject` | `POST /{solution}/accept` (**legal act**), `…/reject` (**legal act**) |
 //! | `POST /v1/admin/partners/solutions/{id}/deactivation-request`, `…/accept`, `…/reject` | `POST /{solution}/send_deactivation_request`, `…/accept_deactivation_request` (**legal act**), `…/reject_deactivation_request` |
 //! | `GET /v1/admin/partners/users/{user_id}/wabas` | `GET /{user}/assigned_whatsapp_business_accounts` |
+//! | `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | `POST /{business}/onboard_partners_to_mm_lite` (**legal act**: an invitation to a business's admins to accept the Marketing Messages API's terms; roadmap M5h2) |
+//! | `GET /v1/admin/partners/client-wabas` | `GET /{business}/client_whatsapp_business_accounts?filtering=…` (roadmap M5h2) |
 //!
 //! **The tenant's routes** (scope `partners`, a WABA of its own, its
 //! token):
@@ -41,6 +43,7 @@ use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::partners::{
     AssignedWabaView, BillingMigrationView, BusinessVerificationView, ClientBusinessView,
+    CLIENT_WABA_STATUSES, ClientWabaView, MarketingOnboardingRequest,
     DocumentInput, MigrationIntentView, NewSolution, Paged, Partners, SolutionPartnerView,
     SolutionQuery, SolutionView, SubmissionQuery, SubmissionView, VerificationReceipt,
     VerificationRequest,
@@ -52,6 +55,7 @@ use utoipa::ToSchema;
 use super::common::ApiJson;
 use super::templates::ApiQuery;
 use crate::auth::{AdminCaller, Authorizer, Caller, OwnedWaba};
+use super::messages::OptionalJson;
 use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;
@@ -280,6 +284,70 @@ page_view!(
     ClientBusinessBody,
     "A page of the businesses onboarded through the deployment's app."
 );
+
+/// A client WABA shared with the deployment's business.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ClientWaba)]
+pub struct ClientWabaBody {
+    /// The WABA's id.
+    pub id: String,
+    /// Its name.
+    #[schema(required = true)]
+    pub name: Option<String>,
+    /// Its time zone id.
+    #[schema(required = true)]
+    pub timezone_id: Option<String>,
+    /// Its template namespace.
+    #[schema(required = true)]
+    pub message_template_namespace: Option<String>,
+}
+
+page_view!(
+    ClientWabaList,
+    ClientWabaList,
+    ClientWabaBody,
+    "A page of the client WABAs shared with the deployment's business."
+);
+
+/// What Meta answered the partner Intent API.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = MarketingOnboardingRequested)]
+pub struct MarketingOnboardingBody {
+    /// Meta's id of the request, for tracking.
+    pub request_id: String,
+}
+
+impl From<MarketingOnboardingRequest> for MarketingOnboardingBody {
+    fn from(requested: MarketingOnboardingRequest) -> Self {
+        Self {
+            request_id: requested.request_id,
+        }
+    }
+}
+
+/// `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`.
+/// The body may be empty.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = RequestMarketingOnboarding)]
+pub struct RequestMarketingOnboardingBody {
+    /// A Multi-Partner Solution to migrate the business's on-behalf-of
+    /// WABAs to, rather than leave them shared with the partner alone.
+    pub solution_id: Option<String>,
+}
+
+/// `?onboarding_status=` and `?cursor=`.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct ClientWabasQuery {
+    /// Which onboarding statuses to list, comma separated: `ELIGIBLE`,
+    /// `ONBOARDED` or both (the default). `ELIGIBLE` finds who the Intent
+    /// API can onboard.
+    pub onboarding_status: Option<String>,
+    /// `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
 
 /// A WABA assigned to a user.
 #[derive(Debug, Serialize, ToSchema)]
@@ -1010,6 +1078,91 @@ pub(crate) async fn reject_partner_solution_deactivation(
         .reject_solution_deactivation(state.authz(), &id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`:
+/// the partner Intent API. Meta emails every admin of the business an
+/// invitation to accept the Marketing Messages API's Terms of Service, and
+/// keeps contacting them until they accept or decline, and sets a
+/// migration intent on its on-behalf-of WABAs that lack one. **Treated as
+/// a legal act** (it acts for the business and cannot be recalled; the
+/// invitation is not the acceptance, which a person gives in Meta Business
+/// Suite): off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`,
+/// audited, sent once. Uses the deployment's partner credentials.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/partners/businesses/{business_id}/marketing-onboarding",
+    tag = "partners",
+    security(("api_key" = [])),
+    params(("business_id" = String, Path, description = "The end business portfolio to invite")),
+    request_body(content = Option<RequestMarketingOnboardingBody>, description = "Optional; an empty body sends no solution"),
+    responses(
+        (status = 200, description = "Meta sent the request; audited `marketing_onboarding_requested`", body = MarketingOnboardingBody),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden` (not an admin key), or Meta's refusal", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `business_id`, `solution_id` or `body`; Meta's refusal (an ineligible business, a duplicate request)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody),
+        (status = 502, description = "Meta failed: see `may_have_been_sent` (the request is never sent again by the service)", body = ErrorBody),
+        (status = 504, description = "`timeout`: the invitation may have been sent", body = ErrorBody),
+    )
+)]
+pub(crate) async fn request_marketing_onboarding(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    _gate: LegalActsOn,
+    Path(business_id): Path<String>,
+    OptionalJson(body): OptionalJson<RequestMarketingOnboardingBody>,
+) -> Result<Json<MarketingOnboardingBody>, ApiError> {
+    let requested = state
+        .signups()
+        .partners(state.authz(), &admin, state.settings().legal_acts)?
+        .observed_by(state.metrics())
+        .request_marketing_onboarding(state.authz(), &business_id, body.solution_id.as_deref())
+        .await?;
+    Ok(Json(requested.into()))
+}
+
+/// `GET /v1/admin/partners/client-wabas`: one page of the client WABAs
+/// shared with the deployment's business whose Marketing Messages API
+/// onboarding status is one of the requested.
+#[utoipa::path(
+    get,
+    path = "/v1/admin/partners/client-wabas",
+    tag = "partners",
+    security(("api_key" = [])),
+    params(ClientWabasQuery),
+    responses(
+        (status = 200, description = "One page of client WABAs", body = ClientWabaList),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`: not an admin key", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `onboarding_status`, `cursor` or `query`", body = ErrorBody),
+        (status = 502, description = "Meta refused or failed", body = ErrorBody),
+    )
+)]
+pub(crate) async fn list_client_wabas(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    ApiQuery(query): ApiQuery<ClientWabasQuery>,
+) -> Result<Json<ClientWabaList>, ApiError> {
+    let statuses: Vec<String> = query.onboarding_status.map_or_else(
+        || CLIENT_WABA_STATUSES.map(str::to_owned).to_vec(),
+        |statuses| statuses.split(',').map(str::to_owned).collect(),
+    );
+    let wabas = state
+        .signups()
+        .partners(state.authz(), &admin, state.settings().legal_acts)?
+        .observed_by(state.metrics())
+        .client_wabas(state.authz(), &statuses, query.cursor)
+        .await?;
+    let (data, next_cursor) = page(wabas, |waba: ClientWabaView| ClientWabaBody {
+        id: waba.id,
+        name: waba.name,
+        timezone_id: waba.timezone_id,
+        message_template_namespace: waba.message_template_namespace,
+    });
+    Ok(Json(ClientWabaList { data, next_cursor }))
 }
 
 /// `GET /v1/admin/partners/users/{user_id}/wabas`: one page of the WABAs

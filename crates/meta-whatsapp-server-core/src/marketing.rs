@@ -13,6 +13,7 @@
 //! | | [`Marketing::template_max_price`], [`Marketing::set_template_max_price`], [`Marketing::clear_template_max_price`] | the template's lookup, then `GET`, `POST /{template}` |
 //! | | [`Marketing::create_sequence`], [`Marketing::sequences`], [`Marketing::sequence`], [`Marketing::update_sequence`], [`Marketing::delete_sequence`] | `POST`, `GET`, `DELETE /{waba}/welcome_message_sequences` |
 //! | [`MaxPriceAgreements`] (an operator) | [`MaxPriceAgreements::sign`] | `POST /{business}/max_price_agreements` |
+//! | | [`MaxPriceAgreements::state`] | `GET /{business}/max_price_agreements` (a read, without the signer) |
 //!
 //! Pages: `marketing-messages/send-marketing-messages`,
 //! `marketing-messages/onboarding`, `marketing-messages/pricing`,
@@ -1191,6 +1192,16 @@ pub struct AgreementSigned {
     pub status: Option<String>,
 }
 
+/// Where a business portfolio is with the max price beta agreement,
+/// **without the signer**: Meta's read answers the signer's name and
+/// email too (`signer_name`, `signer_email`), which are personal data and
+/// are not here (roadmap M5h2, design D430).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgreementState {
+    /// `none`, `pending` or `accepted`, as Meta writes it.
+    pub status: Option<String>,
+}
+
 /// The operator's act of signing Meta's max price beta agreement for a
 /// business portfolio (roadmap M5h; design D231): **a legal act**, off
 /// until [`Self::with_legal_acts`] (the setting `WA_SERVER_LEGAL_ACTS`),
@@ -1329,6 +1340,53 @@ impl<'a> MaxPriceAgreements<'a> {
                         business.as_str(),
                         Outcome::Unanswered,
                     );
+                }
+                Err(api)
+            }
+        }
+    }
+}
+
+impl MaxPriceAgreements<'_> {
+    /// Read the state of Meta's max price beta agreement for the business
+    /// portfolio `business_id` (`GET /{business}/max_price_agreements`),
+    /// with `token` (a system token or a business token of the business:
+    /// used for this call only, never stored). A read: it signs nothing,
+    /// so the legal acts setting does not gate it (design D430), and it is
+    /// not audited (it changes nothing). Meta's answer names the signer;
+    /// only the status is kept, and Meta's texts, which quote the signer,
+    /// are withheld from errors.
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `business_id` or `token`; Meta's refusal or
+    /// failure as its code and the service's kind, never Meta's text.
+    pub async fn state(
+        &self,
+        business_id: &str,
+        token: AccessToken,
+    ) -> Result<AgreementState, ServiceError> {
+        graph_id("business_id", business_id)?;
+        let business =
+            BusinessId::new(business_id).map_err(|_| ServiceError::invalid("business_id"))?;
+        if token.expose_secret().trim().is_empty() {
+            return Err(ServiceError::invalid("token"));
+        }
+        match self
+            .authz
+            .client()
+            .with_token(token)
+            .marketing_business(business)
+            .max_price_agreement()
+            .await
+        {
+            Ok(agreement) => Ok(AgreementState {
+                status: wire(Some(&agreement.status)),
+            }),
+            Err(error) => {
+                let api = ServiceError::from_library_withholding_texts(&error);
+                if error.graph().is_some() {
+                    self.observer.graph_error(api.code());
                 }
                 Err(api)
             }

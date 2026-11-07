@@ -158,6 +158,8 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::reseal_webhook_secrets))
         // Roadmap M5h: a legal act, gated by `WA_SERVER_LEGAL_ACTS`.
         .routes(routes!(marketing::sign_max_price_agreement))
+        // Roadmap M5h2: the agreement's state (a read, without the signer).
+        .routes(routes!(marketing::read_max_price_agreement))
         .routes(routes!(signup::reshare_credit_line))
         .routes(routes!(signup::complete_hosted_signup))
         .routes(routes!(
@@ -197,6 +199,10 @@ fn partners_admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(partners::accept_partner_solution_deactivation))
         .routes(routes!(partners::reject_partner_solution_deactivation))
         .routes(routes!(partners::list_assigned_wabas))
+        // Roadmap M5h2: the partner Intent API (a legal act) and the
+        // client WABAs by onboarding status.
+        .routes(routes!(partners::request_marketing_onboarding))
+        .routes(routes!(partners::list_client_wabas))
         .layer(DefaultBodyLimit::max(partners::MAX_VERIFICATION_BODY_BYTES))
 }
 

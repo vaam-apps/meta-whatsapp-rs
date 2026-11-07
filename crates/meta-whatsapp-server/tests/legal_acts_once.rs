@@ -160,6 +160,13 @@ fn call_of(act: Act, f: &Fixture) -> (Call, usize) {
         Act::Admin(AdminOperation::AcceptPartnerSolutionDeactivation) => {
             (admin(solution("/deactivation-request/accept")), 0)
         }
+        // Roadmap M5h2, design D431: the partner Intent API's invitation.
+        Act::Admin(AdminOperation::RequestMarketingOnboarding) => (
+            admin(format!(
+                "/v1/admin/partners/businesses/{BUSINESS}/marketing-onboarding"
+            )),
+            0,
+        ),
         other => panic!("{other:?} is a legal act with no call in this walk: add one"),
     }
 }
@@ -175,10 +182,10 @@ fn set_up(h: &Harness) {
 
 #[tokio::test]
 async fn the_walk_covers_the_gated_operations() {
-    // The walk's list is the gate's: the five tenant acts and the five of
+    // The walk's list is the gate's: the five tenant acts and the six of
     // the operator today.
     let acts = every_legal_act();
-    assert_eq!(acts.len(), 10, "{acts:?}");
+    assert_eq!(acts.len(), 11, "{acts:?}");
 }
 
 #[tokio::test]

@@ -1285,8 +1285,8 @@ M5j, design D250 to D257; Meta's `solution-providers/partner-led-business-verifi
   before the first release**, which no other scope grants) acts on a WABA
   of its own, with that WABA's token.
 
-**Legal and irreversible acts.** Seven calls state something about a
-business, cannot be taken back or move a business's assets. Each is taken
+**Legal and irreversible acts.** Eight calls state something about a
+business, act for it, cannot be taken back or move a business's assets. Each is taken
 only when the deployment sets `WA_SERVER_LEGAL_ACTS=on` (off by default):
 off, it is `403 feature_not_available` and nothing is asked of Meta; on, it
 is audited, and nothing in the service takes one by itself or as part of
@@ -1301,6 +1301,7 @@ under the owner's delegation, each swappable).
 | accepting a solution | Meta: "solutions cannot be declined once they have been accepted" | operator |
 | rejecting a solution | the reject page: "permanent and cannot be undone" | operator |
 | accepting a deactivation request | the solution becomes `DEACTIVATED` and onboards no client | operator |
+| the Marketing Messages API onboarding request (the partner Intent API) | emails every admin of a business an invitation to accept the Marketing Messages API's terms, and keeps contacting them; the invitation is not the acceptance (a person accepts in Meta Business Suite), but it acts for the business and cannot be recalled, so it is gated as the stricter choice (design D431) | operator |
 | a solution migration intent | asks a client to move its WABA to another partner; Meta accepts for the client after 90 days | tenant |
 | a billing migration's start | clones the WABA under a new currency or payment method | tenant |
 | a billing migration's resumption | switches the numbers' billing; the old WABA can no longer send | tenant |
@@ -1321,6 +1322,8 @@ deactivation request.
 | `POST …/solutions/{id}/accept`, `…/reject` | legal acts, `204` |
 | `POST …/solutions/{id}/deactivation-request`, `…/deactivation-request/accept`, `…/deactivation-request/reject` | ask, accept (a legal act), reject; `204` |
 | `GET /v1/admin/partners/users/{user_id}/wabas` | the WABAs assigned to a system user (`id`, `name`) |
+| `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | the partner Intent API (roadmap M5h2): email the end business's admins an invitation to accept the Marketing Messages API's terms, and set a migration intent on its on-behalf-of WABAs that lack one. Optional body `{solution_id}`; `200 {request_id}`. A legal act: `403 feature_not_available` with nothing asked of Meta unless `WA_SERVER_LEGAL_ACTS=on`; on, one request through the deployment's partner token, never replayed, audited `marketing_onboarding_requested`. Meta's `1752041` (already invited) and the other refusals are answered by their code, never their text |
+| `GET /v1/admin/partners/client-wabas?onboarding_status=&cursor=` | the client WABAs shared with the deployment's business, by Marketing Messages API onboarding status (`ELIGIBLE`, `ONBOARDED`, comma separated, both when absent): `{data: [{id, name, timezone_id, message_template_namespace}], next_cursor}`. `ELIGIBLE` finds who the Intent API can onboard |
 
 **The solution token is never served**: it is a bearer credential for a
 client's assets, so no route, answer, log or audit event carries it
@@ -2212,6 +2215,13 @@ lookup sent.
   audit event (`max_price_agreement_signed`, with the admin key's public id
   and the business, never the signer). Meta emails the signer an
   acceptance link, and a second call within five minutes is Meta's `429`.
+  The state is read, also by the operator, with
+  `POST /v1/admin/businesses/{business_id}/max-price-agreement/state` and
+  `{token}` (a read made with `POST` so that the token is in no URL):
+  `{status}` (`none`, `pending` or `accepted`). Meta's own answer names the
+  signer; the service's never does, and the signer is in no log or error.
+  Reading signs nothing, so the setting does not gate it and no audit
+  event is written.
   The signer's name and email are in no log, error or answer. Accepting
   the Marketing Messages API's Terms of Service is not a call: a person
   with full control of the portfolio does it in WhatsApp Manager.
@@ -2222,8 +2232,11 @@ lookup sent.
 - **A GIF header** is created through the templates route (`format: GIF`
   with its `example` handle); Meta's pages show no send-time parameter for
   it, so none is checked: the send takes the template as Meta's object.
-- **Not offered**: the agreement's state read, the partner Intent API and
-  the client WABAs listing (roadmap M5h2). Automatic events arrive as
+- **The partner Intent API and the client WABAs listing** are the
+  operator's partner routes, in the partner APIs section above (roadmap
+  M5h2).
+- **Not offered**: a GIF header's send-time parameter (above) and the
+  WhatsApp Manager visibility switch. Automatic events arrive as
   tenant events (`automatic_event_detected`), with no route. No call of
   these routes was run against Meta live.
 

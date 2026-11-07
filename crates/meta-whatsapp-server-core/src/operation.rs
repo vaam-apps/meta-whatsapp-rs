@@ -950,16 +950,25 @@ pub enum AdminOperation {
     /// design D250; pending the owner's confirmation before the first
     /// release).
     AcceptPartnerSolutionDeactivation,
+    /// `request_marketing_onboarding`: the partner Intent API, which emails
+    /// a business's admins an invitation to accept the Marketing Messages
+    /// API's Terms of Service and sets migration intents on its on-behalf-of
+    /// WABAs. The invitation is not the acceptance, but it acts for the
+    /// business and cannot be recalled: gated as a legal act, the stricter
+    /// choice (roadmap M5h2, design D431; pending the owner's confirmation
+    /// before the first release).
+    RequestMarketingOnboarding,
 }
 
 impl AdminOperation {
     /// Every admin operation that is a legal act.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::SignMaxPriceAgreement,
         Self::SubmitBusinessVerification,
         Self::AcceptPartnerSolution,
         Self::RejectPartnerSolution,
         Self::AcceptPartnerSolutionDeactivation,
+        Self::RequestMarketingOnboarding,
     ];
 
     /// Its id: the `operationId` of its route in the OpenAPI document.
@@ -970,6 +979,7 @@ impl AdminOperation {
             Self::AcceptPartnerSolution => "accept_partner_solution",
             Self::RejectPartnerSolution => "reject_partner_solution",
             Self::AcceptPartnerSolutionDeactivation => "accept_partner_solution_deactivation",
+            Self::RequestMarketingOnboarding => "request_marketing_onboarding",
         }
     }
 }

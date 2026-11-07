@@ -7389,6 +7389,44 @@ or WABA fails the family's own cross-tenant test).
     body is an admin route whose body and answer hold no signer (a test
     plants one and finds it in no line), refused with nothing sent when the
     setting is off if it acts for a business; no other route calls it.
+  - **Landed (all but the GIF header; the item stays open for it):** three
+    admin routes, OpenAPI additive only (three paths, five schemas). `POST
+    /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
+    agreement's state with the operator's `token` in the body (a system or
+    business token, used for the one call, stored nowhere) and answers
+    `{status}`: Meta's answer names the signer, so the service keeps only
+    the status (`server_core::marketing::MaxPriceAgreements::state`), and
+    the signer and the token are in no log, error, audit event or answer.
+    Not a legal act, so not gated, and not audited (D430). `POST
+    /v1/admin/partners/businesses/{business_id}/marketing-onboarding` is
+    the partner Intent API (`Partners::request_marketing_onboarding`, the
+    deployment's partner credentials, optional `solution_id`): the
+    invitation is not the acceptance, but it acts for a business, so it is
+    gated as a legal act by `number_settings::is_legal_admin_act` (a sixth
+    arm, `AdminOperation::RequestMarketingOnboarding`): off, `403
+    feature_not_available` before the body is read and with nothing sent;
+    on, one request through `legal_client`, never replayed, audited
+    `marketing_onboarding_requested` (D431–D433). `GET
+    /v1/admin/partners/client-wabas` lists the client WABAs shared with the
+    deployment's business by onboarding status (`Partners::client_wabas`,
+    D434). Tests: `tests/partner_rest_m5h2.rs` (each route's exact request
+    from Meta's pages, the planted signer in the answer, the setting off
+    refusing with nothing sent, the inputs, `no_other_route_sends_the_invitation_or_the_agreement`
+    and `only_the_partners_core_names_the_invitation` for M5.3),
+    `tests/partner_rest_m5h2_logs.rs` (the audit events; a planted signer,
+    token and Meta text in no line), `tests/legal_acts_once.rs` (the
+    invitation joins the walk: eleven acts), `tests/authz.rs` (M5.1 over
+    the two partner routes), the core's checks.
+  - **Proposed, not decided:** D430–D435, by the implementer; the
+    coordinator decides under the owner's delegation. Names pending the
+    owner's confirmation before the first release: the three paths, the
+    operation ids `read_max_price_agreement`, `request_marketing_onboarding`
+    and `list_client_wabas`, and the audit action
+    `marketing_onboarding_requested`.
+  - **Not done here:** a GIF header's send-time parameter: no page of
+    Meta's shows it (re-read 2026-11-07, D435), so nothing is typed and row
+    154 stays partial; the WhatsApp Manager visibility switch. No call of
+    these routes was run against Meta live.
 
 - [ ] **M5i. In-App Signup** (row 125): accepting Meta's terms on a
   business's first signup is an explicit, audited operator action, off
