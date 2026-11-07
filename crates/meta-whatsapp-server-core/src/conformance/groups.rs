@@ -125,6 +125,9 @@ impl KvStore for Tracked {
     }
 }
 
+/// The groups each number holds in the first case.
+const GROUPS: usize = 300;
+
 fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()
 }
@@ -166,7 +169,6 @@ pub async fn a_purge_takes_a_numbers_records_and_index_and_no_others(backend: &d
     let records = GroupRecords::new(kv.clone());
     let who = tenant("grp-suite");
     let (mine, other) = (pn(&unique_digits()), pn(&unique_digits()));
-    const GROUPS: usize = 300;
     for n in 0..GROUPS {
         records.record(&who, &mine, &group(n)).await.unwrap();
     }

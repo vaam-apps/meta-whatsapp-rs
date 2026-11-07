@@ -1331,6 +1331,9 @@ async fn live_group_keys(h: &Harness) -> Vec<String> {
     live.into_iter().collect()
 }
 
+const THIRD_WABA: &str = "102290129340397";
+const THIRD_PN: &str = "106540352242925";
+
 fn naming(live: &[String], pn: &str) -> usize {
     live.iter()
         .filter(|k| k.starts_with(&format!("wa.server.group/{pn}.")))
@@ -1349,8 +1352,6 @@ async fn a_numbers_group_records_go_with_its_binding_and_by_the_operators_reques
     let numbers_key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
     let admin = h.admin_key().await;
     // A second WABA of the first tenant, with a number of its own.
-    const THIRD_WABA: &str = "102290129340397";
-    const THIRD_PN: &str = "106540352242925";
     h.connect(TENANT, THIRD_WABA, &[THIRD_PN], TOKEN).await;
     hold(&h, PN, GROUP).await;
     hold(&h, PN, OTHER_GROUP).await;
