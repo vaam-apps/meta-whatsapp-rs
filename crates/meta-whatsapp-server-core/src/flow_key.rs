@@ -81,13 +81,18 @@ impl FlowKeyInfo {
 ///
 /// Anything else, a password-protected key included: `422 invalid_request`
 /// on `private_key`, never quoting the text.
-pub fn private_key(text: &str) -> Result<(SecretBytes, FlowKeyInfo), ServiceError> {
+pub fn private_key(text: String) -> Result<(SecretBytes, FlowKeyInfo), ServiceError> {
+    // Moved into the secret type whatever the outcome, so that the
+    // request's copy is wiped on drop (a refused key too).
+    let secret = SecretBytes::new(text.into_bytes());
+    let text = std::str::from_utf8(secret.expose_secret())
+        .map_err(|_| ServiceError::invalid("private_key"))?;
     if text.len() > MAX_PRIVATE_KEY_BYTES {
         return Err(ServiceError::invalid("private_key"));
     }
     let key = FlowEndpointKey::from_pem(text).map_err(|_| ServiceError::invalid("private_key"))?;
     let info = FlowKeyInfo::of(&key)?;
-    Ok((SecretBytes::new(text.as_bytes().to_vec()), info))
+    Ok((secret, info))
 }
 
 /// The Flow key operations on a WABA the caller's tenant owns: an

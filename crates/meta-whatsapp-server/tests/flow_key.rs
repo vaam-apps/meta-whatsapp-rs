@@ -357,6 +357,33 @@ async fn disconnecting_a_waba_deletes_its_flow_key() {
     );
 }
 
+/// An operator's unbinding of a WABA deletes the key its tenant set too,
+/// and leaves another WABA's alone. Decisive: `Tokens::delete`, the path
+/// of `forget_for_admin` (the tenant's own disconnection takes
+/// `delete_if_unchanged`); the token is deleted first, as that path is
+/// the one for a WABA whose token cannot be used.
+#[tokio::test]
+async fn an_operators_unbind_deletes_the_flow_key() {
+    let r = rig(None, false).await;
+    r.set(A, KEY_PEM).await;
+    r.set(B, OTHER_KEY_PEM).await;
+    let admin = r.h.admin_key().await;
+    // The WABA's token is gone (the library's delete leaves the Flow
+    // key), so the operator's unbind takes the path without a usable
+    // token: `forget_for_admin`.
+    let waba_a = WabaId::new(WABA_A).unwrap();
+    assert!(r.h.vault.delete(&waba_a).await.unwrap());
+    assert!(r.h.vault.holds_flow_key(&waba_a).await.unwrap());
+    let unbound = r
+        .h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA_A}/binding")).key(&admin))
+        .await;
+    assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+    let waba_b = WabaId::new(WABA_B).unwrap();
+    assert!(!r.h.vault.holds_flow_key(&waba_a).await.unwrap());
+    assert!(r.h.vault.holds_flow_key(&waba_b).await.unwrap());
+}
+
 /// What cannot decrypt a Flow request is refused `422` on `private_key`
 /// before anything is stored, without quoting it.
 #[tokio::test]
@@ -404,6 +431,135 @@ async fn a_key_that_cannot_decrypt_a_flow_request_is_refused_without_being_quote
     let waba = WabaId::new(WABA_A).unwrap();
     assert!(!r.h.vault.holds_flow_key(&waba).await.unwrap());
     assert!(r.h.graph.requests().is_empty());
+}
+
+/// A malformed body that carries the private key (cut off, of the wrong
+/// shape, a duplicated or unknown field named after one of its lines,
+/// not UTF-8, the wrong content type, over the body limit) is refused
+/// without a byte of the key in the answer, and nothing is stored.
+/// Decisive: `ApiJson` answering with the service's sentence instead of
+/// serde's or axum's, which quote what they cannot parse.
+#[tokio::test]
+async fn a_malformed_body_carrying_the_key_never_echoes_it() {
+    let r = rig(None, false).await;
+    let line = body_lines(KEY_PEM)[1].to_owned();
+    let quoted = serde_json::to_string(KEY_PEM).unwrap();
+    let mut non_utf8 = format!("{{\"private_key\": {quoted}, \"x\": \"").into_bytes();
+    non_utf8.extend_from_slice(&[0xff, 0xfe]);
+    let padding = "A".repeat(70 * 1024);
+    let bodies: Vec<(&str, Vec<u8>, &str, u16)> = vec![
+        (
+            "cut off",
+            format!("{{\"private_key\": {}", &quoted[..quoted.len() / 2]).into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "an array of two",
+            format!("[{quoted}, {quoted}]").into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "a bare string",
+            quoted.clone().into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "a nested object",
+            format!("{{\"private_key\": {{\"k\": {quoted}}}}}").into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "an array value",
+            format!("{{\"private_key\": [{quoted}]}}").into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "a field named after a line",
+            format!("{{\"private_key\": {quoted}, \"{line}\": 1}}").into_bytes(),
+            "application/json",
+            422,
+        ),
+        (
+            "a duplicated field",
+            format!("{{\"private_key\": {quoted}, \"private_key\": {quoted}}}").into_bytes(),
+            "application/json",
+            422,
+        ),
+        ("not UTF-8", non_utf8, "application/json", 422),
+        (
+            "the wrong content type",
+            format!("{{\"private_key\": {quoted}}}").into_bytes(),
+            "text/plain",
+            422,
+        ),
+        (
+            "the key as the body, unwrapped",
+            KEY_PEM.as_bytes().to_vec(),
+            "application/json",
+            422,
+        ),
+        (
+            "over the body limit",
+            format!("{{\"private_key\": {quoted}, \"pad\": \"{padding}\"}}").into_bytes(),
+            "application/json",
+            413,
+        ),
+    ];
+    for (name, body, content_type, status) in bodies {
+        let reply =
+            r.h.call(
+                Call::new(Method::PUT, format!("/v1/wabas/{WABA_A}/flow-key"))
+                    .key(&r.key_a)
+                    .header("content-type", content_type)
+                    .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(body)),
+            )
+            .await;
+        assert_eq!(reply.status.as_u16(), status, "{name}: {}", reply.text);
+        for line in body_lines(KEY_PEM) {
+            assert!(!reply.text.contains(line), "{name}: quoted the key");
+        }
+        assert!(!reply.text.contains("PRIVATE KEY"), "{name}");
+    }
+    let waba = WabaId::new(WABA_A).unwrap();
+    assert!(!r.h.vault.holds_flow_key(&waba).await.unwrap());
+}
+
+/// Another tenant's WABA, or a key without the scope, is refused before
+/// the vault is read or written: no read of `wa.token`, no write at all.
+/// Decisive: the owned-WABA extractor, ahead of every vault call.
+#[tokio::test]
+async fn a_refused_flow_key_call_touches_no_vault_record() {
+    let r = rig(None, false).await;
+    r.set(B, OTHER_KEY_PEM).await;
+    let without = r.h.tenant_key(A, &[Scope::Numbers]).await;
+    let reads = r.h.kv.vault_reads();
+    let writes = r.h.kv.written().len();
+    for call in [
+        put(WABA_B, &r.key_a, KEY_PEM),
+        get(WABA_B, &r.key_a),
+        delete(WABA_B, &r.key_a),
+        put(WABA_A, &without, KEY_PEM),
+        get(WABA_A, &without),
+        delete(WABA_A, &without),
+        // A's key, B's WABA, under an idempotency key.
+        put(WABA_B, &r.key_a, KEY_PEM).header("idempotency-key", "x-1"),
+    ] {
+        let reply = r.h.call(call).await;
+        assert!(matches!(reply.status.as_u16(), 403 | 404), "{}", reply.text);
+        for line in body_lines(OTHER_KEY_PEM) {
+            assert!(!reply.text.contains(line));
+        }
+    }
+    assert_eq!(r.h.kv.vault_reads(), reads, "the vault was read");
+    assert_eq!(r.h.kv.written().len(), writes, "something was written");
+    // And B's own key is still B's.
+    let read = r.h.call(get(WABA_B, &r.key_b)).await;
+    assert_eq!(read.json()["public_key"], public_of(OTHER_KEY_PEM).as_str());
 }
 
 /// The scope and the ownership: a key without `flows` is `403`, another
@@ -475,6 +631,29 @@ async fn the_setting_takes_an_idempotency_key_over_the_public_half() {
         r.h.call(put(WABA_A, &r.key_a, OTHER_KEY_PEM).header("idempotency-key", "set-2"))
             .await;
     assert_eq!(fine.status, StatusCode::OK, "{}", fine.text);
+}
+
+/// The same key in its other encoding (PKCS#1, not PKCS#8) under the same
+/// `Idempotency-Key` is the same request: the fingerprint is over the
+/// public half, so it is not a function of the private key's text.
+/// Decisive: delete the public digest from the fingerprint (hash the
+/// private text instead) and the repeat is `idempotency_key_reused`.
+#[tokio::test]
+async fn the_fingerprint_is_not_a_function_of_the_private_keys_text() {
+    const PKCS1: &str = include_str!(
+        "../../meta-whatsapp-client/src/flows/endpoint/testdata/test_rsa2048_pkcs1.pem"
+    );
+    assert_ne!(PKCS1, KEY_PEM);
+    let r = rig(None, false).await;
+    let first =
+        r.h.call(put(WABA_A, &r.key_a, KEY_PEM).header("idempotency-key", "enc-1"))
+            .await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+    let again =
+        r.h.call(put(WABA_A, &r.key_a, PKCS1).header("idempotency-key", "enc-1"))
+            .await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
 }
 
 /// The fingerprint holds the WABA and the public half's digest and

@@ -135,11 +135,10 @@ pub(crate) async fn set_flow_key(
 ) -> Response {
     // The local check, before the key is claimed; the key becomes a
     // secret type here, and its public half is what the fingerprint holds.
-    let (private_key, info) = match domain::private_key(&body.private_key) {
+    let (private_key, info) = match domain::private_key(body.private_key) {
         Ok(checked) => checked,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    drop(body);
     // Never over the private key: the record holds nothing derived from it
     // but the public half's digest.
     let fingerprint = Fingerprint::set_flow_key(owned.waba_id(), &info.public_key_sha256);
