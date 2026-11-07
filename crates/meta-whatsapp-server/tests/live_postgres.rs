@@ -2115,9 +2115,13 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
         .unwrap();
     assert_eq!(left, 1);
 
-    // And a tenant's record goes the other way: into the tenants' table
-    // (with its foreign key), not the operator's. Decisive: the table the
-    // backend picks for a tenant's scope.
+    a_tenants_record_is_in_the_tenants_table(&h, &pool).await;
+}
+
+/// A tenant's record goes into the tenants' table (with its foreign key),
+/// not the operator's: one in each, after the operator's one that stayed.
+/// Decisive: the table the backend picks for a tenant's scope.
+async fn a_tenants_record_is_in_the_tenants_table(h: &Harness, pool: &sqlx::PgPool) {
     h.tenant("merchant-42").await;
     h.connect(
         "merchant-42",
@@ -2143,11 +2147,11 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
     let in_tenants: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM wa_server_idempotency WHERE tenant_id = 'merchant-42'",
     )
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     .unwrap();
     let in_admin: i64 = sqlx::query_scalar("SELECT count(*) FROM wa_server_admin_idempotency")
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
     assert_eq!((in_tenants, in_admin), (1, 1));
