@@ -169,6 +169,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed` |
 | `WA_SERVER_WEBHOOK_IN_FLIGHT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT` | `32`, `8`, `4` | webhook deliveries attempted at once on a replica: in all, of one tenant, to one endpoint |
 | `WA_SERVER_WEBHOOK_LEASE` | `60s` | how long a replica holds a delivery it claimed before another may attempt it; at least `30s`; keep the replicas' clocks within it of each other |
+| `WA_SERVER_WEBHOOK_POOL`, `WA_SERVER_WEBHOOK_POOL_IDLE`, `WA_SERVER_WEBHOOK_POOL_PER_DESTINATION`, `WA_SERVER_WEBHOOK_POOL_DESTINATIONS` | `on`, `30s`, `2`, `64` | connections to your receivers are kept idle between deliveries and reused, only for the address each delivery's own fresh lookup was checked at and the same host name (never past the allow-list); `off` opens one per attempt. Idle time, connections kept per destination, destinations holding any |
 | `WA_SERVER_STREAMS_PER_REPLICA` | `1000` | live event streams open at once on a replica, every tenant's (keep it under the internal listener's 4,096 connections) |
 
 **The service refuses to start** rather than run unsafely: on a missing

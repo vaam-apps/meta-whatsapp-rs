@@ -36,6 +36,19 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   before the first release. The OpenAPI document is additive only. No legal
   act.
 
+### Added (roadmap M2j)
+
+- **A connection pool for webhooks out** (roadmap M2j; D400 to D404): `HyperSender` keeps connections idle between attempts and
+  reuses one only for the address that attempt's own fresh lookup was
+  checked at, the same port, host name and scheme, after the allow-list
+  check; 30 s idle, 2 per destination, 64 destinations. New variables
+  `WA_SERVER_WEBHOOK_POOL` (`on`; `off` opens one connection per
+  attempt, as before), `WA_SERVER_WEBHOOK_POOL_IDLE`,
+  `WA_SERVER_WEBHOOK_POOL_PER_DESTINATION` and
+  `WA_SERVER_WEBHOOK_POOL_DESTINATIONS`, pending the owner's confirmation
+  before the first release. The library's `PoolSettings` and
+  `HyperSender::with_pool` are in `meta-whatsapp-server-http`.
+
 ### Added (roadmap M5f3)
 
 - **The group records go with the binding** (roadmap M5f3; D380-D382): a per-number index beside `wa.server.group`

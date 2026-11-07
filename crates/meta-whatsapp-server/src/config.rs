@@ -72,6 +72,9 @@
 //! | `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed`; an endpoint failing for the whole window is disabled |
 //! | `WA_SERVER_WEBHOOK_IN_FLIGHT`, `…_IN_FLIGHT_PER_TENANT`, `…_IN_FLIGHT_PER_ENDPOINT` | `32`, `8`, `4` | attempts in flight at once on a replica: in all, of one tenant, to one endpoint (positive whole numbers) |
 //! | `WA_SERVER_WEBHOOK_LEASE` | `60s` | how long a replica's claim holds a delivery before another may claim it again; at least `30s` (an attempt takes up to 16 s), and replicas' clocks must agree within it (design D107) |
+//! | `WA_SERVER_WEBHOOK_POOL` | `on` | `on`: connections to a receiver are kept idle between attempts and reused, only for the address an attempt's own fresh lookup was checked at and the same host name; `off`: one connection per attempt (roadmap M2j, design D400 to D403; pending the owner's confirmation before the first release) |
+//! | `WA_SERVER_WEBHOOK_POOL_IDLE` | `30s` | how long a kept connection may sit idle before it is closed (a positive duration; keep it below the receivers' own keep-alive) |
+//! | `WA_SERVER_WEBHOOK_POOL_PER_DESTINATION`, `WA_SERVER_WEBHOOK_POOL_DESTINATIONS` | `2`, `64` | idle connections kept per destination (address, port, host name, scheme), and destinations holding idle connections at once (positive whole numbers) |
 //!
 //! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
 //! design D36; none applies to a WABA no other tenant held):
@@ -111,6 +114,7 @@ use meta_whatsapp_server_core::webhooks_out::DEFAULT_RETRY_WINDOW;
 use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
 use meta_whatsapp_server_core::webhooks_out::dispatch::DispatchSettings;
 use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
+use meta_whatsapp_server_http::webhooks_out::PoolSettings;
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -395,6 +399,10 @@ pub struct WebhookConfig {
     /// `…_IN_FLIGHT_PER_ENDPOINT` and `WA_SERVER_WEBHOOK_LEASE`: the
     /// dispatcher's bounds and lease (design D108).
     pub dispatch: DispatchSettings,
+    /// `WA_SERVER_WEBHOOK_POOL`, `…_POOL_IDLE`, `…_POOL_PER_DESTINATION`
+    /// and `…_POOL_DESTINATIONS`: the sender's connection pool (roadmap
+    /// M2j, design D400 to D403).
+    pub pool: PoolSettings,
 }
 
 /// The shortest `WA_SERVER_WEBHOOK_LEASE`: an attempt takes up to 16 s (a
@@ -737,12 +745,69 @@ fn webhook_config(
         },
     };
     let dispatch = dispatch_settings(r)?;
+    let pool = pool_settings(r)?;
     Ok(WebhookConfig {
         data_keys,
         data_key_is_throwaway: throwaway,
         destinations,
         retry_window,
         dispatch,
+        pool,
+    })
+}
+
+/// `WA_SERVER_WEBHOOK_POOL` (`on`, the default, or `off`), `…_POOL_IDLE`
+/// (a positive duration), `…_POOL_PER_DESTINATION` and
+/// `…_POOL_DESTINATIONS` (positive whole numbers): the sender's pool
+/// (roadmap M2j). `off` is [`PoolSettings::off`]; the other three are
+/// still validated, so a typo is not hidden by it.
+fn pool_settings(r: &Reader<'_>) -> Result<PoolSettings, ConfigError> {
+    let defaults = PoolSettings::default();
+    let on = match r.plain("WA_SERVER_WEBHOOK_POOL")?.as_deref().map(str::trim) {
+        None | Some("" | "on") => true,
+        Some("off") => false,
+        Some(_) => {
+            return Err(ConfigError::Invalid {
+                name: "WA_SERVER_WEBHOOK_POOL",
+                reason: "expected `on` or `off`",
+            });
+        }
+    };
+    let idle_timeout = match r.plain("WA_SERVER_WEBHOOK_POOL_IDLE")? {
+        None => defaults.idle_timeout,
+        Some(value) => match duration("WA_SERVER_WEBHOOK_POOL_IDLE", &value)? {
+            zero if zero.is_zero() => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_WEBHOOK_POOL_IDLE",
+                    reason: "expected a positive duration such as 1m (or set \
+                             WA_SERVER_WEBHOOK_POOL=off)",
+                });
+            }
+            idle => idle,
+        },
+    };
+    let bound = |name: &'static str, default: usize| -> Result<usize, ConfigError> {
+        match positive(r, name)? {
+            None => Ok(default),
+            Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+                name,
+                reason: "expected a smaller number",
+            }),
+        }
+    };
+    let max_idle_per_key = bound(
+        "WA_SERVER_WEBHOOK_POOL_PER_DESTINATION",
+        defaults.max_idle_per_key,
+    )?;
+    let max_keys = bound("WA_SERVER_WEBHOOK_POOL_DESTINATIONS", defaults.max_keys)?;
+    Ok(if on {
+        PoolSettings {
+            idle_timeout,
+            max_idle_per_key,
+            max_keys,
+        }
+    } else {
+        PoolSettings::off()
     })
 }
 

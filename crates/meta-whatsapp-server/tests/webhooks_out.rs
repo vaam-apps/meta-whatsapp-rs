@@ -460,6 +460,140 @@ async fn a_rotation_signs_with_both_secrets() {
     check(&pinged, &new).unwrap();
 }
 
+/// A keep-alive HTTP receiver on 127.0.0.1 answering `204` to every
+/// request of a connection until the client closes it: the TCP
+/// connections it accepted and the requests it answered.
+async fn counting_receiver() -> (
+    SocketAddr,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (a, r) = (accepted.clone(), requests.clone());
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            a.fetch_add(1, Ordering::SeqCst);
+            let r = r.clone();
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buf = vec![0u8; 65536];
+                loop {
+                    let head_end = loop {
+                        if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                        let n = tcp.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        data.extend_from_slice(&buf[..n]);
+                    };
+                    let head = String::from_utf8_lossy(&data[..head_end]).to_ascii_lowercase();
+                    let length: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    while data.len() < head_end + length {
+                        let n = tcp.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        data.extend_from_slice(&buf[..n]);
+                    }
+                    data.drain(..head_end + length);
+                    r.fetch_add(1, Ordering::SeqCst);
+                    if tcp
+                        .write_all(b"HTTP/1.1 204 No Content\r\n\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (addr, accepted, requests)
+}
+
+/// One ping to endpoint `id`, delivered.
+async fn ping_round(h: &Harness, dispatcher: &Dispatcher, key: &str, id: &str) {
+    let reply = h
+        .call(Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test")).key(key))
+        .await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+    assert_eq!(round(dispatcher).await, 1);
+}
+
+/// Roadmap M2j end to end: deliveries to one endpoint, one after the
+/// other, ride one TCP connection, a secret's rotation in between
+/// included (the signature is per request, the connection is not tied to
+/// the secret); with the pool off every attempt connects. Decisive: the
+/// receiver's count of accepted connections.
+#[tokio::test]
+async fn deliveries_to_one_endpoint_share_a_connection() {
+    use std::sync::atomic::Ordering;
+    let (h, dispatcher) = harness().await;
+    let key = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let (addr, accepted, requests) = counting_receiver().await;
+    let created = create(&h, &key, &format!("http://{addr}/"), &["message_received"]).await;
+    let id = created["id"].as_str().unwrap().to_owned();
+    for _ in 0..2 {
+        ping_round(&h, &dispatcher, &key, &id).await;
+    }
+    let rotated = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/webhook-endpoints/{id}/rotate-secret"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(rotated.status, StatusCode::OK);
+    ping_round(&h, &dispatcher, &key, &id).await;
+    assert_eq!(
+        (
+            accepted.load(Ordering::SeqCst),
+            requests.load(Ordering::SeqCst)
+        ),
+        (1, 3)
+    );
+
+    // The pool off: a connection per attempt.
+    let mut out = webhooks_out();
+    out.sender = Arc::new(
+        HyperSender::new()
+            .unwrap()
+            .with_pool(meta_whatsapp_server_http::webhooks_out::PoolSettings::off()),
+    );
+    let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
+        webhooks_out: Some(out.clone()),
+        ..test_settings()
+    });
+    h.tenant(A).await;
+    let dispatcher = Dispatcher::new(h.backend.as_ref(), h.state.clock(), out);
+    let key = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let (addr, accepted, requests) = counting_receiver().await;
+    let created = create(&h, &key, &format!("http://{addr}/"), &["message_received"]).await;
+    let id = created["id"].as_str().unwrap().to_owned();
+    for _ in 0..3 {
+        ping_round(&h, &dispatcher, &key, &id).await;
+    }
+    assert_eq!(
+        (
+            accepted.load(Ordering::SeqCst),
+            requests.load(Ordering::SeqCst)
+        ),
+        (3, 3)
+    );
+}
+
 /// Without a data key every route is `409 webhooks_not_configured`.
 #[tokio::test]
 async fn without_a_data_key_the_routes_are_not_configured() {
