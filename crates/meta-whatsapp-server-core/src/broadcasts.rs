@@ -1071,3 +1071,76 @@ impl<'a> Broadcasts<'a> {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The namespaces and the id are stable identifiers (design D420):
+    /// stored data and the messages' callback data carry them. Decisive:
+    /// each constant and `new_id`'s shape.
+    #[test]
+    fn the_broadcast_namespaces_and_id_are_pinned() {
+        assert_eq!(RECORD_NAMESPACE, "wa.server.broadcast");
+        assert_eq!(TENANT_NAMESPACE, "wa.server.broadcast.tenant");
+        assert_eq!(PROGRESS_NAMESPACE, "wa.server.broadcast.progress");
+        assert_eq!(CALLBACK_PREFIX, "wa-broadcast:");
+        let id = new_id().unwrap();
+        assert!(is_broadcast_id(&id), "{id}");
+        assert_eq!(id.len(), 35);
+        for bad in ["", "bc_", "bc_xyz", "up_00000000000000000000000000000000"] {
+            assert!(!is_broadcast_id(bad), "{bad}");
+        }
+        assert_ne!(new_id().unwrap(), id);
+    }
+
+    /// A person is keyed by BSUID first, never by phone number alone when
+    /// a BSUID is known (their parameters are found by it).
+    #[test]
+    fn a_person_is_keyed_by_bsuid_first() {
+        use meta_whatsapp_rs::core::ids::UserId;
+        let both = Recipient::PhoneAndUser {
+            phone: "+16505551234".to_owned(),
+            user: UserId::new("US.1"),
+        };
+        assert_eq!(person_key(&both).as_deref(), Some("user:US.1"));
+        assert_eq!(
+            person_key(&Recipient::phone("+16505551234")).as_deref(),
+            Some("phone:+16505551234")
+        );
+    }
+
+    /// The bounds: none, too many, and each person checked as a send checks
+    /// them. Decisive: `NewBroadcast::new`.
+    #[test]
+    fn a_request_is_checked_before_it_is_queued() {
+        let settings = BroadcastSettings {
+            max_recipients: 2,
+            ..BroadcastSettings::default()
+        };
+        let template = json!({"name": "promo", "language": {"code": "en_US"}});
+        let person = |phone: &str| BroadcastRecipient {
+            phone: Some(phone.to_owned()),
+            ..BroadcastRecipient::default()
+        };
+        let field = |people: Vec<BroadcastRecipient>| {
+            NewBroadcast::new(template.clone(), people, &settings)
+                .map(|_| ())
+                .unwrap_err()
+                .field()
+                .map(str::to_owned)
+        };
+        assert_eq!(field(vec![]).as_deref(), Some("recipients"));
+        assert_eq!(
+            field(vec![person("+1650"), person("+1651"), person("+1652")]).as_deref(),
+            Some("recipients")
+        );
+        assert_eq!(
+            field(vec![person("+16505551234"), person("16505551234")]).as_deref(),
+            Some("recipients[1]")
+        );
+        let ok = NewBroadcast::new(template, vec![person("+16505551234")], &settings).unwrap();
+        assert_eq!(ok.recipients(), 1);
+        assert!(!format!("{ok:?}").contains("16505551234"));
+    }
+}

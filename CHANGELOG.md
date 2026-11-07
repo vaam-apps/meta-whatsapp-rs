@@ -12,6 +12,26 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5k, slice 1)
+
+- **The broadcast API over HTTP** (roadmap M5k; D420 to D427, implementer's proposals): a new scope `broadcasts` and
+  `POST /v1/numbers/{pn}/broadcasts` (a template for up to 1,000 people
+  named by phone and/or BSUID, with parameters of their own, checked as a
+  send is; `202`; an `Idempotency-Key` for the whole broadcast),
+  `GET …/broadcasts/{broadcast_id}` (state and counts, with Meta's error
+  codes for the failures, never a person or a message) and `POST
+  …/broadcasts/{broadcast_id}/cancel`. Over the bot crate's durable jobs
+  and shared pacer on the backend's key/value store: no new port, table or
+  migration. Paced at `WA_SERVER_BROADCAST_RATE` (10 a second) for each
+  number across every replica; each person sent at most once across
+  restarts. New variables `WA_SERVER_BROADCAST_RATE`,
+  `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`
+  and `WA_SERVER_BROADCAST_WORKERS`, and store namespaces
+  `wa.server.broadcast`, `wa.server.broadcast.tenant` and
+  `wa.server.broadcast.progress`, pending the owner's confirmation before
+  the first release. The OpenAPI document gains 3 operations, 3 schemas, the
+  scope and the tag (additive).
+
 ### Added (roadmap M2j)
 
 - **A connection pool for webhooks out** (roadmap M2j; D400 to D404): `HyperSender` keeps connections idle between attempts and
