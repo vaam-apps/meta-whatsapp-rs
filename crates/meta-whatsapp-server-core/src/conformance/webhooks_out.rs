@@ -108,6 +108,7 @@ pub async fn run(backend: &dyn Backend) {
     a_platform_endpoint_changes_its_tenants(backend).await;
     a_deleted_or_suspended_named_tenant_does_not_widen_the_endpoint(backend).await;
     a_platform_endpoint_store_keeps_cursors_and_applies_only_to_the_set_checked(backend).await;
+    a_stale_set_refuses_a_deletion_a_rotation_and_a_ping(backend).await;
     every_endpoint_is_listed_to_the_walk(backend).await;
     a_reseal_is_a_compare_and_set(backend).await;
     resealing_lets_the_old_key_go(backend).await;
@@ -267,12 +268,12 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
     );
     assert_eq!(
         store
-            .rotate_secret(&b_, &mine.id, &sealed(2), START, START)
+            .rotate_secret(&b_, &mine.id, &sealed(2), START, START, None)
             .await
             .unwrap(),
         None
     );
-    assert!(!store.delete_endpoint(&b_, &mine.id).await.unwrap());
+    assert!(!store.delete_endpoint(&b_, &mine.id, None).await.unwrap());
     assert_eq!(
         store
             .deliveries(
@@ -294,7 +295,10 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
         ..delivery("x", 0, START)
     };
     assert_eq!(
-        store.insert_delivery(&b_, &mine.id, &ping).await.unwrap(),
+        store
+            .insert_delivery(&b_, &mine.id, &ping, None)
+            .await
+            .unwrap(),
         None
     );
     assert!(
@@ -392,7 +396,7 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
     assert_eq!(changed.updated_at, START + time::Duration::seconds(1));
     let until = START + time::Duration::hours(24);
     let rotated = store
-        .rotate_secret(&tenant(&a), &mine.id, &sealed(2), until, START)
+        .rotate_secret(&tenant(&a), &mine.id, &sealed(2), until, START, None)
         .await
         .unwrap()
         .unwrap();
@@ -405,7 +409,7 @@ pub async fn an_endpoint_is_its_tenants_own(backend: &dyn Backend) {
         (sealed(2), Some(sealed(1)), Some(until))
     );
     let again = store
-        .rotate_secret(&tenant(&a), &mine.id, &sealed(3), until, START)
+        .rotate_secret(&tenant(&a), &mine.id, &sealed(3), until, START, None)
         .await
         .unwrap()
         .unwrap();
@@ -1178,7 +1182,7 @@ pub async fn the_pending_backlog_is_counted(backend: &dyn Backend) {
     // And the endpoint's deletion takes its deliveries from the backlog.
     assert!(
         store
-            .delete_endpoint(&tenant(&a), &endpoint.id)
+            .delete_endpoint(&tenant(&a), &endpoint.id, None)
             .await
             .unwrap()
     );
@@ -1220,7 +1224,7 @@ pub async fn deliveries_go_with_their_endpoint_and_tenant(backend: &dyn Backend)
         .unwrap();
     assert!(
         store
-            .delete_endpoint(&tenant(&a), &dropped.id)
+            .delete_endpoint(&tenant(&a), &dropped.id, None)
             .await
             .unwrap()
     );
@@ -1230,7 +1234,7 @@ pub async fn deliveries_go_with_their_endpoint_and_tenant(backend: &dyn Backend)
     );
     assert!(
         !store
-            .delete_endpoint(&tenant(&a), &dropped.id)
+            .delete_endpoint(&tenant(&a), &dropped.id, None)
             .await
             .unwrap()
     );
@@ -3471,6 +3475,172 @@ pub async fn every_endpoint_is_listed_to_the_walk(backend: &dyn Backend) {
     }
 }
 
+/// D342, extended: a deletion, a rotation and a ping are written only
+/// while the endpoint's set of named tenants is the one the caller was
+/// checked against (as a set, whatever the order), as an update is: a
+/// stale set (a tenant added, one left out, none given, or one given for
+/// an endpoint without) changes nothing and answers as a missing endpoint
+/// (`false`, `None`); the set as checked succeeds.
+pub async fn a_stale_set_refuses_a_deletion_a_rotation_and_a_ping(backend: &dyn Backend) {
+    use crate::webhooks_out::TenantCursor;
+    let store = backend.webhooks();
+    let (x, a, b, c) = (
+        unique_tenant("wh-sd-x"),
+        unique_tenant("wh-sd-a"),
+        unique_tenant("wh-sd-b"),
+        unique_tenant("wh-sd-c"),
+    );
+    for t in [&x, &a, &b, &c] {
+        backend
+            .records()
+            .create_tenant(&tenant(t), "")
+            .await
+            .unwrap();
+    }
+    let cursor = |t: &str| TenantCursor {
+        tenant: tenant(t),
+        cursor: 1,
+    };
+    let mut named = new_endpoint(&x, 0);
+    named.tenants = Some(vec![cursor(&a), cursor(&b)]);
+    let endpoint = created(store.as_ref(), &named).await;
+    let own = created(store.as_ref(), &new_endpoint(&x, 0)).await;
+    let owner = tenant(&x);
+    let set = |names: &[&String]| -> Vec<TenantId> { names.iter().map(|n| tenant(n)).collect() };
+    let stale = [Vec::new(), set(&[&a]), set(&[&a, &b, &c]), set(&[&a, &c])];
+    let ping = NewDelivery {
+        event_id: None,
+        sequence: None,
+        event_type: "ping".to_owned(),
+        ..delivery("x", 0, START)
+    };
+    let until = START + time::Duration::hours(24);
+    for through in &stale {
+        assert!(
+            store
+                .rotate_secret(
+                    &owner,
+                    &endpoint.id,
+                    &sealed(2),
+                    until,
+                    START,
+                    Some(through)
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "rotation, {through:?}"
+        );
+        assert!(
+            store
+                .insert_delivery(&owner, &endpoint.id, &ping, Some(through))
+                .await
+                .unwrap()
+                .is_none(),
+            "ping, {through:?}"
+        );
+        assert!(
+            !store
+                .delete_endpoint(&owner, &endpoint.id, Some(through))
+                .await
+                .unwrap(),
+            "deletion, {through:?}"
+        );
+    }
+    // None is for an endpoint without a set only.
+    assert!(
+        store
+            .rotate_secret(&owner, &endpoint.id, &sealed(2), until, START, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .insert_delivery(&owner, &endpoint.id, &ping, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !store
+            .delete_endpoint(&owner, &endpoint.id, None)
+            .await
+            .unwrap()
+    );
+    // And the other way: a set given for an endpoint without one.
+    let one = set(&[&a]);
+    assert!(
+        store
+            .rotate_secret(&owner, &own.id, &sealed(2), until, START, Some(&one))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !store
+            .delete_endpoint(&owner, &own.id, Some(&one))
+            .await
+            .unwrap()
+    );
+    let untouched = store.endpoint(&owner, &endpoint.id).await.unwrap().unwrap();
+    assert_eq!(untouched, endpoint, "a refused write changes nothing");
+    assert!(
+        store
+            .deliveries(&owner, &endpoint.id, &page(50))
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .is_empty(),
+        "no ping was recorded"
+    );
+    // The set as checked, in another order: each is done.
+    let through = set(&[&b, &a]);
+    let rotated = store
+        .rotate_secret(
+            &owner,
+            &endpoint.id,
+            &sealed(2),
+            until,
+            START,
+            Some(&through),
+        )
+        .await
+        .unwrap()
+        .expect("rotated");
+    assert_eq!(rotated.secret, sealed(2));
+    assert!(
+        store
+            .insert_delivery(&owner, &endpoint.id, &ping, Some(&through))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .delete_endpoint(&owner, &endpoint.id, Some(&through))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .endpoint(&owner, &endpoint.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // An endpoint without a set: `None` is the set as checked.
+    assert!(
+        store
+            .rotate_secret(&owner, &own.id, &sealed(2), until, START, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(store.delete_endpoint(&owner, &own.id, None).await.unwrap());
+}
+
 /// `reseal_secrets` replaces both sealed values only while both are the
 /// ones expected, and changes nothing else; a gone endpoint answers
 /// `false`.
@@ -3487,6 +3657,7 @@ pub async fn a_reseal_is_a_compare_and_set(backend: &dyn Backend) {
             &sealed(2),
             START + time::Duration::hours(24),
             START + time::Duration::minutes(5),
+            None,
         )
         .await
         .unwrap()
@@ -3572,7 +3743,12 @@ pub async fn a_reseal_is_a_compare_and_set(backend: &dyn Backend) {
             .await
             .unwrap()
     );
-    assert!(store.delete_endpoint(&tenant(&a), &fresh.id).await.unwrap());
+    assert!(
+        store
+            .delete_endpoint(&tenant(&a), &fresh.id, None)
+            .await
+            .unwrap()
+    );
     assert!(
         !store
             .reseal_secrets(&fresh.id, &stale(7, None), &none)
@@ -3841,6 +4017,7 @@ pub async fn the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend
             &sealed(2),
             START + time::Duration::hours(24),
             START + time::Duration::minutes(5),
+            None,
         )
         .await
         .unwrap()
@@ -3853,7 +4030,12 @@ pub async fn the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend
     for id in [&half.id, &lost.id, &gone.id] {
         read.push(store.endpoint(&tenant(&t), id).await.unwrap().unwrap());
     }
-    assert!(store.delete_endpoint(&tenant(&t), &gone.id).await.unwrap());
+    assert!(
+        store
+            .delete_endpoint(&tenant(&t), &gone.id, None)
+            .await
+            .unwrap()
+    );
 
     let mut report = ResealReport::default();
     reseal_batch(store.as_ref(), &rotating_keys(), &read, &mut report)
@@ -3970,7 +4152,12 @@ pub async fn the_listing_survives_changes_between_pages(backend: &dyn Backend) {
     let last = first.items.last().unwrap();
     assert_eq!(last.id.as_str(), cursor);
     // Between the pages: the cursor's own row goes, three are created.
-    assert!(store.delete_endpoint(&last.tenant, &last.id).await.unwrap());
+    assert!(
+        store
+            .delete_endpoint(&last.tenant, &last.id, None)
+            .await
+            .unwrap()
+    );
     for _ in 0..3 {
         created(store.as_ref(), &new_endpoint(&t, 0)).await;
     }
