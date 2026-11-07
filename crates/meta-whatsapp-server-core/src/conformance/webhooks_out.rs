@@ -22,6 +22,14 @@
 //!   a rotation, one after its 24 hours; an event over 256 KiB delivered
 //!   truncated and read whole by its tenant alone; each delivery its own
 //!   tenant's event only.
+//! - **A re-seal is a compare-and-set** (roadmap M2i): the sealed secrets
+//!   are replaced only while both are the values read, and nothing else of
+//!   the row changes; every endpoint of every tenant, enabled or not, is
+//!   listed in byte order of its id; the walk moves every secret and
+//!   previous secret under the active key, so that, with that key alone,
+//!   the next delivery of each endpoint verifies with the secret its
+//!   creation or rotation showed; a rotation landing between the walk's
+//!   read and write is not overwritten.
 //! - **Back-pressure**: an endpoint that never answers holds its own
 //!   bound of attempts on a replica, and another endpoint's deliveries all
 //!   go meanwhile.
@@ -44,19 +52,22 @@ use super::outbox::{bind, row};
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
-use crate::model::{DeleteTenantOutcome, KeyOwner, PageRequest, Scope, TenantId, TenantStatus};
+use crate::model::{
+    DeleteTenantOutcome, KeyOwner, MAX_PAGE_SIZE, PageRequest, Scope, TenantId, TenantStatus,
+};
 use crate::outbox::NewEvent;
 use crate::webhooks_out::destination::{DestinationPolicy, ResolveError, Resolver};
 use crate::webhooks_out::dispatch::{
     DispatchSettings, Dispatcher, SendError, SendRequest, Sender, WebhooksOut,
 };
 use crate::webhooks_out::endpoints::{CreateEndpoint, WebhookEndpoints};
+use crate::webhooks_out::reseal::{ResealReport, reseal_batch, reseal_secrets};
 use crate::webhooks_out::schedule::{Jitter, RetrySchedule};
 use crate::webhooks_out::seal::{DataKey, DataKeys};
 use crate::webhooks_out::signature::{EndpointSecret, verify};
 use crate::webhooks_out::store::{
     Attempt, ClaimRequest, ClaimToken, CreateOutcome, EndpointChange, NewDelivery, NewEndpoint,
-    Outcome, WebhookStore,
+    Outcome, SealedSecrets, WebhookStore,
 };
 use crate::webhooks_out::{
     AttemptError, DeliveryId, DeliveryStatus, DisabledReason, EndpointId, MAX_DELIVERED_DATA_BYTES,
@@ -79,6 +90,13 @@ pub async fn run(backend: &dyn Backend) {
     a_large_event_is_delivered_truncated(backend).await;
     two_dispatchers_send_each_event_once(backend).await;
     a_slow_endpoint_does_not_starve_another(backend).await;
+    every_endpoint_is_listed_to_the_walk(backend).await;
+    a_reseal_is_a_compare_and_set(backend).await;
+    resealing_lets_the_old_key_go(backend).await;
+    a_rotation_during_the_walk_is_not_overwritten(backend).await;
+    the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend).await;
+    the_walk_follows_every_page(backend).await;
+    the_listing_survives_changes_between_pages(backend).await;
 }
 
 /// The instant the fake clocks start at: whole seconds, which every
@@ -1408,6 +1426,20 @@ struct Rig {
 }
 
 fn rig(backend: &dyn Backend, schedule: RetrySchedule, dispatch: DispatchSettings) -> Rig {
+    rig_with(
+        backend,
+        schedule,
+        dispatch,
+        DataKeys::new(DataKey::generate("k1").unwrap()),
+    )
+}
+
+fn rig_with(
+    backend: &dyn Backend,
+    schedule: RetrySchedule,
+    dispatch: DispatchSettings,
+    keys: DataKeys,
+) -> Rig {
     let sender = Recorder::new();
     let resolver = Arc::new(Stub::default());
     for host in [
@@ -1420,7 +1452,7 @@ fn rig(backend: &dyn Backend, schedule: RetrySchedule, dispatch: DispatchSetting
         resolver.answer(host, &[&["93.184.216.34"]]);
     }
     let out = WebhooksOut {
-        keys: Arc::new(DataKeys::new(DataKey::generate("k1").unwrap())),
+        keys: Arc::new(keys),
         policy: DestinationPolicy::parse("hooks.example.com, *.example.net", false).unwrap(),
         resolver: resolver.clone(),
         sender: sender.clone(),
@@ -2404,4 +2436,617 @@ pub async fn a_slow_endpoint_does_not_starve_another(backend: &dyn Backend) {
         running.is_finished(),
         "the loop stops once its attempts end"
     );
+}
+
+// ─── Re-sealing the secrets (roadmap M2i) ────────────────────────────────
+
+const OLD_KEY: [u8; 32] = [5; 32];
+const NEW_KEY: [u8; 32] = [6; 32];
+
+fn data_key(id: &str, bytes: [u8; 32]) -> DataKey {
+    use base64::Engine as _;
+    DataKey::from_base64(id, &base64::engine::general_purpose::STANDARD.encode(bytes)).unwrap()
+}
+
+/// The deployment before the key rotation: `k1` alone.
+fn old_keys() -> DataKeys {
+    DataKeys::new(data_key("k1", OLD_KEY))
+}
+
+/// During it: `k2` active, `k1` a previous key.
+fn rotating_keys() -> DataKeys {
+    DataKeys::new(data_key("k2", NEW_KEY))
+        .with_previous(data_key("k1", OLD_KEY))
+        .unwrap()
+}
+
+/// After it: `k2` alone.
+fn new_keys_alone() -> DataKeys {
+    DataKeys::new(data_key("k2", NEW_KEY))
+}
+
+/// The whole store, every page.
+async fn every_endpoint(
+    store: &dyn WebhookStore,
+    limit: usize,
+) -> Vec<crate::webhooks_out::Endpoint> {
+    let mut all = Vec::new();
+    let mut page = PageRequest { after: None, limit };
+    loop {
+        let listing = store.all_endpoints(&page).await.unwrap();
+        assert!(listing.items.len() <= limit);
+        all.extend(listing.items);
+        let Some(after) = listing.next_after else {
+            return all;
+        };
+        page.after = Some(after);
+    }
+}
+
+/// `all_endpoints`: every tenant's endpoints, enabled or not, in byte
+/// order of their ids, paged by an exclusive lower bound.
+pub async fn every_endpoint_is_listed_to_the_walk(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let (a, b) = (unique_tenant("wh-all-a"), unique_tenant("wh-all-b"));
+    records.create_tenant(&tenant(&a), "").await.unwrap();
+    records.create_tenant(&tenant(&b), "").await.unwrap();
+    let mut mine = Vec::new();
+    for tenant_id in [&a, &b, &a] {
+        mine.push(
+            created(store.as_ref(), &new_endpoint(tenant_id, 0))
+                .await
+                .id,
+        );
+    }
+    store
+        .update_endpoint(
+            &tenant(&a),
+            &mine[0],
+            &EndpointChange {
+                enabled: Some(false),
+                ..EndpointChange::default()
+            },
+            START,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    for limit in [1, 2, 100] {
+        let all = every_endpoint(store.as_ref(), limit).await;
+        let ids: Vec<&str> = all.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "byte order, once each");
+        for id in &mine {
+            assert!(ids.contains(&id.as_str()), "every tenant's, disabled too");
+        }
+    }
+}
+
+/// `reseal_secrets` replaces both sealed values only while both are the
+/// ones expected, and changes nothing else; a gone endpoint answers
+/// `false`.
+pub async fn a_reseal_is_a_compare_and_set(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let a = unique_tenant("wh-cas");
+    records.create_tenant(&tenant(&a), "").await.unwrap();
+    let made = created(store.as_ref(), &new_endpoint(&a, 3)).await;
+    let rotated = store
+        .rotate_secret(
+            &tenant(&a),
+            &made.id,
+            &sealed(2),
+            START + time::Duration::hours(24),
+            START + time::Duration::minutes(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rotated.previous_secret, Some(sealed(1)));
+    let current = SealedSecrets {
+        secret: sealed(2),
+        previous: Some(sealed(1)),
+    };
+    let resealed = SealedSecrets {
+        secret: sealed(12),
+        previous: Some(sealed(11)),
+    };
+    let stale = |secret: u8, previous: Option<u8>| SealedSecrets {
+        secret: sealed(secret),
+        previous: previous.map(sealed),
+    };
+    for wrong in [
+        stale(1, Some(1)),
+        stale(2, Some(2)),
+        stale(2, None),
+        stale(9, Some(1)),
+    ] {
+        assert!(
+            !store
+                .reseal_secrets(&made.id, &wrong, &resealed)
+                .await
+                .unwrap(),
+            "both values must be the ones expected"
+        );
+        assert_eq!(
+            store
+                .endpoint(&tenant(&a), &made.id)
+                .await
+                .unwrap()
+                .unwrap(),
+            rotated,
+            "a refused write changes nothing"
+        );
+    }
+    assert!(
+        store
+            .reseal_secrets(&made.id, &current, &resealed)
+            .await
+            .unwrap()
+    );
+    let after = store
+        .endpoint(&tenant(&a), &made.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.secret, sealed(12));
+    assert_eq!(after.previous_secret, Some(sealed(11)));
+    let mut expected_row = rotated.clone();
+    expected_row.secret = sealed(12);
+    expected_row.previous_secret = Some(sealed(11));
+    assert_eq!(
+        after, expected_row,
+        "nothing else changed, updated_at included"
+    );
+    assert!(
+        !store
+            .reseal_secrets(&made.id, &current, &resealed)
+            .await
+            .unwrap(),
+        "the same write twice: the second finds other values"
+    );
+    // An endpoint with no previous secret: `None` matches `None` only.
+    let fresh = created(store.as_ref(), &new_endpoint(&a, 3)).await;
+    let none = SealedSecrets {
+        secret: sealed(1),
+        previous: None,
+    };
+    assert!(
+        !store
+            .reseal_secrets(&fresh.id, &stale(1, Some(1)), &resealed)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .reseal_secrets(&fresh.id, &none, &stale(7, None))
+            .await
+            .unwrap()
+    );
+    assert!(store.delete_endpoint(&tenant(&a), &fresh.id).await.unwrap());
+    assert!(
+        !store
+            .reseal_secrets(&fresh.id, &stale(7, None), &none)
+            .await
+            .unwrap(),
+        "a gone endpoint"
+    );
+}
+
+/// Roadmap M2i, decisive: endpoints created under `k1` (one rotated, so
+/// with a previous secret, one disabled), the walk under `k2` with `k1`
+/// previous, then `k2` alone: each endpoint's next delivery verifies with
+/// the secret its creation or rotation showed (and the previous secret of
+/// the rotated one, still overlapping); a second walk re-seals nothing.
+pub async fn resealing_lets_the_old_key_go(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let old = rig_with(
+        backend,
+        RetrySchedule::default(),
+        fast_settings(),
+        old_keys(),
+    );
+    let store = backend.webhooks();
+    let mut tenants = Vec::new();
+    let mut made = Vec::new();
+    for host in ["a.example.net", "b.example.net", "fast.example.net"] {
+        let t = unique_tenant("wh-reseal");
+        let c = caller(backend, &old.authz, &t).await;
+        let open = old.endpoints.open(&old.authz, &c).unwrap();
+        let (endpoint, secret) = open
+            .create(create(
+                &format!("https://{host}/hook"),
+                &["message_received"],
+            ))
+            .await
+            .unwrap();
+        tenants.push(t);
+        made.push((endpoint, secret, host));
+    }
+    // The second is rotated: a current and a previous secret.
+    let (rotated, new_secret) = {
+        let c = caller(backend, &old.authz, &tenants[1]).await;
+        let open = old.endpoints.open(&old.authz, &c).unwrap();
+        open.rotate_secret(made[1].0.id.as_str()).await.unwrap()
+    };
+    let before = store
+        .endpoint(&tenant(&tenants[1]), &made[1].0.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(before.secret.as_stored().starts_with("v1.k1."));
+    assert!(
+        before
+            .previous_secret
+            .as_ref()
+            .unwrap()
+            .as_stored()
+            .starts_with("v1.k1.")
+    );
+    assert_eq!(before.secret, rotated.secret);
+    // The third is disabled while the walk runs.
+    store
+        .update_endpoint(
+            &tenant(&tenants[2]),
+            &made[2].0.id,
+            &EndpointChange {
+                enabled: Some(false),
+                ..EndpointChange::default()
+            },
+            START,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    let report = reseal_secrets(store.as_ref(), &rotating_keys())
+        .await
+        .unwrap();
+    assert!(report.resealed >= 3, "{report:?}");
+    for (endpoint, _, _) in &made {
+        assert!(!report.failed.contains(&endpoint.id), "{report:?}");
+    }
+    for (index, (endpoint, _, _)) in made.iter().enumerate() {
+        let row = store
+            .endpoint(&tenant(&tenants[index]), &endpoint.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(row.secret.as_stored().starts_with("v1.k2."), "{index}");
+        assert_eq!(
+            row.previous_secret.is_some(),
+            index == 1,
+            "a previous secret stays, and none appears"
+        );
+        if let Some(previous) = &row.previous_secret {
+            assert!(
+                previous.as_stored().starts_with("v1.k2."),
+                "the previous too"
+            );
+        }
+        assert_eq!(
+            row.updated_at,
+            if index == 1 { before.updated_at } else { START }
+        );
+        assert_eq!(
+            row.previous_secret_until,
+            if index == 1 {
+                before.previous_secret_until
+            } else {
+                None
+            }
+        );
+    }
+    // Idempotent: a second walk finds them current.
+    let again = reseal_secrets(store.as_ref(), &rotating_keys())
+        .await
+        .unwrap();
+    assert_eq!(again.resealed, 0, "{again:?}");
+    assert_eq!(again.changed, 0);
+    assert!(again.current >= 3);
+
+    // `k1` gone: the next delivery of each verifies with the secret its
+    // creation or rotation showed.
+    store
+        .update_endpoint(
+            &tenant(&tenants[2]),
+            &made[2].0.id,
+            &EndpointChange {
+                enabled: Some(true),
+                ..EndpointChange::default()
+            },
+            START,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let new = rig_with(
+        backend,
+        RetrySchedule::default(),
+        fast_settings(),
+        new_keys_alone(),
+    );
+    for t in &tenants {
+        event_for(backend, t, &super::unique_digits()).await;
+    }
+    assert_eq!(round(&new).await, 3);
+    let verifies = |request: &SendRequest, secret: &EndpointSecret| {
+        verify(
+            secret,
+            request.header("webhook-id").unwrap(),
+            request.header("webhook-timestamp").unwrap(),
+            request.header("webhook-signature").unwrap(),
+            &request.body,
+            new.clock.now().unix_timestamp(),
+        )
+        .is_ok()
+    };
+    let to_a = new.sender.sent_to("a.example.net");
+    let to_b = new.sender.sent_to("b.example.net");
+    let to_c = new.sender.sent_to("fast.example.net");
+    assert!(verifies(&to_a[0], &made[0].1), "created, never rotated");
+    assert!(verifies(&to_b[0], &new_secret), "the rotation's secret");
+    assert!(
+        verifies(&to_b[0], &made[1].1),
+        "the previous secret, signing still"
+    );
+    assert!(verifies(&to_c[0], &made[2].1), "disabled during the walk");
+}
+
+/// Roadmap M2i, decisive: a rotation landing between the walk's read and
+/// its write is not overwritten: the row is left as the rotation made it,
+/// counted as changed, and a walk run again re-seals it.
+pub async fn a_rotation_during_the_walk_is_not_overwritten(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let old = rig_with(
+        backend,
+        RetrySchedule::default(),
+        fast_settings(),
+        old_keys(),
+    );
+    let store = backend.webhooks();
+    let t = unique_tenant("wh-reseal-race");
+    let c = caller(backend, &old.authz, &t).await;
+    let open = old.endpoints.open(&old.authz, &c).unwrap();
+    let (endpoint, first) = open
+        .create(create("https://a.example.net/hook", &["message_received"]))
+        .await
+        .unwrap();
+    // The walk reads the endpoint...
+    let read = store
+        .endpoint(&tenant(&t), &endpoint.id)
+        .await
+        .unwrap()
+        .unwrap();
+    // ...a rotation lands (under the active key of the moment: `k1`)...
+    let (rotated, second) = open.rotate_secret(endpoint.id.as_str()).await.unwrap();
+    // ...and the walk writes what it read, re-sealed.
+    let mut report = ResealReport::default();
+    reseal_batch(store.as_ref(), &rotating_keys(), &[read], &mut report)
+        .await
+        .unwrap();
+    assert_eq!((report.resealed, report.changed), (0, 1), "{report:?}");
+    let after = store
+        .endpoint(&tenant(&t), &endpoint.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.secret, rotated.secret, "the rotation stands");
+    assert_eq!(after.previous_secret, rotated.previous_secret);
+    // A walk run again finishes the job; k1 alone is no longer needed.
+    let again = reseal_secrets(store.as_ref(), &rotating_keys())
+        .await
+        .unwrap();
+    assert!(!again.failed.contains(&endpoint.id));
+    let row = store
+        .endpoint(&tenant(&t), &endpoint.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let keys = new_keys_alone();
+    assert_eq!(
+        keys.open(&endpoint.id, &row.secret).map(|s| s.expose()),
+        Some(second.expose()),
+        "the rotation's secret, under the new key alone"
+    );
+    assert_eq!(
+        keys.open(&endpoint.id, row.previous_secret.as_ref().unwrap())
+            .map(|s| s.expose()),
+        Some(first.expose()),
+        "and the one it replaced"
+    );
+}
+
+/// An endpoint sealed under `keys`, as the service would have made it:
+/// its row, and the secret it was made with.
+async fn sealed_endpoint(
+    store: &dyn WebhookStore,
+    keys: &DataKeys,
+    tenant_id: &str,
+) -> (crate::webhooks_out::Endpoint, EndpointSecret) {
+    let id = EndpointId::generate().unwrap();
+    let secret = EndpointSecret::generate().unwrap();
+    let mut new = new_endpoint(tenant_id, 0);
+    new.id = id.clone();
+    new.secret = keys.seal(&id, &secret).unwrap();
+    (created(store, &new).await, secret)
+}
+
+/// Roadmap M2i: what the walk cannot read it lists and leaves; what it can
+/// read of the same endpoint it re-seals; an endpoint deleted between the
+/// read and the write is skipped (counted as changed), never an error.
+/// Decisive: `failed`, `current` and `changed` of one batch, and the rows.
+pub async fn the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let t = unique_tenant("wh-reseal-edge");
+    records.create_tenant(&tenant(&t), "").await.unwrap();
+    let old = old_keys();
+    // Half readable: an unreadable current secret over a previous one
+    // that `k1` sealed.
+    let (half, previous) = sealed_endpoint(store.as_ref(), &old, &t).await;
+    store
+        .rotate_secret(
+            &tenant(&t),
+            &half.id,
+            &sealed(2),
+            START + time::Duration::hours(24),
+            START + time::Duration::minutes(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    // Unreadable alone.
+    let lost = created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    // Readable, but gone before the write.
+    let (gone, _) = sealed_endpoint(store.as_ref(), &old, &t).await;
+    let mut read = Vec::new();
+    for id in [&half.id, &lost.id, &gone.id] {
+        read.push(store.endpoint(&tenant(&t), id).await.unwrap().unwrap());
+    }
+    assert!(store.delete_endpoint(&tenant(&t), &gone.id).await.unwrap());
+
+    let mut report = ResealReport::default();
+    reseal_batch(store.as_ref(), &rotating_keys(), &read, &mut report)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.endpoints,
+            report.resealed,
+            report.current,
+            report.changed
+        ),
+        (3, 1, 0, 1),
+        "{report:?}"
+    );
+    assert_eq!(report.failed, [half.id.clone(), lost.id.clone()]);
+    assert!(!report.complete());
+    let row = store
+        .endpoint(&tenant(&t), &half.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.secret, sealed(2), "the unreadable one is left as it is");
+    assert_eq!(
+        new_keys_alone()
+            .open(&half.id, row.previous_secret.as_ref().unwrap())
+            .map(|s| s.expose()),
+        Some(previous.expose()),
+        "what could be re-sealed was"
+    );
+    let row = store
+        .endpoint(&tenant(&t), &lost.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.secret, sealed(1), "never overwritten or repaired");
+    assert!(
+        store
+            .endpoint(&tenant(&t), &gone.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a write does not bring a deleted endpoint back"
+    );
+    // `complete` is a clean run: nothing changed meanwhile, nothing unread.
+    assert!(ResealReport::default().complete());
+    for stuck in [
+        ResealReport {
+            changed: 1,
+            ..ResealReport::default()
+        },
+        ResealReport {
+            failed: vec![lost.id.clone()],
+            ..ResealReport::default()
+        },
+    ] {
+        assert!(!stuck.complete());
+    }
+}
+
+/// Roadmap M2i: a walk of more endpoints than a page holds re-seals them
+/// all (the pages are followed to the end). Decisive: the last endpoint.
+pub async fn the_walk_follows_every_page(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let old = old_keys();
+    let mut made = Vec::new();
+    // Ten endpoints at most per tenant.
+    for _ in 0..=MAX_PAGE_SIZE / 9 {
+        let t = unique_tenant("wh-reseal-pages");
+        records.create_tenant(&tenant(&t), "").await.unwrap();
+        for _ in 0..9 {
+            let (endpoint, secret) = sealed_endpoint(store.as_ref(), &old, &t).await;
+            made.push((t.clone(), endpoint.id, secret));
+        }
+    }
+    assert!(made.len() > MAX_PAGE_SIZE);
+    let report = reseal_secrets(store.as_ref(), &rotating_keys())
+        .await
+        .unwrap();
+    let made_count = u64::try_from(made.len()).unwrap();
+    assert!(report.endpoints >= made_count, "{report:?}");
+    assert!(report.resealed >= made_count, "{report:?}");
+    let keys = new_keys_alone();
+    for (t, id, secret) in &made {
+        let row = store.endpoint(&tenant(t), id).await.unwrap().unwrap();
+        assert_eq!(
+            keys.open(id, &row.secret).map(|s| s.expose()),
+            Some(secret.expose()),
+            "{id:?}"
+        );
+    }
+}
+
+/// `all_endpoints` pages by an exclusive lower bound on the id, so an
+/// endpoint deleted or created between two pages neither repeats nor
+/// skips any other: the pages after the cursor hold exactly what is there.
+pub async fn the_listing_survives_changes_between_pages(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let t = unique_tenant("wh-pages");
+    records.create_tenant(&tenant(&t), "").await.unwrap();
+    for _ in 0..5 {
+        created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    }
+    let first = store
+        .all_endpoints(&PageRequest {
+            after: None,
+            limit: 2,
+        })
+        .await
+        .unwrap();
+    let cursor = first.next_after.clone().unwrap();
+    let last = first.items.last().unwrap();
+    assert_eq!(last.id.as_str(), cursor);
+    // Between the pages: the cursor's own row goes, three are created.
+    assert!(store.delete_endpoint(&last.tenant, &last.id).await.unwrap());
+    for _ in 0..3 {
+        created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    }
+    let mut rest = Vec::new();
+    let mut page = PageRequest {
+        after: Some(cursor.clone()),
+        limit: 2,
+    };
+    loop {
+        let listing = store.all_endpoints(&page).await.unwrap();
+        rest.extend(listing.items.iter().map(|e| e.id.as_str().to_owned()));
+        let Some(after) = listing.next_after else {
+            break;
+        };
+        page.after = Some(after);
+    }
+    assert!(
+        rest.windows(2).all(|w| w[0] < w[1]) && rest.iter().all(|id| *id > cursor),
+        "ascending, past the cursor, once each: {rest:?}"
+    );
+    let now: Vec<String> = every_endpoint(store.as_ref(), 100)
+        .await
+        .iter()
+        .map(|e| e.id.as_str().to_owned())
+        .filter(|id| *id > cursor)
+        .collect();
+    assert_eq!(rest, now, "exactly what is there after the cursor");
 }

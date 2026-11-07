@@ -105,6 +105,7 @@ The commands:
 | `meta-whatsapp-server admin list-keys [--tenant <id>]` | lists the admin and platform keys (or a tenant's), never a secret |
 | `meta-whatsapp-server admin revoke-key <key_id>` | revokes a key of any kind |
 | `meta-whatsapp-server vault rotate` | re-encrypts every WABA's token under the active vault key (as `POST /v1/admin/vault/rotate`, without its request deadline; Postgres only: memory storage is per process) |
+| `meta-whatsapp-server webhooks reseal` | seals every webhook endpoint's secret and previous secret again under the active data key (as `POST /v1/admin/webhooks/reseal`, without its request deadline; Postgres only); prints counts and endpoint ids, never a secret; exits non-zero until none is unreadable or changed meanwhile ([below](#rotating-the-data-key)) |
 
 ## Configure
 
@@ -2509,6 +2510,42 @@ minute (`WA_SERVER_WEBHOOK_LEASE`; the replicas' clocks must agree
 within it). One slow receiver holds at most 4 attempts a replica; a
 tenant, 8; a replica, 32 (`WA_SERVER_WEBHOOK_IN_FLIGHT…`). A platform key's endpoint is the tenant's it acts as
 (`WA-Tenant`): make one per tenant.
+
+### Rotating the data key
+
+The signing secrets are sealed under `WA_SERVER_DATA_KEY`. To replace it:
+
+1. Give **every replica** the new key (`WA_SERVER_DATA_KEY`, with a new
+   `WA_SERVER_DATA_KEY_ID`) and the old one in
+   `WA_SERVER_DATA_PREVIOUS_KEYS`, and deploy. Until every replica runs
+   the new key, one still on the old one seals new and rotated secrets
+   under it. Deliveries keep verifying: a previous key opens what it
+   sealed.
+2. Run `meta-whatsapp-server webhooks reseal` (or call `POST
+   /v1/admin/webhooks/reseal` with an admin key). It walks every endpoint
+   of every tenant, enabled or not, and seals its secret and previous
+   secret again under the new key, a page at a time. Each row is written
+   only if it is still the one the walk read, so a secret rotation
+   landing meanwhile is not overwritten. It prints
+   `N endpoints walked, R re-sealed, C already current, S skipped by a
+   concurrent change, U unreadable` (the route answers `{endpoints,
+   resealed, current, changed, failed}`): counts and endpoint ids,
+   never a secret. The route is cut at the 55 s request deadline
+   (`504 timeout`, part of the endpoints done); the command has none.
+3. Repeat until a run reports 0 skipped and 0 unreadable (the command
+   exits non-zero until then). A repeat re-seals nothing already under the
+   new key, so the last run also confirms it: `re-sealed` is 0. An
+   unreadable endpoint is one whose secret no listed key opens: list the
+   key that sealed it, or delete the endpoint and make it again. On
+   Postgres, `SELECT count(*) FROM wa_server_webhook_endpoints WHERE
+   secret NOT LIKE 'v1.<new id>.%' OR previous_secret NOT LIKE
+   'v1.<new id>.%'` answers 0 as well.
+4. Remove the old key from `WA_SERVER_DATA_PREVIOUS_KEYS` and deploy. The
+   command never removes a key.
+
+A key removed before step 3 is clean strands the secrets sealed under it:
+the endpoint's deliveries then fail to sign until it is deleted and made
+again.
 
 ## Errors
 
