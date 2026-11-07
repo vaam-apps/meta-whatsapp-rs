@@ -5,7 +5,7 @@ description: "Partner APIs through meta-whatsapp-server, the meta-whatsapp-rs HT
 
 # meta-whatsapp-rs-server-partners
 
-> **Verified against meta-whatsapp-rs 8a778327d1f416ca086d3ce9a7f5817b5c1fdcc7 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs d3b92bdeda5cd1e1e9565ca936bd060ffa86f726 (2026-11-07).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/partners.ts](examples/partners.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#partner-apis).
 
@@ -25,10 +25,13 @@ Two kinds of key:
 
 ## Legal acts are off until the deployment turns them on
 
-Seven calls state something about a business, cannot be taken back or move
-a business's assets: a billing migration's start and its resumption, a
-solution migration intent, a business verification submission, and
-accepting, rejecting or (accepting the deactivation of) a solution. With
+Eight calls state something about a business, act for it, cannot be taken
+back or move a business's assets: a billing migration's start and its
+resumption, a solution migration intent, a business verification
+submission, accepting, rejecting or (accepting the deactivation of) a
+solution, and the Marketing Messages API onboarding request (an
+invitation to the business's admins to accept the terms; not the
+acceptance, but gated all the same). With
 `WA_SERVER_LEGAL_ACTS` off (the default) each is `403 feature_not_available`
 and **nothing was asked of Meta**; on, each is audited. The code never
 takes one by itself.
@@ -56,6 +59,8 @@ The operator's, all with an admin key:
 | `POST /v1/admin/partners/solutions/{id}/reject` | decline it; a legal act, permanent |
 | `POST /v1/admin/partners/solutions/{id}/deactivation-request/accept` | accept a deactivation request; a legal act |
 | `GET /v1/admin/partners/users/{user_id}/wabas` | the WABAs assigned to a system user |
+| `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | email a business's admins an invitation to accept the Marketing Messages API's terms (optional `solution_id`): `{request_id}`; a legal act |
+| `GET /v1/admin/partners/client-wabas` | the client WABAs by `onboarding_status` (`ELIGIBLE`, `ONBOARDED`), paged with `cursor` |
 
 The list of solutions, a solution's partners, the client businesses and
 the other two deactivation calls are in the operators' guide.

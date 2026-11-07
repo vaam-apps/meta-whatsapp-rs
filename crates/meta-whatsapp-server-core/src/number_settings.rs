@@ -116,9 +116,10 @@ pub fn is_legal_act(operation: Operation) -> bool {
 
 /// [`is_legal_act`] for an operator's operations
 /// ([`AdminOperation`]; roadmap M5h, design D231 and M5j, design D250): the
-/// max price beta agreement and the four partner acts of the operator (a
+/// max price beta agreement, the four partner acts of the operator (a
 /// business verification submission; accepting or rejecting a solution;
-/// accepting a deactivation). The same setting gates them, and adding an
+/// accepting a deactivation) and the partner Intent API's invitation to a
+/// business's admins (roadmap M5h2, design D431). The same setting gates them, and adding an
 /// admin act to the gate is one more arm here.
 #[must_use]
 pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
@@ -129,6 +130,7 @@ pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
             | AdminOperation::AcceptPartnerSolution
             | AdminOperation::RejectPartnerSolution
             | AdminOperation::AcceptPartnerSolutionDeactivation
+            | AdminOperation::RequestMarketingOnboarding
     )
 }
 
@@ -1088,6 +1090,7 @@ mod tests {
                 "accept_partner_solution",
                 "reject_partner_solution",
                 "accept_partner_solution_deactivation",
+                "request_marketing_onboarding",
             ]
         );
         assert_eq!(

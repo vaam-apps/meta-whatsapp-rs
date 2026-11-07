@@ -73,6 +73,24 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   url)` builds the one input of `Media::download_with_info` that a media
   webhook leaves callers to build.
 
+### Added (roadmap M5h2)
+
+- **What M5h did not route** (rows 136, 137; D430 to D435, decided
+  2026-11-07): three admin routes. `POST
+  /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
+  max price agreement's state with the operator's `token` in the body and
+  answers `{status}`: Meta's answer names the signer, the service's never
+  does, and the signer and the token are in no log or error, and an answered read is audited (`max_price_agreement_read`). `POST
+  /v1/admin/partners/businesses/{business_id}/marketing-onboarding` is the
+  partner Intent API (an invitation to a business's admins to accept the
+  Marketing Messages API's terms, not the acceptance): gated as a legal act
+  (`WA_SERVER_LEGAL_ACTS`, the new operation `request_marketing_onboarding`
+  in `is_legal_admin_act`), once (it takes an `Idempotency-Key`), audited `marketing_onboarding_requested`.
+  `GET /v1/admin/partners/client-wabas` lists the client WABAs by
+  onboarding status. OpenAPI additive only (three paths, six schemas).
+  A GIF header's send-time parameter stays open (roadmap M5h3): no page shows it (D435).
+  All names pending the owner's confirmation before the first release.
+
 ### Added (roadmap M2j)
 
 - **A connection pool for webhooks out** (roadmap M2j; D400 to D404): `HyperSender` keeps connections idle between attempts and

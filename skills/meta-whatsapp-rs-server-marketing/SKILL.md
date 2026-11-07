@@ -5,7 +5,7 @@ description: "Sending marketing messages and managing max price and Click-to-Wha
 
 # meta-whatsapp-rs-server-marketing
 
-> **Verified against meta-whatsapp-rs 6ec0b6a3b857837c58481d371d4537004966484f (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs d3b92bdeda5cd1e1e9565ca936bd060ffa86f726 (2026-11-07).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/marketing.ts](examples/marketing.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#marketing-messages-api-max-price-and-welcome-message-sequences).
 
@@ -147,11 +147,11 @@ refusal. The welcome text is in no log.
 
 ## What meta-whatsapp-rs does not do
 
-Not offered: the agreement's state read, the partner Intent API (it emails
-a business's admins an invitation to accept the terms), the client WABAs
-listing, and a GIF header's send-time parameter (no page of Meta's shows
-it; create the template with a `GIF` header format, send it as Meta's
-object). No call of these routes was run against Meta live.
+Not offered: a GIF header's send-time parameter (no page of Meta's shows
+it; send the template as Meta's object). The operator's admin routes read
+the agreement's state (never the signer), invite a business's admins to
+accept the terms (a legal act) and list client WABAs by onboarding status:
+see `references/routes.md`. No call was run against Meta live.
 
 ## Related skills
 

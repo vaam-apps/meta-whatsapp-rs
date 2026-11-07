@@ -51,6 +51,7 @@ use base64::engine::general_purpose::STANDARD;
 use meta_whatsapp_rs::client::business_verification::{
     ListVerificationSubmissions, MAX_DOCUMENTS, VerificationDocument,
 };
+use meta_whatsapp_rs::client::marketing::{ListClientWabas, OnboardingStatus};
 use meta_whatsapp_rs::client::partners::solutions::{
     CreateSolution, ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
     SolutionInfo, SolutionRole,
@@ -92,6 +93,8 @@ pub const SOLUTION_DEACTIVATION_REQUESTED: &str = "partner_solution_deactivation
 pub const SOLUTION_DEACTIVATION_ACCEPTED: &str = "partner_solution_deactivation_accepted";
 /// The audit action of [`Partners::reject_solution_deactivation`].
 pub const SOLUTION_DEACTIVATION_REJECTED: &str = "partner_solution_deactivation_rejected";
+/// The audit action of [`Partners::request_marketing_onboarding`].
+pub const MARKETING_ONBOARDING_REQUESTED: &str = "marketing_onboarding_requested";
 /// The audit action of [`WabaPartners::create_solution_migration_intent`].
 pub const SOLUTION_MIGRATION_INTENT_CREATED: &str = "solution_migration_intent_created";
 /// The audit action of [`WabaPartners::create_billing_migration`].
@@ -138,11 +141,19 @@ pub enum PartnerAction {
     RejectSolutionDeactivation,
     /// `GET /v1/admin/partners/users/{user_id}/wabas`.
     ListAssignedWabas,
+    /// `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`:
+    /// the partner Intent API, which emails the business's admins an
+    /// invitation to accept the Marketing Messages API's terms.
+    RequestMarketingOnboarding,
+    /// `GET /v1/admin/partners/client-wabas`: the client WABAs shared with
+    /// the deployment's business, by their Marketing Messages API
+    /// onboarding status.
+    ListClientWabas,
 }
 
 impl PartnerAction {
     /// Every action.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::SubmitBusinessVerification,
         Self::ListBusinessVerifications,
         Self::CreateSolution,
@@ -156,6 +167,8 @@ impl PartnerAction {
         Self::AcceptSolutionDeactivation,
         Self::RejectSolutionDeactivation,
         Self::ListAssignedWabas,
+        Self::RequestMarketingOnboarding,
+        Self::ListClientWabas,
     ];
 }
 
@@ -172,6 +185,9 @@ fn admin_act(action: PartnerAction) -> Option<AdminOperation> {
         PartnerAction::AcceptSolutionDeactivation => {
             Some(AdminOperation::AcceptPartnerSolutionDeactivation)
         }
+        PartnerAction::RequestMarketingOnboarding => {
+            Some(AdminOperation::RequestMarketingOnboarding)
+        }
         PartnerAction::ListBusinessVerifications
         | PartnerAction::CreateSolution
         | PartnerAction::ListSolutions
@@ -180,7 +196,8 @@ fn admin_act(action: PartnerAction) -> Option<AdminOperation> {
         | PartnerAction::ListClientBusinesses
         | PartnerAction::RequestSolutionDeactivation
         | PartnerAction::RejectSolutionDeactivation
-        | PartnerAction::ListAssignedWabas => None,
+        | PartnerAction::ListAssignedWabas
+        | PartnerAction::ListClientWabas => None,
     }
 }
 
@@ -395,6 +412,31 @@ pub struct Paged<T> {
     /// The next page's cursor, when there is one.
     pub next_cursor: Option<String>,
 }
+
+/// A client WABA shared with the deployment's business, with the fields
+/// Meta's page shows for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientWabaView {
+    /// Its id.
+    pub id: String,
+    /// Its name.
+    pub name: Option<String>,
+    /// Its time zone id.
+    pub timezone_id: Option<String>,
+    /// Its template namespace.
+    pub message_template_namespace: Option<String>,
+}
+
+/// What Meta answered the partner Intent API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketingOnboardingRequest {
+    /// Meta's id of the request, for tracking.
+    pub request_id: String,
+}
+
+/// The onboarding statuses a client WABAs listing may filter by: the two
+/// Meta's pages spell out (`marketing-messages/onboarding`).
+pub const CLIENT_WABA_STATUSES: [&str; 2] = ["ELIGIBLE", "ONBOARDED"];
 
 /// A WABA assigned to a user.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1076,6 +1118,121 @@ impl Partners<'_> {
         }
     }
 
+    /// Email the admins of the business `business_id` an invitation to
+    /// accept the Marketing Messages API's Terms of Service, and set an
+    /// on-behalf-of migration intent on its WABAs that lack one (the
+    /// partner Intent API, `POST /{business}/onboard_partners_to_mm_lite`),
+    /// with the deployment's system token. **Treated as a legal act**
+    /// ([`AdminOperation::RequestMarketingOnboarding`], design D431): it
+    /// acts for the business and cannot be recalled, though the invitation
+    /// is not the acceptance (a person accepts it in Meta Business Suite).
+    /// Off until the deployment enables the legal acts; sent once, never
+    /// replayed; audited as [`MARKETING_ONBOARDING_REQUESTED`]. Meta's
+    /// texts (a duplicate request, an ineligible business) are withheld:
+    /// its code and the service's kind are answered.
+    ///
+    /// # Errors
+    ///
+    /// `403 feature_not_available` with the legal acts off, before
+    /// anything else; `409 signup_not_configured`; `422` on
+    /// `business_id` or `solution_id`; Meta's refusal, as its code says.
+    pub async fn request_marketing_onboarding(
+        &self,
+        authz: &Authorizer,
+        business_id: &str,
+        solution_id: Option<&str>,
+    ) -> Result<MarketingOnboardingRequest, ServiceError> {
+        let session = self.open(authz, PartnerAction::RequestMarketingOnboarding)?;
+        if !plain_id(business_id) {
+            return Err(ServiceError::invalid("business_id"));
+        }
+        if solution_id.is_some_and(|id| !plain_id(id)) {
+            return Err(ServiceError::invalid("solution_id"));
+        }
+        let business =
+            BusinessId::new(business_id).map_err(|_| ServiceError::invalid("business_id"))?;
+        match session
+            .client
+            .marketing_business(business.clone())
+            .request_onboarding(solution_id)
+            .await
+        {
+            Ok(requested) => {
+                audit_admin(
+                    MARKETING_ONBOARDING_REQUESTED,
+                    self.admin,
+                    Some(business.as_str()),
+                    None,
+                    Outcome::Answered,
+                );
+                Ok(MarketingOnboardingRequest {
+                    request_id: requested.request_id,
+                })
+            }
+            Err(error) => {
+                let api = refused(&error, self.observer);
+                // A refusal Meta answered changed nothing; one that may
+                // have gone through is audited.
+                if api.may_have_been_sent() {
+                    audit_admin(
+                        MARKETING_ONBOARDING_REQUESTED,
+                        self.admin,
+                        Some(business.as_str()),
+                        None,
+                        Outcome::Unanswered,
+                    );
+                }
+                Err(api)
+            }
+        }
+    }
+
+    /// One page of the client WABAs shared with the deployment's business
+    /// whose Marketing Messages API onboarding status is one of `statuses`
+    /// (`GET /{business}/client_whatsapp_business_accounts`, filtered):
+    /// `ELIGIBLE` finds who the Intent API can onboard. A read.
+    ///
+    /// # Errors
+    ///
+    /// `409 signup_not_configured`; `422` on `onboarding_status` (one or
+    /// both of [`CLIENT_WABA_STATUSES`]) or `cursor`; Meta's refusal.
+    pub async fn client_wabas(
+        &self,
+        authz: &Authorizer,
+        statuses: &[String],
+        after: Option<String>,
+    ) -> Result<Paged<ClientWabaView>, ServiceError> {
+        let session = self.open(authz, PartnerAction::ListClientWabas)?;
+        let mut parsed = Vec::with_capacity(statuses.len());
+        for status in statuses {
+            if !CLIENT_WABA_STATUSES.contains(&status.as_str())
+                || parsed.contains(&OnboardingStatus::from(status.as_str()))
+            {
+                return Err(ServiceError::invalid("onboarding_status"));
+            }
+            parsed.push(OnboardingStatus::from(status.as_str()));
+        }
+        if parsed.is_empty() {
+            return Err(ServiceError::invalid("onboarding_status"));
+        }
+        let mut list = ListClientWabas::new(parsed);
+        if let Some(after) = cursor(after)? {
+            list = list.after(after);
+        }
+        let page = session
+            .client
+            .marketing_business(session.business.clone())
+            .client_wabas_with_status(&list)
+            .await
+            .map_err(|error| refused(&error, self.observer))?;
+        Ok(paged(page, |waba| ClientWabaView {
+            id: waba.id.as_str().to_owned(),
+            name: waba.name,
+            timezone_id: waba.timezone_id,
+            message_template_namespace: waba.message_template_namespace,
+        }))
+    }
+
     /// One page of the WABAs assigned to a user of the deployment's
     /// business (`GET /{user}/assigned_whatsapp_business_accounts`).
     ///
@@ -1490,12 +1647,13 @@ fn migration_view(state: meta_whatsapp_rs::client::waba::MigrationState) -> Bill
 mod tests {
     use super::*;
 
-    /// D250: four of the operator's thirteen actions are legal acts; the
-    /// reads, the creation of a solution and the two "soft" deactivation
-    /// calls are not. Decisive: an arm of [`is_legal_admin_act`] removed
+    /// D250 and D431: five of the operator's fifteen actions are legal acts
+    /// (the invitation of the partner Intent API among them); the reads,
+    /// the creation of a solution and the two "soft" deactivation calls are
+    /// not. Decisive: an arm of [`is_legal_admin_act`] removed
     /// or added.
     #[test]
-    fn four_of_the_operators_actions_are_legal_acts() {
+    fn five_of_the_operators_actions_are_legal_acts() {
         let gated: Vec<_> = PartnerAction::ALL
             .into_iter()
             .filter(|action| admin_act(*action).is_some_and(is_legal_admin_act))
@@ -1507,6 +1665,7 @@ mod tests {
                 PartnerAction::AcceptSolution,
                 PartnerAction::RejectSolution,
                 PartnerAction::AcceptSolutionDeactivation,
+                PartnerAction::RequestMarketingOnboarding,
             ]
         );
         for action in gated {
