@@ -47,6 +47,7 @@ use crate::model::TenantId;
 pub mod destination;
 pub mod dispatch;
 pub mod endpoints;
+pub mod reseal;
 pub mod schedule;
 pub mod seal;
 pub mod signature;

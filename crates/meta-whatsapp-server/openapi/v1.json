@@ -4162,6 +4162,83 @@
         ]
       }
     },
+    "/v1/admin/webhooks/reseal": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Seal every webhook endpoint's secret and previous secret again under\nthe active data key (`WA_SERVER_DATA_KEY`), so that an old key can\nleave `WA_SERVER_DATA_PREVIOUS_KEYS`: the data key rotation's second\nstep, as `POST /v1/admin/vault/rotate` is the vault key's. The old key\ncan go once `changed` and `failed` are both empty (and every replica\nruns the new key). Also `meta-whatsapp-server webhooks reseal`.",
+        "description": "Each row is written only if it is still the one read, so a secret\nrotation landing meanwhile is not overwritten (`changed`), and a repeat\nre-seals nothing already current. The walk is a request like any other,\ncut at the 55 s request deadline (`504 timeout`, part of the endpoints\ndone): repeat it, or run the command, which has no deadline. Audited\nas `webhook_secrets_resealed`; no secret is in the answer.",
+        "operationId": "reseal_webhook_secrets",
+        "responses": {
+          "200": {
+            "description": "Walked every endpoint: how many were re-sealed, were current, changed meanwhile, or could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSecretsReseal"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`: no `WA_SERVER_DATA_KEY`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the walk outlived the 55 s request deadline, part of the endpoints re-sealed; repeat it, or run `meta-whatsapp-server webhooks reseal`, which has no deadline",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [
@@ -40213,6 +40290,50 @@
           "secret": {
             "type": "string",
             "description": "The new signing secret (`whsec_…`): deliveries carry its signature\nfirst from now on."
+          }
+        }
+      },
+      "WebhookSecretsReseal": {
+        "type": "object",
+        "description": "What re-sealing the webhook secrets did: counts and endpoint ids,\nnever a secret.",
+        "required": [
+          "endpoints",
+          "resealed",
+          "current",
+          "changed",
+          "failed"
+        ],
+        "properties": {
+          "changed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Endpoints left alone because their row changed between the walk's\nread and its write (a rotation landed): repeat the walk.",
+            "minimum": 0
+          },
+          "current": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Endpoints whose secrets were under the active key already.",
+            "minimum": 0
+          },
+          "endpoints": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Endpoints walked, every tenant's, enabled or not.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Endpoints with a secret no listed data key opens for that endpoint\n(or that is altered). Keep the previous keys until this is empty."
+          },
+          "resealed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Endpoints whose secrets were sealed again under the active data\nkey and written.",
+            "minimum": 0
           }
         }
       },

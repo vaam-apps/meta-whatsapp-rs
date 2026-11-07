@@ -18,6 +18,28 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   ten): it receives those tenants' events, each delivery read in its own
   tenant's stream (roadmap M2m; migration 11).
 
+### Added (roadmap M2i)
+
+- **Re-sealing the webhook secrets** (roadmap M2i; choices D320-D324,
+  decided by the coordinator on 2026-11-06 under the owner's delegation,
+  swappable): `meta-whatsapp-server webhooks
+  reseal` and `POST /v1/admin/webhooks/reseal` (admin key, audited as
+  `webhook_secrets_resealed`; the names pending the owner's confirmation
+  before the first release) seal every endpoint's secret and previous
+  secret again under the active `WA_SERVER_DATA_KEY`, batch by batch, each
+  row written only if its sealed values are still the ones read (a
+  secret rotation landing meanwhile is not overwritten). They answer
+  counts (`endpoints`, `resealed`, `current`, `changed`) and the ids of
+  endpoints no listed key opens (`failed`), never a secret; a repeat
+  re-seals nothing; the command exits non-zero until `changed` and
+  `failed` are empty, when the old key can leave
+  `WA_SERVER_DATA_PREVIOUS_KEYS` (the server guide's "Rotating the data
+  key"). `WebhookStore` gains `all_endpoints` and `reseal_secrets` (a
+  compare-and-set on both sealed values), implemented by the memory and
+  Postgres backends and held by the conformance suite; no migration.
+  **Breaking for a `WebhookStore` implemented outside this repository**
+  (before the first release): both are required methods.
+
 ### Fixed
 
 - The service sends every legal act exactly once: the compliance

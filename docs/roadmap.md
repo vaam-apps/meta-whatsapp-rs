@@ -5832,7 +5832,7 @@ design's (§9).
     note ("With M2h"). Migration 5's names are stable identifiers pending
     the owner (§ Owner touchpoints).
 
-- [ ] **M2i. Re-sealing the webhook secrets** (added by M2c; D110): a
+- [x] **M2i. Re-sealing the webhook secrets** (added by M2c; D110): a
   walk that re-seals every endpoint's secret and previous secret under
   the active `WA_SERVER_DATA_KEY`, so that a previous key can leave
   `WA_SERVER_DATA_PREVIOUS_KEYS`: an operator command beside `vault
@@ -5843,6 +5843,21 @@ design's (§9).
     every endpoint's next delivery verifies with the secret its creation
     or rotation showed; a rotation landing between the walk's read and
     write is not overwritten; skipping the write fails it.
+  - **Landed:** `meta-whatsapp-server webhooks reseal` and its route twin
+    `POST /v1/admin/webhooks/reseal` (admin key, audited
+    `webhook_secrets_resealed`; names pending the owner, D320). The
+    store port gained `WebhookStore::all_endpoints` and
+    `WebhookStore::reseal_secrets`, a compare-and-set on both sealed
+    values (memory and Postgres; no migration; the MongoDB spike
+    delegates to memory); the walk is `webhooks_out::reseal`
+    (`reseal_secrets`, `reseal_batch`), counting `resealed`, `current`,
+    `changed` and `failed` endpoint ids, never a secret (D321-D324).
+    Decisive, in the conformance suite on every backend:
+    `resealing_lets_the_old_key_go` (three endpoints, one rotated, one
+    disabled: after the walk with `k2` alone, each next delivery verifies
+    with the secret its creation or rotation showed, and a second walk
+    re-seals nothing) and `a_rotation_during_the_walk_is_not_overwritten`;
+    `a_reseal_is_a_compare_and_set` at the port.
 
 - [ ] **M2j. A connection pool for webhooks out** (added by M2c; D109,
   D113): connections kept between attempts to one endpoint, reused only
