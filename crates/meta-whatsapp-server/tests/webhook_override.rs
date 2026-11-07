@@ -347,7 +347,12 @@ async fn the_overrides_destination_is_refused_as_a_webhook_endpoints_is() {
         assert_eq!(endpoint.status, StatusCode::CREATED, "{hook}");
         h.graph.push_json(200, json!({"success": true}));
         let reply = h.call(put(PN, &key, hook)).await;
-        assert_eq!(reply.status, StatusCode::NO_CONTENT, "{hook}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::NO_CONTENT,
+            "{hook}: {}",
+            reply.text
+        );
     }
     assert_eq!(h.graph.requests().len(), 2);
     assert_eq!(h.graph.remaining(), 0);
@@ -401,26 +406,31 @@ async fn with_the_setting_off_a_set_is_refused_and_nothing_is_sent() {
     let h = harness(false, true).await;
     let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
     let platform = h
-        .platform_key(AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]), &[Scope::Numbers])
+        .platform_key(
+            AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]),
+            &[Scope::Numbers],
+        )
         .await;
     let reads = h.kv.vault_reads();
     let reply = h.call(put(PN, &key, HOOK)).await;
     assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
     assert_eq!(reply.json()["error"]["code"], "feature_not_available");
-    let acting = h
-        .call(put(PN, &platform, HOOK).tenant(TENANT))
-        .await;
+    let acting = h.call(put(PN, &platform, HOOK).tenant(TENANT)).await;
     assert_eq!(acting.json()["error"]["code"], "feature_not_available");
     assert!(h.graph.requests().is_empty(), "{:?}", h.graph.requests());
     assert_eq!(h.kv.vault_reads(), reads, "the vault was read");
     // Nothing else is off: the read, and the clear.
-    h.graph.push_json(200, json!({"webhook_configuration": {}, "id": PN}));
+    h.graph
+        .push_json(200, json!({"webhook_configuration": {}, "id": PN}));
     assert_eq!(
         h.call(Call::get(url(PN)).key(&key)).await.status,
         StatusCode::OK
     );
     h.graph.push_json(200, json!({"success": true}));
-    assert_eq!(h.call(delete(PN, &key)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        h.call(delete(PN, &key)).await.status,
+        StatusCode::NO_CONTENT
+    );
     assert_eq!(h.graph.requests().len(), 2);
 }
 
@@ -485,12 +495,12 @@ async fn clearing_is_always_allowed() {
         let h = harness(enabled, configured).await;
         let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
         let platform = h
-            .platform_key(AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]), &[Scope::Numbers])
+            .platform_key(
+                AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]),
+                &[Scope::Numbers],
+            )
             .await;
-        for call in [
-            delete(PN, &key),
-            delete(PN, &platform).tenant(TENANT),
-        ] {
+        for call in [delete(PN, &key), delete(PN, &platform).tenant(TENANT)] {
             h.graph.push_json(200, json!({"success": true}));
             let reply = h.call(call).await;
             assert_eq!(
@@ -533,7 +543,10 @@ async fn the_read_answers_the_numbers_own_url_only() {
         assert!(!reply.text.contains(withheld), "{}", reply.text);
     }
     let (method, path, _) = the_request(&h);
-    assert_eq!((method, path.as_str()), (Method::GET, "/v25.0/106540352242922"));
+    assert_eq!(
+        (method, path.as_str()),
+        (Method::GET, "/v25.0/106540352242922")
+    );
     assert_eq!(
         h.graph.requests()[0].query("fields").as_deref(),
         Some("webhook_configuration")
@@ -555,7 +568,8 @@ async fn the_read_answers_the_numbers_own_url_only() {
 async fn a_failed_set_withholds_metas_texts_and_the_token() {
     let h = harness(true, true).await;
     let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
-    h.graph.push_json(400, graph_error(&format!("{VERIFY} {SENTINEL}")));
+    h.graph
+        .push_json(400, graph_error(&format!("{VERIFY} {SENTINEL}")));
     let reply = h.call(put(PN, &key, HOOK)).await;
     assert!(!reply.status.is_success(), "{}", reply.text);
     for secret in [SENTINEL, VERIFY] {

@@ -915,8 +915,8 @@ pub fn with_uploads(
 
 /// Webhooks out for a test that sets a number's webhook override with a URL
 /// that is an address (no lookup): `93.184.216.0/24` listed, `https` only.
-pub fn webhooks_out_for_an_address() -> meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut
-{
+pub fn webhooks_out_for_an_address()
+-> meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut {
     use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
     use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
     meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut::new(
