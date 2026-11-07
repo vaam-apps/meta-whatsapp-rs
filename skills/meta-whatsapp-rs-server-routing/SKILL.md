@@ -36,8 +36,8 @@ owner of a pass gets control_passed, the previous owner of a take gets
 control_taken, a release has no event, and **no call says who owns a
 thread**. The service keeps the part that is its own: once Meta answers a
 pass, a take or a release, it records the new owner in the inbox the
-reply routes read, so a free-form reply after a pass is `409
-thread_owned_elsewhere` with nothing sent to Meta, and after a release it
+reply routes read, so a free-form reply after a pass is
+`409 thread_owned_elsewhere` with nothing sent to Meta, and after a release it
 goes on to Meta's window check. Naming the user by phone is fine when the
 inbox keys the customer by BSUID: the record goes where a handover for the
 same user would. A refusal or a `504 timeout` records nothing (the thread
