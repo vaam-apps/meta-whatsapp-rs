@@ -27,7 +27,9 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   are listed with their reasons in
   `crates/meta-whatsapp-rs/tests/non_exhaustive.rs`, a source scan that
   fails on a response or webhook struct, or an open enum, without the
-  attribute. The rule is in `docs/architecture.md`.
+  attribute. The rule is in `docs/architecture.md`. `MediaInfo::new(id,
+  url)` builds the one input of `Media::download_with_info` that a media
+  webhook leaves callers to build.
 
 ### Added (roadmap M5f3)
 
@@ -567,7 +569,8 @@ stored data, the owner's).
 - API conventions: #27, one catch-all shape, `Other(String)`, from one
   macro in core (L20a, breaking; landed: see Changed and "Open questions
   closed"); #28, `#[non_exhaustive]` on response
-  and webhook types and open enums (L20b, breaking); #29, the axum and
+  and webhook types and open enums (L20b, breaking; landed: see
+  Changed); #29, the axum and
   sqlx re-exports kept (no code).
 - Webhooks and live updates: #30, a permanently failing event is
   dead-lettered, the rest of the batch delivered (L21a); #31, live

@@ -5,12 +5,12 @@
 //! A scan of the source of `meta-whatsapp-client` and
 //! `meta-whatsapp-webhooks` fails on:
 //!
-//! - a **response or webhook struct** without the attribute: a top-level
-//!   `pub struct` with named `pub` fields that derives `Deserialize`
+//! - a **response or webhook struct** without the attribute: a `pub struct`
+//!   (parsed with `syn`, in inline modules too) with named `pub` fields that derives `Deserialize`
 //!   (tuple structs and structs with private fields cannot be built by a
 //!   literal anyway);
-//! - an **open enum** without it: a top-level `pub enum` with a catch-all
-//!   variant (`Other`, `Unknown`, `Unparsed`); the enums
+//! - an **open enum** without it: a `pub enum` with a catch-all variant
+//!   (named `Other*`, `Unknown*`, `Unparsed*`, or `#[serde(other)]`); the enums
 //!   `meta_whatsapp_core::open_enum!` generates get the attribute from the
 //!   macro, which the test checks.
 //!
@@ -26,6 +26,8 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use quote::ToTokens;
 
 /// Files (or directories, ending in `/`) of `meta-whatsapp-client/src`
 /// whose types are all built by callers.
@@ -191,17 +193,23 @@ const EXEMPT_TYPES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// A top-level type of one file.
+/// A `pub` struct or enum of one file, however nested in inline modules.
 struct Item {
     /// Path under the crate's `src`.
     file: String,
     name: String,
-    /// The attribute lines above it.
-    attrs: String,
-    /// `true` for a struct, `false` for an enum.
-    is_struct: bool,
-    /// Body lines up to the closing brace at column 0.
-    body: Vec<String>,
+    kind: Kind,
+    non_exhaustive: bool,
+    deserialize: bool,
+    /// What makes it matter: for a struct, a named `pub` field (a literal
+    /// can build it); for an enum, a catch-all variant.
+    shaped: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Struct,
+    Enum,
 }
 
 fn repo() -> PathBuf {
@@ -222,8 +230,84 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The top-level `pub struct`/`pub enum` items of a crate's `src`, with
-/// braces (`pub struct T(..);` and unit structs have none to build).
+fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("cfg") && a.to_token_stream().to_string().contains("test"))
+}
+
+/// A derive of `Deserialize` however written: split over lines, by path
+/// (`serde::Deserialize`) or under `cfg_attr`.
+fn derives_deserialize(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        (a.path().is_ident("derive") || a.path().is_ident("cfg_attr"))
+            && a.to_token_stream().to_string().contains("Deserialize")
+    })
+}
+
+fn has_non_exhaustive(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("non_exhaustive")
+            || (a.path().is_ident("cfg_attr")
+                && a.to_token_stream().to_string().contains("non_exhaustive"))
+    })
+}
+
+/// A variant that takes whatever Meta adds: named `Other`, `Unknown` or
+/// `Unparsed` (any suffix), or marked `#[serde(other)]`.
+fn is_catch_all(v: &syn::Variant) -> bool {
+    let name = v.ident.to_string();
+    ["Other", "Unknown", "Unparsed"]
+        .iter()
+        .any(|p| name.starts_with(p))
+        || v.attrs.iter().any(|a| {
+            a.path().is_ident("serde") && a.to_token_stream().to_string().contains("other")
+        })
+}
+
+fn collect(file: &str, items: &[syn::Item], found: &mut Vec<Item>) {
+    for item in items {
+        match item {
+            syn::Item::Struct(s) if matches!(s.vis, syn::Visibility::Public(_)) => {
+                let pub_field = match &s.fields {
+                    syn::Fields::Named(f) => f
+                        .named
+                        .iter()
+                        .any(|f| matches!(f.vis, syn::Visibility::Public(_))),
+                    _ => false,
+                };
+                found.push(Item {
+                    file: file.to_owned(),
+                    name: s.ident.to_string(),
+                    kind: Kind::Struct,
+                    non_exhaustive: has_non_exhaustive(&s.attrs),
+                    deserialize: derives_deserialize(&s.attrs),
+                    shaped: pub_field,
+                });
+            }
+            syn::Item::Enum(e) if matches!(e.vis, syn::Visibility::Public(_)) => {
+                found.push(Item {
+                    file: file.to_owned(),
+                    name: e.ident.to_string(),
+                    kind: Kind::Enum,
+                    non_exhaustive: has_non_exhaustive(&e.attrs),
+                    deserialize: derives_deserialize(&e.attrs),
+                    shaped: e.variants.iter().any(is_catch_all),
+                });
+            }
+            syn::Item::Mod(m) if !is_cfg_test(&m.attrs) => {
+                if let Some((_, inner)) = &m.content {
+                    collect(file, inner, found);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The `pub` structs and enums of a crate's `src` (not `pub(crate)`, which
+/// no integrator names; not `#[cfg(test)]` modules; the enums
+/// `open_enum!` expands are written by the macro, checked below).
 fn items(krate: &str) -> Vec<Item> {
     let src = repo().join("crates").join(krate).join("src");
     let mut files = Vec::new();
@@ -237,88 +321,31 @@ fn items(krate: &str) -> Vec<Item> {
             .to_string_lossy()
             .into_owned();
         let text = fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            let (is_struct, rest) = if let Some(r) = line.strip_prefix("pub struct ") {
-                (true, r)
-            } else if let Some(r) = line.strip_prefix("pub enum ") {
-                (false, r)
-            } else {
-                continue;
-            };
-            if !line.trim_end().ends_with('{') {
-                continue;
-            }
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            let mut attrs = Vec::new();
-            let mut j = i;
-            while j > 0 {
-                let above = lines[j - 1];
-                if above.starts_with("#[") || above.starts_with("///") || above.starts_with("//") {
-                    attrs.push(above);
-                    j -= 1;
-                } else {
-                    break;
-                }
-            }
-            let body = lines[i + 1..]
-                .iter()
-                .take_while(|l| **l != "}")
-                .map(|l| (*l).to_owned())
-                .collect();
-            found.push(Item {
-                file: file.clone(),
-                name,
-                attrs: attrs.join("\n"),
-                is_struct,
-                body,
-            });
-        }
+        let parsed = syn::parse_file(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+        collect(&file, &parsed.items, &mut found);
     }
     found
 }
 
 impl Item {
     fn has_attribute(&self) -> bool {
-        self.attrs.lines().any(|l| l.trim() == "#[non_exhaustive]")
+        self.non_exhaustive
     }
 
     fn derives_deserialize(&self) -> bool {
-        self.attrs
-            .lines()
-            .any(|l| l.starts_with("#[derive(") && l.contains("Deserialize"))
+        self.deserialize
     }
 
     fn has_pub_field(&self) -> bool {
-        self.body.iter().any(|l| {
-            l.strip_prefix("    pub ").is_some_and(|r| {
-                r.split(':').next().is_some_and(|n| !n.contains(' ')) && r.contains(':')
-            })
-        })
-    }
-
-    /// An open enum: a catch-all variant at the top level of the body.
-    fn has_catch_all(&self) -> bool {
-        !self.is_struct
-            && self.body.iter().any(|l| {
-                ["Other", "Unknown", "Unparsed"].iter().any(|v| {
-                    l.strip_prefix("    ").is_some_and(|r| {
-                        r.strip_prefix(v)
-                            .is_some_and(|after| after.starts_with(['(', ' ', ',', '{']))
-                    })
-                })
-            })
+        self.kind == Kind::Struct && self.shaped
     }
 
     /// Must carry the attribute, given the exemptions.
     fn is_response_like(&self, client: bool) -> bool {
-        if self.has_catch_all() {
-            return true;
+        if self.kind == Kind::Enum {
+            return self.shaped;
         }
-        if !self.is_struct || !self.derives_deserialize() || !self.has_pub_field() {
+        if !self.derives_deserialize() || !self.has_pub_field() {
             return false;
         }
         if client && exempt(&self.file, &self.name) {
@@ -393,7 +420,7 @@ fn the_exemptions_are_live() {
             dead.push((*prefix).to_owned());
         }
         for i in all.iter().filter(|i| i.file.starts_with(prefix)) {
-            if i.has_attribute() && i.is_struct {
+            if i.has_attribute() && i.kind == Kind::Struct {
                 dead.push(format!("{}: {} (carries the attribute)", i.file, i.name));
             }
         }
@@ -415,5 +442,236 @@ fn the_open_enum_macro_adds_the_attribute() {
     assert!(
         at,
         "open_enum! no longer puts #[non_exhaustive] on its enums"
+    );
+}
+
+/// The scan is not fooled by how a type is written: a derive split over
+/// lines, by path or under `cfg_attr`, an inline module, a generic struct,
+/// a catch-all of another name; `pub(crate)` and test modules are not API.
+#[test]
+fn the_scan_sees_every_way_to_write_a_type() {
+    let src = r#"
+        #[derive(
+            Debug,
+            Deserialize,
+        )]
+        pub struct Split { pub a: u8 }
+
+        #[derive(serde::Deserialize)]
+        pub struct ByPath { pub a: u8 }
+
+        #[cfg_attr(feature = "x", derive(Deserialize))]
+        pub struct Gated { pub a: u8 }
+
+        /// Docs.
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[non_exhaustive]
+        pub struct Marked { pub a: u8 }
+
+        pub mod inner {
+            #[derive(Deserialize)]
+            pub struct Nested { pub a: u8 }
+        }
+
+        #[derive(Deserialize)]
+        pub struct Generic<T> { pub a: T }
+
+        #[derive(Deserialize)]
+        pub(crate) struct Hidden { pub a: u8 }
+
+        #[derive(Deserialize)]
+        pub struct Private { a: u8 }
+
+        pub enum Fallback { A, #[serde(other)] Rest }
+        pub enum Named { A, OtherThing(String) }
+        pub enum Closed { A, B }
+
+        #[cfg(test)]
+        mod tests {
+            #[derive(Deserialize)]
+            pub struct InTest { pub a: u8 }
+        }
+    "#;
+    let mut found = Vec::new();
+    collect("x.rs", &syn::parse_file(src).unwrap().items, &mut found);
+    let like: BTreeSet<_> = found
+        .iter()
+        .filter(|i| i.is_response_like(false))
+        .map(|i| (i.name.as_str(), i.has_attribute()))
+        .collect();
+    let want: BTreeSet<_> = [
+        ("Split", false),
+        ("ByPath", false),
+        ("Gated", false),
+        ("Marked", true),
+        ("Nested", false),
+        ("Generic", false),
+        ("Fallback", false),
+        ("Named", false),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(like, want);
+}
+
+/// Library types the service maps field by field to its API views
+/// (`From<..>` in `meta-whatsapp-server-core` and
+/// `meta-whatsapp-server-api-axum`), with every public field they have.
+/// Before `#[non_exhaustive]` those impls destructured the type
+/// exhaustively, so a field Meta added broke the build until someone chose
+/// to map it or to leave it out. A destructure now ends in `..` and no
+/// longer fails, so this list does: a new field fails it, and the person
+/// adding the field decides in the `From` impl, then lists it here.
+const SERVICE_MAPPED: &[(&str, &str, &[&str])] = &[
+    (
+        "flows/types.rs",
+        "FlowValidationError",
+        &[
+            "error",
+            "error_type",
+            "message",
+            "line_start",
+            "line_end",
+            "column_start",
+            "column_end",
+            "pointers",
+        ],
+    ),
+    (
+        "flows/types.rs",
+        "FlowDetails",
+        &[
+            "id",
+            "name",
+            "status",
+            "categories",
+            "validation_errors",
+            "json_version",
+            "data_api_version",
+            "endpoint_uri",
+            "preview",
+            "whatsapp_business_account",
+            "application",
+        ],
+    ),
+    (
+        "templates/info.rs",
+        "ComparisonMetric",
+        &[
+            "metric",
+            "kind",
+            "order_by_relative_metric",
+            "number_values",
+            "string_values",
+        ],
+    ),
+    (
+        "templates/info.rs",
+        "LibraryTemplate",
+        &[
+            "id",
+            "name",
+            "language",
+            "category",
+            "topic",
+            "usecase",
+            "industry",
+            "header",
+            "body",
+            "body_params",
+            "body_param_types",
+            "buttons",
+        ],
+    ),
+    (
+        "templates/info.rs",
+        "MigrationResult",
+        &["migrated_templates", "failed_templates"],
+    ),
+    (
+        "templates/groups.rs",
+        "ArchiveResult",
+        &["archived_templates", "failed_templates"],
+    ),
+    (
+        "templates/groups.rs",
+        "UnarchiveResult",
+        &["unarchived_templates", "failed_templates"],
+    ),
+    (
+        "templates/groups.rs",
+        "TemplateGroup",
+        &[
+            "id",
+            "name",
+            "description",
+            "creation_time",
+            "update_time",
+            "whatsapp_business_account",
+            "whatsapp_business_templates",
+        ],
+    ),
+    (
+        "commerce/mod.rs",
+        "CommerceSettings",
+        &["id", "is_cart_enabled", "is_catalog_visible"],
+    ),
+    (
+        "qr_codes/mod.rs",
+        "QrCode",
+        &[
+            "code",
+            "prefilled_message",
+            "deep_link_url",
+            "qr_image_url",
+            "creation_time",
+        ],
+    ),
+];
+
+fn pub_fields(items: &[syn::Item], name: &str, out: &mut Option<Vec<String>>) {
+    for item in items {
+        match item {
+            syn::Item::Struct(s) if s.ident == name => {
+                if let syn::Fields::Named(f) = &s.fields {
+                    *out = Some(
+                        f.named
+                            .iter()
+                            .filter(|f| matches!(f.vis, syn::Visibility::Public(_)))
+                            .filter_map(|f| f.ident.as_ref().map(ToString::to_string))
+                            .collect(),
+                    );
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    pub_fields(inner, name, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn the_service_mappings_see_every_field_of_the_library_types() {
+    let src = repo().join("crates/meta-whatsapp-client/src");
+    let mut drift = Vec::new();
+    for (file, name, listed) in SERVICE_MAPPED {
+        let text = fs::read_to_string(src.join(file)).unwrap();
+        let parsed = syn::parse_file(&text).unwrap();
+        let mut actual = None;
+        pub_fields(&parsed.items, name, &mut actual);
+        let actual = actual.unwrap_or_else(|| panic!("{file}: no struct {name}"));
+        if actual != *listed {
+            drift.push(format!("{file}: {name}: has {actual:?}, listed {listed:?}"));
+        }
+    }
+    assert!(
+        drift.is_empty(),
+        "a library type the service maps field by field changed: map the new field in its \
+         `From` impl (meta-whatsapp-server-core, meta-whatsapp-server-api-axum), or leave it \
+         out on purpose, then update SERVICE_MAPPED: {drift:#?}"
     );
 }

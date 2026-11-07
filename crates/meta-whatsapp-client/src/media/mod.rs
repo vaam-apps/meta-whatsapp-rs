@@ -171,6 +171,27 @@ pub struct MediaInfo {
     pub id: MediaId,
 }
 
+impl MediaInfo {
+    /// The info of a media whose `id` and download `url` you already hold
+    /// (a media webhook carried them), to hand to
+    /// [`Media::download_with_info`]. The type is `#[non_exhaustive]`, so a
+    /// struct literal does not compile outside this crate: `messaging_product`
+    /// is `whatsapp`, and `mime_type`, `sha256` and `file_size` are empty and
+    /// public, set them when known (a `sha256` makes
+    /// [`MediaDownload::verified`] check the body).
+    #[must_use]
+    pub fn new(id: MediaId, url: impl Into<String>) -> Self {
+        Self {
+            messaging_product: "whatsapp".to_owned(),
+            url: url.into(),
+            mime_type: String::new(),
+            sha256: String::new(),
+            file_size: None,
+            id,
+        }
+    }
+}
+
 impl fmt::Debug for MediaInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MediaInfo")
