@@ -155,7 +155,14 @@ fn routing<'a>(
     caller: &'a Caller,
     owned: &'a OwnedNumber,
 ) -> Result<Routing<'a>, ApiError> {
-    Ok(Routing::new(state.authz(), caller, owned.capability(state))?.observed_by(state.metrics()))
+    Ok(Routing::new(
+        state.authz(),
+        caller,
+        owned.capability(state),
+        state.conversations(),
+        state.clock(),
+    )?
+    .observed_by(state.metrics()))
 }
 
 fn parse<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, ApiError> {

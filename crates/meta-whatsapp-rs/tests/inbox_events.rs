@@ -18,6 +18,7 @@ use std::sync::Arc;
 use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
 use meta_whatsapp_rs::client::messages::Text;
 use meta_whatsapp_rs::core::clock::ManualClock;
+use meta_whatsapp_rs::core::recipient::Recipient;
 use meta_whatsapp_rs::core::store::{ThreadOwner, WindowEventKind};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
@@ -428,6 +429,193 @@ async fn after_the_customers_next_message_the_window_decides(store: Arc<dyn Conv
     assert!(transport.requests().is_empty());
 }
 
+/// Roadmap M5l2 (D224): a pass, a take and a release of this app's own, which
+/// Meta reports to nobody, are recorded where the guard reads them. The
+/// user is named as the request names them (`Recipient`); a phone number
+/// the inbox linked to a BSUID is recorded under the BSUID's conversation
+/// (the one a handover webhook would be), never under the phone number.
+async fn own_thread_actions_are_recorded_where_the_guard_reads_them(
+    store: Arc<dyn ConversationStore>,
+) {
+    let clock = ManualClock::new(at(1_750_101_000) + time::Duration::milliseconds(700));
+    let transport = ScriptedTransport::new();
+    let inbox = inbox(&store, &transport, &clock);
+    deliver(&store, PERMISSION_REPLY).await; // BSUID thread, the phone number linked to it
+    let (key, phone_key) = (inbox.key(BSUID), inbox.key(PHONE));
+    assert_eq!(inbox.thread_owner(&key).await.unwrap(), None, "no routing");
+    transport.push_json(200, accepted("wamid.BEFORE"));
+    inbox.reply(&key, text("Before the pass")).await.unwrap();
+    assert_eq!(transport.requests().len(), 1);
+
+    // A pass for the user named by a phone number.
+    assert!(
+        inbox
+            .record_thread_owner_of(
+                &Recipient::phone("+16505551234"),
+                ThreadOwner::AnotherApp,
+                Some("ai_agent".to_owned()),
+            )
+            .await
+            .unwrap()
+    );
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(
+        (owner.owner, owner.role.as_deref(), owner.since),
+        (ThreadOwner::AnotherApp, Some("ai_agent"), at(1_750_101_000)),
+        "to the second, under the BSUID"
+    );
+    assert_eq!(
+        store.thread_owner(&phone_key).await.unwrap(),
+        None,
+        "never keyed by the phone number alone"
+    );
+    let refused = inbox.reply(&key, text("After the pass")).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::ThreadOwnedElsewhere);
+    assert_eq!(transport.requests().len(), 1, "refused with zero requests");
+
+    // A release is let through to Meta's window check.
+    assert!(
+        inbox
+            .record_release_of(&Recipient::user(BSUID))
+            .await
+            .unwrap()
+    );
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(owner.owner, ThreadOwner::Idle);
+    transport.push_json(200, accepted("wamid.AFTER"));
+    inbox.reply(&key, text("After the release")).await.unwrap();
+    assert_sent_text(&transport, "After the release");
+    assert_eq!(transport.requests().len(), 2);
+    clock.set(at(1_750_101_000 + 90_000)); // the window (1750030073 + 24 h) is closed
+    let refused = inbox.reply(&key, text("Too late")).await.unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
+
+    // A take: this app owns the thread again, its role the escalation.
+    clock.set(at(1_750_101_000 + 10));
+    assert!(
+        inbox
+            .record_thread_owner_of(
+                &Recipient::phone(PHONE),
+                ThreadOwner::ThisApp,
+                Some("escalation".to_owned()),
+            )
+            .await
+            .unwrap()
+    );
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(
+        (owner.owner, owner.role.as_deref()),
+        (ThreadOwner::ThisApp, Some("escalation"))
+    );
+    transport.push_json(200, accepted("wamid.TAKEN"));
+    inbox.reply(&key, text("Mine again")).await.unwrap();
+    assert_eq!(transport.requests().len(), 3);
+    assert_eq!(transport.remaining(), 0);
+
+    // A group, or a name that names no one, records nothing.
+    for bad in [
+        Recipient::group("Y2FwaV9ncm91cDox"),
+        Recipient::phone(""),
+        Recipient::phone("+"),
+        Recipient::user(" "),
+    ] {
+        assert_eq!(
+            inbox.record_release_of(&bad).await.unwrap_err().kind(),
+            ErrorKind::InvalidParameter,
+            "{bad:?}"
+        );
+    }
+}
+
+/// The record of the service and a handover webhook agree on the order:
+/// the later wins, a handover of the record's second included; an older one
+/// is refused.
+async fn a_handover_webhook_orders_against_the_service_record(store: Arc<dyn ConversationStore>) {
+    let clock = ManualClock::new(at(1_750_101_000) + time::Duration::milliseconds(700));
+    let transport = ScriptedTransport::new();
+    let inbox = inbox(&store, &transport, &clock);
+    deliver(&store, PERMISSION_REPLY).await;
+    let key = inbox.key(BSUID);
+    let pass = Recipient::user(BSUID);
+    let passed = || {
+        inbox.record_thread_owner_of(&pass, ThreadOwner::AnotherApp, Some("ai_agent".to_owned()))
+    };
+
+    // The handover of the record's own second (1750101000) wins.
+    assert!(passed().await.unwrap());
+    deliver(&store, CONTROL_PASSED).await;
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(
+        (owner.owner, owner.role.as_deref()),
+        (ThreadOwner::ThisApp, Some("escalation"))
+    );
+    inbox.check_reply(&key).await.unwrap();
+
+    // An older handover (a late redelivery) loses to a newer service record.
+    clock.set(at(1_750_101_500));
+    assert!(passed().await.unwrap());
+    deliver(&store, CONTROL_PASSED).await;
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(
+        (owner.owner, owner.role.as_deref(), owner.since),
+        (ThreadOwner::AnotherApp, Some("ai_agent"), at(1_750_101_500))
+    );
+    assert_eq!(
+        inbox.check_reply(&key).await.unwrap_err().kind(),
+        ErrorKind::ThreadOwnedElsewhere
+    );
+
+    // A newer one wins over the service record.
+    let newer = CONTROL_PASSED.replacen("1750101000", "1750101900", 1);
+    assert!(newer.contains("1750101900"));
+    deliver(&store, &newer).await;
+    let owner = inbox.thread_owner(&key).await.unwrap().unwrap();
+    assert_eq!(
+        (owner.owner, owner.since),
+        (ThreadOwner::ThisApp, at(1_750_101_900))
+    );
+    inbox.check_reply(&key).await.unwrap();
+}
+
+/// `Inbox::conversation_of` leads a phone number where a handover would, and
+/// a BSUID along its changes.
+async fn conversation_of_leads_a_user_where_a_handover_is_recorded(
+    store: Arc<dyn ConversationStore>,
+) {
+    let clock = ManualClock::new(at(1_750_030_073));
+    let transport = ScriptedTransport::new();
+    let inbox = inbox(&store, &transport, &clock);
+    let of = async |r: Recipient| inbox.conversation_of(&r).await;
+    // Nothing known: the phone number (`wa_id` form) or the BSUID itself.
+    assert_eq!(
+        of(Recipient::phone("+16505551234")).await.unwrap(),
+        inbox.key(PHONE)
+    );
+    assert_eq!(of(Recipient::phone(PHONE)).await.unwrap(), inbox.key(PHONE));
+    assert_eq!(of(Recipient::user(BSUID)).await.unwrap(), inbox.key(BSUID));
+    // Linked: the phone number leads to the BSUID, the BSUID to its successor.
+    deliver(&store, USER_ID_UPDATE).await;
+    let current = inbox.key("US.20837465019283746501");
+    for user in [
+        Recipient::phone("+16505551234"),
+        Recipient::user(BSUID),
+        Recipient::user("US.20837465019283746501"),
+    ] {
+        assert_eq!(of(user.clone()).await.unwrap(), current, "{user:?}");
+    }
+    // The same key as the sink's.
+    assert_eq!(
+        meta_whatsapp_rs::inbox::handover_key(
+            store.as_ref(),
+            inbox.phone_number_id(),
+            "+16505551234"
+        )
+        .await
+        .unwrap(),
+        Some(current)
+    );
+}
+
 fn memory() -> Arc<dyn ConversationStore> {
     Arc::new(MemoryConversationStore::new())
 }
@@ -465,6 +653,21 @@ async fn memory_a_bsuid_change_links_the_two() {
 #[tokio::test]
 async fn memory_an_erasure_reaches_the_phone_keyed_thread() {
     an_erasure_reaches_the_phone_keyed_thread(memory()).await;
+}
+
+#[tokio::test]
+async fn memory_own_thread_actions_are_recorded_where_the_guard_reads_them() {
+    own_thread_actions_are_recorded_where_the_guard_reads_them(memory()).await;
+}
+
+#[tokio::test]
+async fn memory_a_handover_webhook_orders_against_the_service_record() {
+    a_handover_webhook_orders_against_the_service_record(memory()).await;
+}
+
+#[tokio::test]
+async fn memory_conversation_of_leads_a_user_where_a_handover_is_recorded() {
+    conversation_of_leads_a_user_where_a_handover_is_recorded(memory()).await;
 }
 
 /// The rules one by one, on the memory store.
@@ -2212,5 +2415,29 @@ mod live {
             return;
         };
         super::rules::call_permission_reply_scenario(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_own_thread_actions_are_recorded_where_the_guard_reads_them() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        super::own_thread_actions_are_recorded_where_the_guard_reads_them(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_a_handover_webhook_orders_against_the_service_record() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        super::a_handover_webhook_orders_against_the_service_record(db.store.clone()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_postgres_conversation_of_leads_a_user_where_a_handover_is_recorded() {
+        let Some(db) = TestDb::new().await else {
+            return;
+        };
+        super::conversation_of_leads_a_user_where_a_handover_is_recorded(db.store.clone()).await;
     }
 }

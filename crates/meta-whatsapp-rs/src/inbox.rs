@@ -99,7 +99,10 @@
 //!   `messages`, and "does not change thread ownership"
 //!   (`conversation-routing/calling-webhooks`);
 //! - this app's own `release`, `pass` or `take` (no webhook reports them
-//!   to this app): [`Inbox::record_release`], [`Inbox::record_thread_owner`];
+//!   to this app): [`Inbox::record_release`], [`Inbox::record_thread_owner`],
+//!   or, naming the user as the request did ([`Recipient`], a phone number
+//!   the inbox linked to a BSUID included), [`Inbox::record_release_of`],
+//!   [`Inbox::record_thread_owner_of`] under [`Inbox::conversation_of`];
 //! - 24 hours without the customer ([`Inbox::THREAD_IDLE_AFTER`], or
 //!   [`Inbox::with_thread_idle_after`]): the thread is idle again
 //!   ([`Inbox::thread_owner`] derives it).
@@ -1737,14 +1740,17 @@ pub async fn handover_key(
     Ok(Some(follow_phone(store, phone_number_id, &phone).await?))
 }
 
-/// [`handover_key`] of a usable, bare phone number.
-async fn follow_phone(
+/// The identity `start` leads to along the store's identity links: the
+/// latest link whose `previous` it is (by `at`), then from that identity
+/// the same way, until no link leads further ([`MAX_LINK_STEPS`] at most;
+/// a loop stops where it closes). `start` itself when none does.
+async fn follow_links(
     store: &dyn ConversationStore,
     phone_number_id: &PhoneNumberId,
-    phone: &str,
-) -> std::result::Result<ConversationKey, StorageError> {
+    start: &str,
+) -> std::result::Result<String, StorageError> {
     let key = |contact: &str| ConversationKey::new(phone_number_id.clone(), contact);
-    let mut current = phone.to_owned();
+    let mut current = start.to_owned();
     let mut seen = BTreeSet::from([current.clone()]);
     for _ in 0..MAX_LINK_STEPS {
         // Oldest first: the last one is the latest.
@@ -1760,6 +1766,17 @@ async fn follow_phone(
             _ => break,
         }
     }
+    Ok(current)
+}
+
+/// [`handover_key`] of a usable, bare phone number.
+async fn follow_phone(
+    store: &dyn ConversationStore,
+    phone_number_id: &PhoneNumberId,
+    phone: &str,
+) -> std::result::Result<ConversationKey, StorageError> {
+    let key = |contact: &str| ConversationKey::new(phone_number_id.clone(), contact);
+    let current = follow_links(store, phone_number_id, phone).await?;
     if current != phone {
         return Ok(key(&current));
     }
@@ -2414,6 +2431,82 @@ impl Inbox {
             since: self.clock.now(),
         };
         Ok(self.store.set_thread_owner(key, ownership).await?)
+    }
+
+    /// The conversation `user` leads to on this number: the key
+    /// [`InboxSink`] records a handover under ([`handover_key`]) for a
+    /// phone number, so that a thread control action of your own, which
+    /// names the user as the request does ([`Recipient`]), is recorded
+    /// where the webhooks will record the next handover.
+    ///
+    /// - [`Recipient::Phone`]: [`handover_key`] (the identity links, else
+    ///   a synced contact's BSUID, else the phone number);
+    /// - [`Recipient::User`] and [`Recipient::PhoneAndUser`] (which the
+    ///   thread control client refuses to send, so no action of the
+    ///   client's reaches this with one; the inbox keys by the BSUID
+    ///   first): the BSUID, followed along the identity links to the
+    ///   latest one (a BSUID change);
+    /// - [`Recipient::Group`], and a phone number or BSUID that names no
+    ///   one: refused (the thread control pages describe one customer's
+    ///   thread), reading nothing.
+    ///
+    /// Reads the store as [`handover_key`] says.
+    pub async fn conversation_of(&self, user: &Recipient) -> Result<ConversationKey> {
+        let refused =
+            || ValidationError::new("recipient", "names no customer of a one-to-one thread");
+        match user {
+            Recipient::Phone(phone) => {
+                handover_key(self.store.as_ref(), &self.phone_number_id, phone)
+                    .await?
+                    .ok_or_else(|| refused().into())
+            }
+            Recipient::User(id) | Recipient::PhoneAndUser { user: id, .. } => {
+                let id = id.as_str();
+                if !usable(id) || id.trim() != id {
+                    return Err(refused().into());
+                }
+                let latest = follow_links(self.store.as_ref(), &self.phone_number_id, id).await?;
+                Ok(self.key(latest))
+            }
+            _ => Err(refused().into()),
+        }
+    }
+
+    /// Record the owner of `user`'s thread after a thread control action
+    /// of this app's own that succeeded ([`Inbox::record_thread_owner`]),
+    /// under [`Inbox::conversation_of`] `user`. The record is dated now by
+    /// this inbox's clock, **to the whole second** (Meta's timestamps are
+    /// seconds): a handover webhook of the same second or later wins over
+    /// it ([`ConversationStore::set_thread_owner`] keeps the later record,
+    /// and stores a change of the same second), an older one does not.
+    /// Returns whether it was stored. Record only what Meta answered; for
+    /// a call whose outcome is unknown (a timeout), record nothing: a
+    /// reply sent into a thread another app owns is refused by Meta, while
+    /// a record that is wrong the other way blocks a reply this app may
+    /// send, until the customer writes ([`Inbox::thread_owner`]).
+    pub async fn record_thread_owner_of(
+        &self,
+        user: &Recipient,
+        owner: ThreadOwner,
+        role: Option<String>,
+    ) -> Result<bool> {
+        let key = self.conversation_of(user).await?;
+        let now = self.clock.now();
+        let since = now.replace_nanosecond(0).unwrap_or(now);
+        let ownership = ThreadOwnership {
+            owner,
+            role,
+            app_id: None,
+            since,
+        };
+        Ok(self.store.set_thread_owner(&key, ownership).await?)
+    }
+
+    /// [`Inbox::record_release`] for the user the request named
+    /// ([`Inbox::record_thread_owner_of`]).
+    pub async fn record_release_of(&self, user: &Recipient) -> Result<bool> {
+        self.record_thread_owner_of(user, ThreadOwner::Idle, None)
+            .await
     }
 
     /// Whether the customer service window is open now, by this inbox's own

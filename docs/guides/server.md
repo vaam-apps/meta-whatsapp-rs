@@ -1417,12 +1417,27 @@ sends nothing (D223). Each action is an audit event (`thread_passed`,
 number and, for a pass, the role), with an outcome `answered` or
 `unknown`, **never the user or the `metadata`**.
 
-Not done (D224, roadmap M5l2): the service does not record your own
-pass, take or release in the inbox's thread owner state, so after a pass
-the inbox may still believe the thread is this app's until the next
-event or message; a free-form reply it lets through is then refused by
-Meta (`409 thread_owned_elsewhere`). Standby copies and handovers reach
-you as events either way.
+**Your own actions are recorded** (roadmap M5l2, design D390 to D393,
+an implementer's proposals): Meta tells the caller nothing of its own
+pass, take or release, so once Meta *answers* success the service writes
+it to the inbox's thread owner state, the one the webhook pipeline
+records handovers into. After a pass, a free-form reply to that user is
+`409 thread_owned_elsewhere` with no request to Meta; after a release it
+goes on to Meta's window check; after a take (the escalation partner's)
+it goes. The user may be named by phone number even when the inbox keys
+the conversation by BSUID: the record goes under the conversation a
+handover for the same user would be recorded under (the identity links the
+inbox keeps, else a synced contact's BSUID, else the phone number), never
+under the phone number alone. A refusal, a timeout (`504`,
+`may_have_been_sent`) or any failure records nothing: if you cannot tell
+whether a pass went through, the inbox keeps believing what it believed
+(a reply it lets through into a thread another app owns is refused by
+Meta; blocking a reply this app may send is the worse mistake), until a
+`messaging_handovers` event, the customer's next message or 24 hours
+settle it. The record is dated to the second: a handover event of the
+same second or later wins over it. A record the store cannot take does not
+fail the action (it went through); the service logs it at `warn` without
+the user. Standby copies and handovers reach you as events either way.
 
 ## The inbox
 
