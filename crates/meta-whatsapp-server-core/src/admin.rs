@@ -997,6 +997,46 @@ impl<'a> Admin<'a> {
         }
     }
 
+    /// Purge the records of the groups the number `phone_number_id` held
+    /// (roadmap M5f3, design D381, D382): what the unbinding of its WABA
+    /// and a tenant's deletion do already, asked for one number that is
+    /// **not bound** (the way to finish a purge that failed after an
+    /// unbinding, or one that missed a number added meanwhile). A number
+    /// still bound to a tenant is refused: deleting its records is a
+    /// deletion no other operator action performs, and irreversible
+    /// deletion is the owner's decision (AGENTS.md); allowing it is the
+    /// swap D382 names. Audited (`group_records_purged`, with the number's
+    /// id and no group's). Returns how many records it deleted.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` for an id that is not a number's (digits only), read
+    /// before anything is touched; `409 number_still_bound` for a bound
+    /// number, with nothing deleted and nothing audited; `500 internal`
+    /// when the service keeps no group records; the store's failure.
+    pub async fn purge_group_records(&self, phone_number_id: &str) -> Result<u64, ServiceError> {
+        let number = PhoneNumberId::new(phone_number_id).map_err(|_| ServiceError::not_found())?;
+        let groups = self
+            .authz
+            .group_records()
+            .ok_or_else(ServiceError::internal)?;
+        // Read before anything is deleted. A number bound between this
+        // read and the purge loses records the next event or listing makes
+        // again (design D382).
+        if self.records().number(&number).await?.is_some() {
+            return Err(ServiceError::new(ErrorCode::NUMBER_STILL_BOUND));
+        }
+        let deleted = groups.purge(&number).await?;
+        self.audit(
+            "group_records_purged",
+            Subject {
+                phone_number_id: Some(number.as_str()),
+                ..Subject::default()
+            },
+        );
+        Ok(deleted)
+    }
+
     /// [`Self::unbind`] for an opened WABA.
     async fn unsubscribe_and_forget(&self, owned: OwnedWaba) -> Result<(), ServiceError> {
         // Moved since it was made: its token is not the new holder's to

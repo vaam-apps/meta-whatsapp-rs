@@ -284,9 +284,14 @@ impl AppState {
         let vault = TokenVault::new(backend.kv(), vault_keys)?.with_clock(clock.clone());
         // The service's number events (roadmap M2d) go to the outbox the
         // pipeline records Meta's events in, with its ids.
+        // The groups each number holds (roadmap M5f), the same records the
+        // webhook pipeline writes; the authorizer purges a number's when its
+        // WABA is unbound (roadmap M5f3).
+        let group_records = GroupRecords::new(backend.kv());
         let authz = Arc::new(
             Authorizer::new(store.clone(), vault, client)?
                 .with_clock(clock.clone())
+                .with_group_records(group_records.clone())
                 .with_number_events(inbound.number_events(backend.as_ref())),
         );
         // Embedded Signup's attempts in the bundle's key/value store, as the
@@ -323,9 +328,6 @@ impl AppState {
         // Resumable upload sessions in the bundle's key/value store, on
         // the service's one clock (roadmap M5c1).
         let uploads = UploadSessions::new(backend.kv(), clock.clone());
-        // The groups each number holds, on the same store (roadmap M5f): the
-        // webhook pipeline writes them from the same bundle's `KvStore`.
-        let group_records = GroupRecords::new(backend.kv());
         // And the calls each number holds (roadmap M5e), the same way.
         let call_records = CallRecords::new(backend.kv());
         let state = Self {

@@ -107,6 +107,7 @@ use time::OffsetDateTime;
 
 use crate::error::{ErrorCode, ServiceError};
 use crate::flows_endpoint::VaultFlowKeys;
+use crate::groups::GroupRecords;
 use crate::keys::PresentedKey;
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding,
@@ -426,6 +427,9 @@ pub struct Authorizer {
     /// The service's number events (roadmap M2d); none until
     /// [`Self::with_number_events`].
     number_events: Option<NumberEvents>,
+    /// The records of the groups each number holds (roadmap M5f3); none
+    /// until [`Self::with_group_records`].
+    group_records: Option<GroupRecords>,
 }
 
 impl std::fmt::Debug for Authorizer {
@@ -464,7 +468,79 @@ impl Authorizer {
             issuer: Issuer::new(),
             clock: Arc::new(SystemClock),
             number_events: None,
+            group_records: None,
         })
+    }
+
+    /// Purge a number's group records (roadmap M5f3, design D380) when its
+    /// WABA is unbound, by any of the services that unbind one: the
+    /// tenant's disconnection, a tenant's deletion, the operator's unbind,
+    /// Embedded Signup's offboarding and a taken-back binding. Without it,
+    /// none is purged (the core's suites that build an `Authorizer` of
+    /// their own). The server's `AppState` sets it.
+    #[must_use]
+    pub fn with_group_records(mut self, records: GroupRecords) -> Self {
+        self.group_records = Some(records);
+        self
+    }
+
+    /// The group records [`Self::with_group_records`] gave, if it did:
+    /// what the operator's purge acts on (crate-private: the admin
+    /// services').
+    pub(crate) fn group_records(&self) -> Option<&GroupRecords> {
+        self.group_records.as_ref()
+    }
+
+    /// The numbers whose group records an unbinding of `waba_id` purges,
+    /// read **before** it (the unbinding deletes their bindings): empty
+    /// without [`Self::with_group_records`].
+    async fn numbers_to_purge(&self, waba_id: &WabaId) -> StoreResult<Vec<PhoneNumberId>> {
+        if self.group_records.is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .records
+            .waba_numbers(waba_id)
+            .await?
+            .into_iter()
+            .map(|n| n.phone_number_id)
+            .collect())
+    }
+
+    /// Purge the group records of `numbers`, once their WABA is unbound.
+    /// The unbinding is done and cannot be taken back, so a purge that
+    /// fails is logged (the WABA's id and the error, never a group) and
+    /// does not fail it: the records are inert without the binding, and the
+    /// operator's purge route finishes it.
+    async fn purge_groups(&self, waba_id: &WabaId, numbers: &[PhoneNumberId]) {
+        let Some(groups) = &self.group_records else {
+            return;
+        };
+        groups.purge_after_unbind(waba_id, numbers).await;
+    }
+
+    /// [`RecordStore::unbind_waba_if`], then the group records of the
+    /// WABA's numbers purged if it unbound (roadmap M5f3). Crate-private:
+    /// every unbinding of a WABA in the core goes through this or
+    /// [`Self::unbind`] (a source scan in the tests pins it).
+    pub(crate) async fn unbind_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
+        let numbers = self.numbers_to_purge(&epoch.waba_id).await?;
+        let unbound = self.records.unbind_waba_if(epoch).await?;
+        if unbound {
+            self.purge_groups(&epoch.waba_id, &numbers).await;
+        }
+        Ok(unbound)
+    }
+
+    /// [`RecordStore::unbind_waba`], then the group records purged if it
+    /// unbound (roadmap M5f3).
+    async fn unbind(&self, waba_id: &WabaId) -> StoreResult<bool> {
+        let numbers = self.numbers_to_purge(waba_id).await?;
+        let unbound = self.records.unbind_waba(waba_id).await?;
+        if unbound {
+            self.purge_groups(waba_id, &numbers).await;
+        }
+        Ok(unbound)
     }
 
     /// Record the service's number events with `events` (roadmap M2d,
@@ -1254,7 +1330,7 @@ impl Authorizer {
     ) -> Result<(), ServiceError> {
         self.check(&admin.issuer, "forget_for_admin")?;
         self.tokens.delete(waba_id).await?;
-        self.records.unbind_waba(waba_id).await?;
+        self.unbind(waba_id).await?;
         Ok(())
     }
 
@@ -1667,7 +1743,7 @@ impl OwnedWaba {
             .tokens
             .delete_if_unchanged(&self.waba_id, self.token)
             .await?
-            && authz.records.unbind_waba_if(&self.epoch).await?;
+            && authz.unbind_if(&self.epoch).await?;
         if !forgotten && !authz.holds(&self.epoch).await.unwrap_or(true) {
             tracing::warn!(
                 waba_id = self.waba_id.as_str(),

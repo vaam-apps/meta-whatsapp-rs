@@ -233,6 +233,93 @@
         ]
       }
     },
+    "/v1/admin/numbers/{phone_number_id}/group-records": {
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Purge the service's records of the groups a number held (roadmap\nM5f3), which the unbinding of the number's WABA and a tenant's deletion\npurge already: for one number that is **not bound**, so that an operator\ncan finish a purge that failed after an unbinding. A number still bound\nto a tenant is refused (`409 number_still_bound`, nothing deleted): the\ndeletion is irreversible, which is the owner's decision. The records are\nthe service's own notes of which groups the number holds (never Meta's\ndata). Idempotent. Audited as `group_records_purged`, with the number's\nid.",
+        "operationId": "purge_group_records",
+        "parameters": [
+          {
+            "name": "phone_number_id",
+            "in": "path",
+            "description": "The number's id (digits only)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Purged (the number is not bound): how many records were deleted (zero when there were none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupRecordsPurged"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not a number's id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_still_bound`: the number is bound to a tenant; unbind its WABA first. Nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/partners/business-verifications": {
       "get": {
         "tags": [
@@ -34022,6 +34109,21 @@
           }
         }
       },
+      "GroupRecordsPurged": {
+        "type": "object",
+        "description": "What purging a number's group records did.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many records of the number's groups were deleted (no group's\nid is in the answer).",
+            "minimum": 0
+          }
+        }
+      },
       "GroupSummary": {
         "type": "object",
         "description": "A group of the listing.",
@@ -34754,6 +34856,7 @@
           "number_not_connected",
           "reconnect_required",
           "waba_owned_by_another_tenant",
+          "number_still_bound",
           "tenant_exists",
           "idempotency_in_progress",
           "outcome_unknown",
