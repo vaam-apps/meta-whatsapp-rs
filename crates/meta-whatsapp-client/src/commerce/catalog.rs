@@ -459,6 +459,7 @@ pub struct ListProductSets {
 /// A product catalog node (`product-catalog`, § Fields). Only `id` is
 /// always present; the rest come back when requested (`name` by default).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CatalogInfo {
     /// Catalog id.
     pub id: CatalogId,
@@ -494,6 +495,7 @@ pub struct CatalogInfo {
 
 /// A product set node (`product-set`, § Fields).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ProductSetInfo {
     /// Product set id.
     pub id: ProductSetId,
@@ -527,6 +529,7 @@ pub struct ProductSetInfo {
 /// Prices are strings as Meta formats them (`price`, `sale_price`), never
 /// parsed into numbers here.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ProductInfo {
     /// Product item id.
     pub id: ProductItemId,
@@ -605,6 +608,7 @@ pub struct ProductInfo {
 /// An issue with a product item (`errors`, as the products edge's example
 /// shows it).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ProductError {
     /// Issue type, e.g. `IMAGE_RESOLUTION_LOW` (one of the many values of
     /// the products edge's `error_type`, kept as sent).

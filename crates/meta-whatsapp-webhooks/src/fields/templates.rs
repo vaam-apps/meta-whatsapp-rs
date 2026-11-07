@@ -65,6 +65,7 @@ open_enum! {
 
 /// `value` of a `message_template_components_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateComponentsUpdateValue {
     /// Template id.
     #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]
@@ -89,6 +90,7 @@ pub struct TemplateComponentsUpdateValue {
 
 /// `message_template_buttons[]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateButton {
     /// Button type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +146,7 @@ open_enum! {
 
 /// `value` of a `message_template_quality_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateQualityUpdateValue {
     /// Previous score.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -233,6 +236,7 @@ open_enum! {
 
 /// `value` of a `message_template_status_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateStatusUpdateValue {
     /// New status.
     pub event: TemplateStatusEvent,
@@ -262,6 +266,7 @@ pub struct TemplateStatusUpdateValue {
 
 /// `message_template_status_update.disable_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateDisableInfo {
     /// When the template was disabled.
     #[serde(
@@ -274,6 +279,7 @@ pub struct TemplateDisableInfo {
 
 /// `message_template_status_update.other_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateOtherInfo {
     /// Pause / unpause kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -285,6 +291,7 @@ pub struct TemplateOtherInfo {
 
 /// `message_template_status_update.rejection_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateRejectionInfo {
     /// What is wrong.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -300,6 +307,7 @@ pub struct TemplateRejectionInfo {
 /// `category_update_timestamp`, where `new_category` is the *current*
 /// category) and a completed one (`previous_category` + `new_category`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateCategoryUpdateValue {
     /// Template id.
     #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]
@@ -336,6 +344,7 @@ impl TemplateCategoryUpdateValue {
 /// `value` of a `template_correct_category_detection` change: Direct Send
 /// content detected in the wrong category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TemplateCorrectCategoryDetectionValue {
     /// Flagged template id.
     #[serde(deserialize_with = "crate::serde_ext::id::deserialize")]

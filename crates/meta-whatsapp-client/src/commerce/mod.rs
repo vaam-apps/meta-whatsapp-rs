@@ -148,6 +148,7 @@ struct DataList<T> {
 ///
 /// Every field is optional in Meta's reference schema, so none is assumed.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct CommerceSettings {
     /// Id of the commerce settings object (not the phone number id).
     #[serde(default)]

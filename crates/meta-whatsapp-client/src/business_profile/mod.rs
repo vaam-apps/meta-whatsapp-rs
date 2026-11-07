@@ -333,6 +333,7 @@ open_enum! {
 /// / `WhatsAppBusinessProfileNode`). Every field is optional because
 /// `?fields=` decides what comes back.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct Profile {
     /// Profile id (profile node only).
     #[serde(default)]
@@ -437,6 +438,7 @@ struct WireUpdate<'a> {
 /// Answer of [`BusinessProfileNode::update`]
 /// (`WhatsAppBusinessProfileUpdateResponse`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct ProfileNodeUpdated {
     /// The updated profile's id.
     #[serde(default)]

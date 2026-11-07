@@ -76,6 +76,7 @@ open_enum! {
 
 /// `value` of an `account_alerts` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AccountAlertsValue {
     /// What the alert is about.
     pub entity_type: AlertEntityType,
@@ -87,6 +88,7 @@ pub struct AccountAlertsValue {
 
 /// `account_alerts.alert_info`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AlertInfo {
     /// Severity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +120,7 @@ open_enum! {
 
 /// `value` of an `account_review_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AccountReviewUpdateValue {
     /// Outcome of the WABA policy review.
     pub decision: ReviewDecision,
@@ -172,6 +175,7 @@ open_enum! {
 /// `value` of an `account_update` change. Which optional part is present
 /// depends on [`Self::event`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AccountUpdateValue {
     /// What happened.
     pub event: AccountUpdateEvent,
@@ -213,6 +217,7 @@ pub struct AccountUpdateValue {
 
 /// `account_update.waba_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WabaInfo {
     /// The WABA (the business customer's, for `PARTNER_*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +247,7 @@ pub struct WabaInfo {
 
 /// `account_update.violation_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ViolationInfo {
     /// Violation type (`policy-enforcement-violations` lists them), e.g. `ADULT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,6 +261,7 @@ pub struct ViolationInfo {
 
 /// `account_update.auth_international_rate_eligibility`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AuthInternationalRateEligibility {
     /// Countries with their own start time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -270,6 +277,7 @@ pub struct AuthInternationalRateEligibility {
 
 /// `auth_international_rate_eligibility.exception_countries[]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ExceptionCountry {
     /// ISO 3166-1 alpha-2 country code.
     pub country_code: String,
@@ -296,6 +304,7 @@ open_enum! {
 
 /// `account_update.ban_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BanInfo {
     /// Ban state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,6 +316,7 @@ pub struct BanInfo {
 
 /// `account_update.volume_tier_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VolumeTierInfo {
     /// When the tier changed. Meta may send several webhooks for one switch;
     /// the one with the smallest time is authoritative (`pricing`).
@@ -360,6 +370,7 @@ open_enum! {
 
 /// `account_update.disconnection_info`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DisconnectionInfo {
     /// Reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -395,6 +406,7 @@ open_enum! {
 /// (`BusinessVerification::submit`; `solution-providers/partner-led-business-verification`).
 /// The event's entry id is the customer's WABA.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PartnerClientCertificationInfo {
     /// The client's business portfolio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +427,7 @@ pub struct PartnerClientCertificationInfo {
 /// who skipped the website in Embedded Signup cannot send messages until
 /// you verify their business (`meta_whatsapp_client::business_verification`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PartnerClientCertificationNeededInfo {
     /// The business customer's portfolio.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,6 +460,7 @@ open_enum! {
 
 /// `account_update.restriction_info[]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RestrictionInfo {
     /// What is restricted.
     pub restriction_type: RestrictionType,
@@ -495,6 +509,7 @@ pub enum MessagingLimit {
 
 /// `value` of a `business_capability_update` change.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BusinessCapabilityUpdateValue {
     /// Deprecated (removed February 2026): portfolio messaging limit; `-1` = unlimited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -524,6 +539,7 @@ open_enum! {
 
 /// `value` of a `business_username_updates` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BusinessUsernameUpdateValue {
     /// Business display phone number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -566,6 +582,7 @@ open_enum! {
 /// `value` of a `partner_solutions` change. The entry id of this field is a
 /// **business portfolio** id, not a WABA id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PartnerSolutionsValue {
     /// What happened.
     pub event: PartnerSolutionEvent,
@@ -591,6 +608,7 @@ open_enum! {
 /// `value` of a `payment_configuration_update` change (Payments API
 /// India / Brazil).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PaymentConfigurationUpdateValue {
     /// Configuration name used in order details messages.
     pub configuration_name: String,
@@ -639,6 +657,7 @@ open_enum! {
 
 /// `value` of a `phone_number_name_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PhoneNumberNameUpdateValue {
     /// Business display phone number.
     pub display_phone_number: String,
@@ -669,6 +688,7 @@ open_enum! {
 
 /// `value` of a `phone_number_quality_update` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PhoneNumberQualityUpdateValue {
     /// Business display phone number.
     pub display_phone_number: String,
@@ -699,6 +719,7 @@ open_enum! {
 
 /// `value` of a `security` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SecurityValue {
     /// Business display phone number.
     pub display_phone_number: String,
@@ -711,6 +732,7 @@ pub struct SecurityValue {
 
 /// `value` of an `account_settings_update` change (`calling/call-settings`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AccountSettingsUpdateValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -732,6 +754,7 @@ pub struct AccountSettingsUpdateValue {
 
 /// `account_settings_update.phone_number_settings`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PhoneNumberSettings {
     /// The phone number whose settings changed.
     pub phone_number_id: PhoneNumberId,

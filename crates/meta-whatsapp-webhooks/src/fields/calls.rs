@@ -28,6 +28,7 @@ use super::messages::MediaContent;
 
 /// `value` of a `calls` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallsValue {
     /// Always `whatsapp`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +91,7 @@ open_enum! {
 
 /// `calls[]`: one call event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Call {
     /// Call id (`wacid.…`).
     pub id: CallId,
@@ -165,6 +167,7 @@ pub struct Call {
 
 /// `calls[].session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallSession {
     /// `offer` or `answer`.
     pub sdp_type: String,
@@ -174,6 +177,7 @@ pub struct CallSession {
 
 /// `calls[].call_recording`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallRecording {
     /// Media type; currently always `audio`.
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
@@ -185,6 +189,7 @@ pub struct CallRecording {
 
 /// `calls[].call_transcript`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallTranscript {
     /// The transcript document (`application/json`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +210,7 @@ open_enum! {
 
 /// `statuses[]` of a `calls` change (business-initiated calls).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CallStatus {
     /// Call id.
     pub id: CallId,

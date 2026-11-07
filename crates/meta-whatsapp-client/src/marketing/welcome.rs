@@ -124,6 +124,7 @@ pub struct IceBreaker {
 
 /// What [`WelcomeSequences::create`] answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WelcomeSequenceCreated {
     /// The new sequence's id, for the ad creative and later calls.
     pub sequence_id: WelcomeSequenceId,
@@ -162,6 +163,7 @@ impl WelcomeSequenceUpdate {
 /// A sequence as [`WelcomeSequences::list`] and [`WelcomeSequences::get`]
 /// return it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WelcomeSequence {
     /// The sequence's id.
     pub sequence_id: WelcomeSequenceId,

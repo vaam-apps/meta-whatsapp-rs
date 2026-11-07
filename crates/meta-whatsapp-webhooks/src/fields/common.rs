@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// `value.metadata`: which business phone number the change is about.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Metadata {
     /// The business number as displayed, digits only (e.g. `15550783881`).
     pub display_phone_number: String,
@@ -21,6 +22,7 @@ pub struct Metadata {
 /// `profile` of a [`Contact`]. Both parts are optional: calls, echoes and
 /// history webhooks may carry only a `username`, or no profile at all.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Profile {
     /// Profile name as set in the WhatsApp client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,6 +35,7 @@ pub struct Profile {
 /// One `contacts[]` entry: the WhatsApp user a message, status, call or
 /// preference change is about.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Contact {
     /// Profile; defaults to empty when Meta omits the object.
     #[serde(default)]
