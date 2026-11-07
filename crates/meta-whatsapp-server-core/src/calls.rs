@@ -1533,6 +1533,72 @@ mod tests {
         assert!(plain.sip.is_none());
     }
 
+    /// A SIP server read with its password prints neither the host nor the
+    /// password in `Debug`, whether alone or in the set (roadmap M5e2,
+    /// D410): a stray `{:?}` of the credentials in a log line leaks
+    /// nothing. Decisive: the manual `Debug` impls (derive them and the
+    /// password, redacted by the library, still hides, but the host shows).
+    #[test]
+    fn sip_credentials_print_nothing_of_the_server_or_its_password() {
+        let settings: CallingSettings = serde_json::from_value(json!({
+            "sip": {"status": "ENABLED", "servers": [
+                {"hostname": "sip.secret-host.example", "sip_user_password": "hunter2-secret"}]}
+        }))
+        .unwrap();
+        let server = settings.sip.unwrap().servers.unwrap().remove(0);
+        let credential = SipCredential {
+            hostname: server.hostname,
+            port: server.port,
+            password: server.sip_user_password,
+        };
+        assert_eq!(credential.password(), Some("hunter2-secret"));
+        let set = SipCredentials {
+            status: Some("ENABLED".into()),
+            servers: vec![credential.clone()],
+        };
+        for shown in [format!("{credential:?}"), format!("{set:?}")] {
+            assert!(!shown.contains("hunter2"), "{shown}");
+            assert!(!shown.contains("secret-host"), "{shown}");
+        }
+    }
+
+    /// A voicemail announcement is Ogg with Opus by its own first bytes, not
+    /// empty and at most 16 MiB: each clause refused with the field named
+    /// (`file`) and `Debug` shows no byte (roadmap M5e2, D411).
+    #[test]
+    fn a_voicemail_announcement_is_ogg_opus_by_its_bytes() {
+        let ogg = |tail: &[u8]| {
+            let mut data = b"OggS\x00\x02".to_vec();
+            data.extend([0u8; 20]);
+            data.extend(b"\x01\x13OpusHead");
+            data.extend(tail);
+            bytes::Bytes::from(data)
+        };
+        let good = VoicemailAudio::new(ogg(b"audio-bytes-9Q")).unwrap();
+        assert!(!format!("{good:?}").contains("audio-bytes"));
+        assert_eq!(good.data().len(), 6 + 20 + 10 + 14);
+        for (what, data) in [
+            ("empty", bytes::Bytes::new()),
+            ("mp3", bytes::Bytes::from_static(b"ID3\x04")),
+            ("vorbis", bytes::Bytes::from_static(b"OggS\x00\x02vorbis")),
+            ("opus without ogg", bytes::Bytes::from_static(b"OpusHead")),
+        ] {
+            let error = VoicemailAudio::new(data).unwrap_err();
+            assert_eq!(field(&error), "file", "{what}");
+        }
+        let mut far = b"OggS".to_vec();
+        far.extend([0u8; 200]);
+        far.extend(b"OpusHead");
+        assert!(VoicemailAudio::new(bytes::Bytes::from(far)).is_err());
+        let mut big = ogg(b"").to_vec();
+        big.resize(usize::try_from(VOICEMAIL_MAX_BYTES).unwrap() + 1, 0);
+        let error = VoicemailAudio::new(bytes::Bytes::from(big)).unwrap_err();
+        assert_eq!(
+            error.code(),
+            crate::error::ErrorCode::MEDIA_TOO_LARGE.as_str()
+        );
+    }
+
     /// The record key is pinned (a stored name: a change orphans the
     /// records), differs by number and by call, and hides the call's id.
     #[test]
