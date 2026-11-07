@@ -75,6 +75,7 @@ pub struct Entry {
 
 /// `entry[].changes[]`: one field's new value.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Change {
     /// The subscribed field, e.g. `messages`.
     pub field: String,

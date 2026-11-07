@@ -4205,7 +4205,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     from `open_enum!`, which adds it (decided 2026-11-01, L20a's
     Landed note); L20b's scan only has to keep it there, and its work is
     the structs.
-  - **Landed:** the attribute is on 217 structs (every `Deserialize`
+  - **Landed:** the attribute is on 218 structs (every `Deserialize`
     struct with public fields of the two crates, except the request types
     below) and on `MessageProductType`. The rule is in
     `docs/architecture.md`; the decisive test is

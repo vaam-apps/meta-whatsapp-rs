@@ -231,9 +231,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs
-        .iter()
-        .any(|a| a.path().is_ident("cfg") && a.to_token_stream().to_string().contains("test"))
+    attrs.iter().any(|a| {
+        a.path().is_ident("cfg") && a.parse_args::<syn::Ident>().is_ok_and(|i| i == "test")
+    })
 }
 
 /// A derive of `Deserialize` however written: split over lines, by path
@@ -265,7 +265,28 @@ fn is_catch_all(v: &syn::Variant) -> bool {
         })
 }
 
+/// Types with a hand-written `impl Deserialize<'de> for T` in these items.
+fn manual_deserialize(items: &[syn::Item]) -> BTreeSet<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(i) => {
+                let (_, trait_path, _) = i.trait_.as_ref()?;
+                if trait_path.segments.last()?.ident != "Deserialize" {
+                    return None;
+                }
+                match &*i.self_ty {
+                    syn::Type::Path(p) => Some(p.path.segments.last()?.ident.to_string()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn collect(file: &str, items: &[syn::Item], found: &mut Vec<Item>) {
+    let manual = manual_deserialize(items);
     for item in items {
         match item {
             syn::Item::Struct(s) if matches!(s.vis, syn::Visibility::Public(_)) => {
@@ -281,7 +302,8 @@ fn collect(file: &str, items: &[syn::Item], found: &mut Vec<Item>) {
                     name: s.ident.to_string(),
                     kind: Kind::Struct,
                     non_exhaustive: has_non_exhaustive(&s.attrs),
-                    deserialize: derives_deserialize(&s.attrs),
+                    deserialize: derives_deserialize(&s.attrs)
+                        || manual.contains(&s.ident.to_string()),
                     shaped: pub_field,
                 });
             }
@@ -291,7 +313,8 @@ fn collect(file: &str, items: &[syn::Item], found: &mut Vec<Item>) {
                     name: e.ident.to_string(),
                     kind: Kind::Enum,
                     non_exhaustive: has_non_exhaustive(&e.attrs),
-                    deserialize: derives_deserialize(&e.attrs),
+                    deserialize: derives_deserialize(&e.attrs)
+                        || manual.contains(&e.ident.to_string()),
                     shaped: e.variants.iter().any(is_catch_all),
                 });
             }
@@ -480,6 +503,11 @@ fn the_scan_sees_every_way_to_write_a_type() {
         #[derive(Deserialize)]
         pub(crate) struct Hidden { pub a: u8 }
 
+        pub struct Manual { pub a: u8 }
+        impl<'de> serde::Deserialize<'de> for Manual {
+            fn deserialize<D>(d: D) -> Result<Self, D::Error> { todo!() }
+        }
+
         #[derive(Deserialize)]
         pub struct Private { a: u8 }
 
@@ -491,6 +519,12 @@ fn the_scan_sees_every_way_to_write_a_type() {
         mod tests {
             #[derive(Deserialize)]
             pub struct InTest { pub a: u8 }
+        }
+
+        #[cfg(feature = "testing")]
+        pub mod helpers {
+            #[derive(Deserialize)]
+            pub struct Testing { pub a: u8 }
         }
     "#;
     let mut found = Vec::new();
@@ -507,6 +541,8 @@ fn the_scan_sees_every_way_to_write_a_type() {
         ("Marked", true),
         ("Nested", false),
         ("Generic", false),
+        ("Manual", false),
+        ("Testing", false),
         ("Fallback", false),
         ("Named", false),
     ]

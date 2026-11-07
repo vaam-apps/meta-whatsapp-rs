@@ -16,7 +16,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 - **`#[non_exhaustive]` on every response struct, webhook payload
   struct and open enum** (roadmap L20b; OPEN_QUESTIONS #28, decided
-  2026-09-26): 217 structs in `meta-whatsapp-client` and
+  2026-09-26): 218 structs in `meta-whatsapp-client` and
   `meta-whatsapp-webhooks` and `MessageProductType` gained it, the
   macro's enums already had it. Outside those crates a struct literal of
   one of them no longer compiles, nor does an exhaustive destructure
