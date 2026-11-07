@@ -278,6 +278,7 @@ impl WebhookStore for MemoryWebhookStore {
         secret: &SealedSecret,
         previous_until: OffsetDateTime,
         now: OffsetDateTime,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Endpoint>> {
         let mut state = self.lock();
         let Some(endpoint) = state
@@ -287,6 +288,9 @@ impl WebhookStore for MemoryWebhookStore {
         else {
             return Ok(None);
         };
+        if !reached_through_holds(endpoint.tenants.as_deref(), reached_through) {
+            return Ok(None);
+        }
         endpoint.previous_secret = Some(std::mem::replace(&mut endpoint.secret, secret.clone()));
         endpoint.previous_secret_until = Some(previous_until);
         endpoint.updated_at = now;
@@ -327,9 +331,17 @@ impl WebhookStore for MemoryWebhookStore {
         Ok(true)
     }
 
-    async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool> {
+    async fn delete_endpoint(
+        &self,
+        tenant: &TenantId,
+        id: &EndpointId,
+        reached_through: Option<&[TenantId]>,
+    ) -> StoreResult<bool> {
         let mut state = self.lock();
-        if Self::owned(&state, tenant, id).is_none() {
+        let Some(found) = Self::owned(&state, tenant, id) else {
+            return Ok(false);
+        };
+        if !reached_through_holds(found.tenants.as_deref(), reached_through) {
             return Ok(false);
         }
         state.endpoints.remove(id.as_str());
@@ -398,11 +410,15 @@ impl WebhookStore for MemoryWebhookStore {
         tenant: &TenantId,
         endpoint: &EndpointId,
         delivery: &NewDelivery,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Delivery>> {
         let mut state = self.lock();
         let Some(found) = Self::owned(&state, tenant, endpoint).cloned() else {
             return Ok(None);
         };
+        if !reached_through_holds(found.tenants.as_deref(), reached_through) {
+            return Ok(None);
+        }
         let row = new_row(&found, &found.tenant, delivery);
         let made = row.delivery.clone();
         state

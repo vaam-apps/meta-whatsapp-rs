@@ -332,7 +332,9 @@ pub trait WebhookStore: Send + Sync + 'static {
     /// Rotate `tenant`'s endpoint `id`'s secret at `now`: `secret` becomes
     /// the current one, the current one the previous one until
     /// `previous_until` (an older previous one is dropped). `None` for
-    /// another tenant's.
+    /// another tenant's, and when the endpoint's set of named tenants is
+    /// not `reached_through` ([`EndpointChange::reached_through`], D342:
+    /// `None` for an endpoint without a set); nothing is changed then.
     async fn rotate_secret(
         &self,
         tenant: &TenantId,
@@ -340,6 +342,7 @@ pub trait WebhookStore: Send + Sync + 'static {
         secret: &SealedSecret,
         previous_until: OffsetDateTime,
         now: OffsetDateTime,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Endpoint>>;
 
     /// Every endpoint of every tenant, enabled or not, in byte order of
@@ -360,8 +363,15 @@ pub trait WebhookStore: Send + Sync + 'static {
     ) -> StoreResult<bool>;
 
     /// Delete `tenant`'s endpoint `id` and its deliveries; `false` for
-    /// another tenant's.
-    async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool>;
+    /// another tenant's, and, nothing deleted, when the endpoint's set of
+    /// named tenants is not `reached_through` (D342, as for
+    /// [`Self::rotate_secret`]).
+    async fn delete_endpoint(
+        &self,
+        tenant: &TenantId,
+        id: &EndpointId,
+        reached_through: Option<&[TenantId]>,
+    ) -> StoreResult<bool>;
 
     /// Every enabled endpoint, every tenant's, in byte order of their
     /// ids: what the dispatcher fans out to.
@@ -383,12 +393,15 @@ pub trait WebhookStore: Send + Sync + 'static {
     ) -> StoreResult<bool>;
 
     /// Record `delivery` (a ping) for `tenant`'s endpoint `endpoint`;
-    /// `None` for another tenant's.
+    /// `None` for another tenant's, and, nothing recorded, when the
+    /// endpoint's set of named tenants is not `reached_through` (D342, as
+    /// for [`Self::rotate_secret`]).
     async fn insert_delivery(
         &self,
         tenant: &TenantId,
         endpoint: &EndpointId,
         delivery: &NewDelivery,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Delivery>>;
 
     /// Claim deliveries due by `request.now` (see the module's rules), the
