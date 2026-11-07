@@ -29,7 +29,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId};
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, Claimed, CreateOutcome, EndpointChange, NewDelivery, NewEndpoint,
-    Outcome, PendingDeliveries, WebhookStore,
+    Outcome, PendingDeliveries, SealedSecrets, WebhookStore,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     AttemptError, Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId,
@@ -281,6 +281,46 @@ impl WebhookStore for PgWebhookStore {
         .as_ref()
         .map(endpoint_row)
         .transpose()
+    }
+
+    async fn all_endpoints(&self, page: &PageRequest) -> StoreResult<Listing<Endpoint>> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {ENDPOINT_COLUMNS} FROM wa_server_webhook_endpoints \
+             WHERE ($1::text IS NULL OR id > $1) ORDER BY id LIMIT $2"
+        )))
+        .bind(page.after.as_deref())
+        .bind(i64::try_from(page.limit + 1).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let items = rows
+            .iter()
+            .map(endpoint_row)
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, |e| e.id.as_str().to_owned()))
+    }
+
+    async fn reseal_secrets(
+        &self,
+        id: &EndpointId,
+        expected: &SealedSecrets,
+        replacement: &SealedSecrets,
+    ) -> StoreResult<bool> {
+        // One statement: Postgres re-checks the `WHERE` on the row's
+        // newest version after waiting for a concurrent rotation's lock.
+        let done = sqlx::query(
+            "UPDATE wa_server_webhook_endpoints SET secret = $4, previous_secret = $5 \
+             WHERE id = $1 AND secret = $2 AND previous_secret IS NOT DISTINCT FROM $3",
+        )
+        .bind(id.as_str())
+        .bind(expected.secret.as_stored())
+        .bind(expected.previous.as_ref().map(SealedSecret::as_stored))
+        .bind(replacement.secret.as_stored())
+        .bind(replacement.previous.as_ref().map(SealedSecret::as_stored))
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool> {
