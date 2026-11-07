@@ -822,3 +822,34 @@ async fn the_binding_is_named_when_the_setting_is_on() {
     work(&h).await;
     assert_eq!(bodies(&h)[0]["messaging_account_id"], WABA);
 }
+
+/// A number handed to another tenant (the first unbound its WABA, the
+/// second attached it) brings none of the first's broadcasts with it: the
+/// new holder reads and cancels them as `404` (the record's own tenant, not
+/// the number's, decides: M5.2), and the first's queued sends go nowhere
+/// (a worker finds a token only for the record's tenant). Decisive: the
+/// tenant clause of `Broadcasts::owned` and `Authorizer::broadcast_sender`.
+#[tokio::test]
+async fn a_number_rebound_to_another_tenant_keeps_nothing_of_the_first() {
+    let w = world(rate(20)).await;
+    let id = queued(&w, PN, &broadcast(people(3))).await;
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(WABA).unwrap();
+    assert!(w.h.store.unbind_waba(&waba).await.unwrap());
+    w.h.connect(OTHER_TENANT, WABA, &[PN], "EAAG-the-new-holder")
+        .await;
+    let rival = w.h.tenant_key(OTHER_TENANT, &[Scope::Broadcasts]).await;
+    let seen = w.h.call(read(&rival, PN, &id)).await;
+    assert_eq!(seen.status, StatusCode::NOT_FOUND, "{}", seen.text);
+    let cancelled = w.h.call(cancel(&rival, PN, &id)).await;
+    assert_eq!(
+        cancelled.status,
+        StatusCode::NOT_FOUND,
+        "{}",
+        cancelled.text
+    );
+    // The first tenant's worker sends nothing with the new holder's token.
+    script(&w.h, 3);
+    work(&w.h).await;
+    assert!(w.h.graph.requests().is_empty(), "sent as the new holder");
+    assert_eq!(w.h.graph.remaining(), 3);
+}
