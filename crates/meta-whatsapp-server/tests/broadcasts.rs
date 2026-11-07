@@ -221,7 +221,7 @@ async fn a_restart_resumes_without_resending() {
     assert_eq!(seen.len(), all, "a person was sent twice");
     let view = second.call(read(&key, PN, &id)).await.json();
     assert_eq!(view["state"], "completed", "{view}");
-    assert_eq!(view["sent"].as_u64().unwrap() as usize, all);
+    assert_eq!(view["sent"].as_u64().unwrap(), u64::try_from(all).unwrap());
     assert!(view["unknown"].as_u64().unwrap() > 0, "{view}");
     assert_eq!(
         view["sent"].as_u64().unwrap() + view["unknown"].as_u64().unwrap(),
@@ -256,7 +256,10 @@ async fn cancel_stops_further_sends() {
     assert!((3..=8).contains(&sent), "{sent} sends after a cancel");
     let view = status(&w, &id).await;
     assert_eq!(view["state"], "cancelled");
-    assert_eq!(view["queued"].as_u64().unwrap() as usize, 20 - sent);
+    assert_eq!(
+        view["queued"].as_u64().unwrap(),
+        u64::try_from(20 - sent).unwrap()
+    );
     // Nothing more, later.
     w.clock.advance(Duration::from_secs(600));
     work(&w.h).await;

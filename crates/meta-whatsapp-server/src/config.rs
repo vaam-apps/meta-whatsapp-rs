@@ -1006,6 +1006,7 @@ fn attempt_limits(r: &Reader<'_>) -> Result<AttemptLimits, ConfigError> {
 /// ([`attempt_limits`]) and
 /// `WA_SERVER_INBOX_REPLY_CHECKS` (the core's
 /// `inbox::ReplyChecksByNumber::parse`).
+#[allow(clippy::too_many_lines)] // one setting a line: the list is the point
 fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
     let defaults = Settings::default();
     let idempotency_ttl = match r.plain("WA_SERVER_IDEMPOTENCY_TTL")? {

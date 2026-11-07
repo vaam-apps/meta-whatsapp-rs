@@ -113,6 +113,12 @@ pub const CANCELLED: &str = "broadcast_cancelled";
 /// How long a record without its job is believed to be a create in flight.
 const CREATE_GRACE_MS: i64 = 5 * 60 * 1000;
 
+/// How long a broadcast's record and counts are kept: twice the 30 days the
+/// jobs keep a settled job (`KvJobs::retention`), and past the month after
+/// which a job nobody ran is no longer found, so the record never goes
+/// before its job.
+const RECORD_TTL: Duration = Duration::from_hours(60 * 24);
+
 /// Attempts at a compare-and-swap before giving up.
 const CAS_ATTEMPTS: usize = 8;
 
@@ -319,10 +325,8 @@ impl NewBroadcast {
             if names_an_object(&built) {
                 return Err(ServiceError::invalid("template"));
             }
-            if let Some(components) = recipient.components {
-                if let Some(key) = person_key(&person) {
-                    overrides.insert(key, components);
-                }
+            if let (Some(components), Some(key)) = (recipient.components, person_key(&person)) {
+                overrides.insert(key, components);
             }
             people.push(person);
         }
@@ -638,12 +642,12 @@ impl BroadcastRecords {
             let written = match version {
                 Some(version) => {
                     self.progress
-                        .compare_and_swap(id, version, Some(&progress), Expiry::Never)
+                        .compare_and_swap(id, version, Some(&progress), Expiry::After(RECORD_TTL))
                         .await
                 }
                 None => {
                     self.progress
-                        .put_if_absent(id, &progress, Expiry::Never)
+                        .put_if_absent(id, &progress, Expiry::After(RECORD_TTL))
                         .await
                 }
             };
@@ -943,7 +947,7 @@ impl<'a> Broadcasts<'a> {
         };
         self.records
             .records
-            .put_if_absent(&id, &record, Expiry::Never)
+            .put_if_absent(&id, &record, Expiry::After(RECORD_TTL))
             .await?
             .ok_or_else(ServiceError::internal)?;
         if let Err(refused) = self.records.reserve(tenant, &id).await {

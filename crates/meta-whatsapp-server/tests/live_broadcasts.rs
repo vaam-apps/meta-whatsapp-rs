@@ -67,7 +67,11 @@ async fn live_postgres_a_broadcast_survives_a_replica_and_keeps_its_rate() {
     assert_eq!(seen.len(), all, "a person was sent twice");
     let view = second.call(read(&key, PN, &id)).await.json();
     assert_eq!(view["state"], "completed", "{view}");
-    assert_eq!(view["sent"].as_u64().unwrap() as usize, all, "{view}");
+    assert_eq!(
+        view["sent"].as_u64().unwrap(),
+        u64::try_from(all).unwrap(),
+        "{view}"
+    );
     assert_eq!(
         view["sent"].as_u64().unwrap() + view["unknown"].as_u64().unwrap(),
         30,

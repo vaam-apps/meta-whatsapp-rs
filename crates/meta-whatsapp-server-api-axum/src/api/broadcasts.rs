@@ -44,7 +44,7 @@ pub struct RecipientBody {
     pub user_id: Option<String>,
     /// This person's own `components`, replacing the template's: their
     /// parameters (Meta's template components, as a send takes them).
-    #[schema(value_type = Option<Vec<Object>>)]
+    #[schema(value_type = Option<Vec<HashMap<String, Value>>>)]
     pub components: Option<Value>,
 }
 
@@ -56,7 +56,7 @@ pub struct CreateBody {
     /// Meta's template object: `name`, `language` and, for parameters
     /// every person shares, `components`. A template naming a catalog is
     /// not offered in a broadcast.
-    #[schema(value_type = Object)]
+    #[schema(value_type = HashMap<String, Value>)]
     pub template: Value,
     /// The people: each named by `phone`, `user_id` or both; each once.
     pub recipients: Vec<RecipientBody>,

@@ -1,6 +1,11 @@
 //! What the broadcast tests share (roadmap M5k): the world they run in, the
 //! wire to "Meta" that times and stalls sends, and the requests they make.
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)] // not every test binary uses every item
+#![allow(
+    dead_code,
+    clippy::needless_pass_by_value,
+    clippy::unwrap_used,
+    clippy::expect_used
+)] // not every test binary uses every item
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
