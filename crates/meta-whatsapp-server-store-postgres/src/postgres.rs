@@ -93,7 +93,13 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "webhooks out",
         include_str!("../migrations/0009_webhooks_out.sql"),
     ),
-    // Roadmap M2m, numbered 11 while M5j2 holds 10.
+    // Roadmap M5j2: an operator's idempotency keys.
+    (
+        10,
+        "admin idempotency",
+        include_str!("../migrations/0010_admin_idempotency.sql"),
+    ),
+    // Roadmap M2m, after M5j2's 10.
     (
         11,
         "webhook endpoint tenants",
@@ -1114,30 +1120,31 @@ impl IdempotencyRecords for PgStore {
         // the insert that found a live row and the read of it, the row may
         // be released: then claim again (a few times: each round, another
         // request made progress).
+        let table = idempotency_table(tenant);
         for _ in 0..3 {
-            let claimed = sqlx::query(
-                "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim",
-            )
-            .bind(tenant.as_str())
-            .bind(key.as_str())
-            .bind(fingerprint.as_slice())
-            .bind(claim)
-            .bind(lease.as_secs_f64())
-            .bind(ttl.as_secs_f64())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+            let insert = "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim"
+                .replace("wa_server_idempotency", table);
+            let claimed = sqlx::query(sqlx::AssertSqlSafe(insert))
+                .bind(tenant.as_str())
+                .bind(key.as_str())
+                .bind(fingerprint.as_slice())
+                .bind(claim)
+                .bind(lease.as_secs_f64())
+                .bind(ttl.as_secs_f64())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
             if claimed.is_some() {
                 return Ok(IdempotencyClaim::Claimed);
             }
-            let row = sqlx::query(
-                "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()",
-            )
-            .bind(tenant.as_str())
-            .bind(key.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+            let select = "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()"
+                .replace("wa_server_idempotency", table);
+            let row = sqlx::query(sqlx::AssertSqlSafe(select))
+                .bind(tenant.as_str())
+                .bind(key.as_str())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
             let Some(row) = row else { continue };
             let digest: Vec<u8> = get(&row, "request_sha256")?;
             let fingerprint: [u8; 32] = digest.try_into().map_err(|_| corrupt("request_sha256"))?;
@@ -1172,17 +1179,17 @@ impl IdempotencyRecords for PgStore {
         status: u16,
         body: &[u8],
     ) -> StoreResult<bool> {
-        let done = sqlx::query(
-            "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
-        )
-        .bind(tenant.as_str())
-        .bind(key.as_str())
-        .bind(claim)
-        .bind(i32::from(status))
-        .bind(body)
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+        let update = "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
+            .replace("wa_server_idempotency", idempotency_table(tenant));
+        let done = sqlx::query(sqlx::AssertSqlSafe(update))
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .bind(claim)
+            .bind(i32::from(status))
+            .bind(body)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(done.rows_affected() > 0)
     }
 
@@ -1192,26 +1199,51 @@ impl IdempotencyRecords for PgStore {
         key: &IdempotencyKey,
         claim: &str,
     ) -> StoreResult<bool> {
-        let done = sqlx::query(
-            "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3",
-        )
-        .bind(tenant.as_str())
-        .bind(key.as_str())
-        .bind(claim)
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+        let delete = "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
+            .replace("wa_server_idempotency", idempotency_table(tenant));
+        let done = sqlx::query(sqlx::AssertSqlSafe(delete))
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .bind(claim)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(done.rows_affected() > 0)
     }
 
     async fn purge_idempotency_keys(&self) -> StoreResult<u64> {
         // No lock of its own (housekeeping holds its turn): two at once
         // delete a record once.
-        let done = sqlx::query("DELETE FROM wa_server_idempotency WHERE expires_at <= now()")
+        let mut purged = 0;
+        for table in [IDEMPOTENCY_TABLE, ADMIN_IDEMPOTENCY_TABLE] {
+            let done = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE expires_at <= now()"
+            )))
             .execute(&self.pool)
             .await
             .map_err(busy_or_backend)?;
-        Ok(done.rows_affected())
+            purged += done.rows_affected();
+        }
+        Ok(purged)
+    }
+}
+
+/// The tenants' idempotency records (migration 2).
+const IDEMPOTENCY_TABLE: &str = "wa_server_idempotency";
+
+/// An operator's idempotency records (roadmap M5j2, migration 10): the
+/// same columns, no foreign key to the tenants, since an admin key's
+/// scope (`admin/<key id>`) has no tenant row.
+const ADMIN_IDEMPOTENCY_TABLE: &str = "wa_server_admin_idempotency";
+
+/// The table a scope's records live in: an admin key's namespace
+/// (`admin/...`, which no tenant id can spell) in its own, else the
+/// tenants'.
+fn idempotency_table(scope: &TenantId) -> &'static str {
+    if scope.as_str().starts_with("admin/") {
+        ADMIN_IDEMPOTENCY_TABLE
+    } else {
+        IDEMPOTENCY_TABLE
     }
 }
 
@@ -1490,8 +1522,12 @@ mod tests {
             "0d605fa295b385137f0d6fab20501615e8621c011abadb6dfc8a16608938232351950318861db7ad5fa7ee9094650a89",
         ),
         (
+            10,
+            "805d46eed073988cf8ff26bdc87cd2d18f5b529c117f5ea099888484814d019acac59315453a0561b2577dcc569df020",
+        ),
+        (
             11,
-            "0c85bb586dfcab13733981f8960de5922ce3885416df9152392576bce2b387166e46b772fe7cee50d2dbc63b422e92f3",
+            "c9c2c040c3e545dede9e96a6fd78ef0b8522e81403461a3dc38f9037d39f74df34f8ac649c1ad839dc9dbc1c8a975fa4",
         ),
     ];
 
@@ -1528,6 +1564,7 @@ mod tests {
                 "received media",
                 "erasure",
                 "webhooks out",
+                "admin idempotency",
                 "webhook endpoint tenants"
             ]
         );

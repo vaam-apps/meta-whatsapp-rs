@@ -3,9 +3,9 @@
 -- nothing else changed: expand-only, like every migration of the service
 -- (docs/design/server.md, section 2.4); a replica of the previous release
 -- never reads them. sqlx records this file's checksum: never edit it once
--- released, a comment included. Numbered 11 while migration 10 (roadmap
--- M5j2) is in flight; the names below are pending the owner's
--- confirmation as stable identifiers (docs/architecture.md).
+-- released, a comment included. Numbered 11, after migration 10 (roadmap
+-- M5j2); the names below are pending the owner's confirmation as stable
+-- identifiers (docs/architecture.md).
 --
 -- `named_tenants` says an endpoint receives the tenants named in
 -- `wa_server_webhook_endpoint_tenants` and not its own tenant's events:

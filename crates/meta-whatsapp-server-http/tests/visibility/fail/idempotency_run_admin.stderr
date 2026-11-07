@@ -1,0 +1,17 @@
+error[E0603]: function `run_admin` is private
+ --> tests/visibility/fail/idempotency_run_admin.rs:8:45
+  |
+8 | use meta_whatsapp_server_http::idempotency::run_admin;
+  |                                             ^^^^^^^^^ private function
+  |
+note: the function `run_admin` is defined here
+ --> src/idempotency.rs
+  |
+  | / pub(crate) async fn run_admin(
+  | |     state: &AppState,
+  | |     admin: &AdminCaller,
+  | |     key: Option<IdempotencyKey>,
+  | |     fingerprint: Fingerprint,
+  | |     operation: impl Future<Output = Result<Success, ApiError>>,
+  | | ) -> Response {
+  | |_____________^
