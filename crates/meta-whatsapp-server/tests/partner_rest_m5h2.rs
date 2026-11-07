@@ -299,10 +299,10 @@ async fn the_invitation_takes_an_idempotency_key_and_a_retry_is_not_a_second_inv
     assert_eq!(f.h.graph.remaining(), 0);
     // The gate answers before the key is read.
     let off = fixture(false, true).await;
-    let refused =
-        off.h
-            .call(onboard(END_BUSINESS, &off).header("idempotency-key", "with space"))
-            .await;
+    let refused = off
+        .h
+        .call(onboard(END_BUSINESS, &off).header("idempotency-key", "with space"))
+        .await;
     assert_eq!(refused.code(), "feature_not_available");
     assert!(off.h.graph.requests().is_empty());
 }
@@ -488,10 +488,9 @@ async fn the_agreements_state_failures_keep_the_signer_and_the_token_out() {
     // A token that cannot be a header value never reaches Meta, and is not
     // echoed.
     let before = f.h.graph.requests().len();
-    let unsendable = f
-        .h
-        .call(state(BUSINESS, &json!("EAAB-planted\nsecond-line"), &f))
-        .await;
+    let unsendable =
+        f.h.call(state(BUSINESS, &json!("EAAB-planted\nsecond-line"), &f))
+            .await;
     assert!(!unsendable.status.is_success(), "{}", unsendable.text);
     assert_eq!(f.h.graph.requests().len(), before);
     assert!(!unsendable.text.contains("planted"), "{}", unsendable.text);
