@@ -7088,12 +7088,12 @@ or WABA fails the family's own cross-tenant test).
     edges), `tests/commerce_logs.rs` (the audit events), M5.1 by
     construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's
     capture over every new route (`tests/common/capture.rs`). Not
-    offered, and tracked by M5g2: a catalog's product sets and one
+    offered then, and served since by M5g2: a catalog's product sets and one
     product by id, the products edge's `filter`, template group
     analytics, the two analytics switches (insights, click tracking);
     call analytics are M5e's, served (row 107 stays
     partial for M5g2); a group's analytics are M5f's, served.
-- [ ] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
+- [x] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
   product sets and one product by id, the products edge's `filter`,
   template group analytics, and the two analytics switches (template
   insights, button click tracking). Each keeps the rule M5g set: an
@@ -7113,6 +7113,42 @@ or WABA fails the family's own cross-tenant test).
     bounded as D145's. Each of the two switches is an audited change by
     the caller (names pending), under an `Idempotency-Key`, answering no
     text of Meta's, and refused to a key without the `analytics` scope.
+  - **Landed:** no new scope; six operations on `commerce` and
+    `analytics` (OpenAPI additive: six paths' worth of routes and the
+    products route's `filter`). `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`,
+    `…/product-sets/{set_id}`, `…/products/{product_id}`: the catalog is
+    found among the WABA's own first (D141), a **set** is asked for its
+    `product_catalog` alone (the product set page's field) and read in
+    full only when that is the path's catalog, a **product** is asked for
+    through the catalog's own products edge filtered on `product_item_id`
+    and must be among the answer (D281; the product item page does not say
+    what its `product_catalog` holds, so it is not relied on). The products
+    edge's `filter`: Meta's product set filter rules, parsed and bounded
+    (D283). `GET …/analytics/template-groups`: each group read first and
+    found to be the WABA's (D118's read, D282), the range as template
+    analytics' (D145). `POST …/analytics/template-insights` is **a legal
+    act** (Meta's page: it directs Meta to add link tracking and to collect
+    and anonymize chat data, and cannot be undone): off until
+    `WA_SERVER_LEGAL_ACTS=on` (D285); `PUT …/analytics/templates/{template_id}/click-tracking`
+    reads the template's category and sends it back (D284); both under an
+    `Idempotency-Key`, audited, no text of Meta's (D286). Tests:
+    `tests/commerce_analytics_m5g2.rs` (the exact requests, the
+    cross-object `404`s with only the checks sent, every refusal before any
+    request), `tests/analytics_switches_logs.rs` (the audit events),
+    M5.1 by construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`).
+  - **Decided:** D280–D287, by the coordinator on 2026-11-06 under the
+    owner's delegation, swappable: as proposed, template insights gated as
+    a legal act (D285), and the click tracking category sent back exactly
+    as Meta returned it, with no change of case (D284). Pending the owner's confirmation before the first
+    release: the six operation ids, the paths, the body's `opted_out`, and
+    the audit actions `template_insights_enabled` and
+    `template_click_tracking_set`.
+  - **Not done here:** a set's own products edge, the sets' filters
+    (`ancestor_id`, `has_children`, `parent_id`), the products edge's
+    `error_type`, `error_priority` and `bulk_pagination`. Unverified
+    against Meta: whether Meta compares the category's case (D284), the
+    value type of `product_item_id` in a filter (D281). No call was run
+    against Meta live.
 - [x] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route

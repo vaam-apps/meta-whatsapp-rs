@@ -1,6 +1,6 @@
 # Commerce, QR codes, analytics and the block list
 
-> **Verified against meta-whatsapp-rs e6cebefa7240233b0411f806092759c506d581fd (2026-11-05).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tags `commerce`, `qr_codes`, `analytics` and `contacts`), `docs/guides/server.md` section "Commerce, QR codes, analytics and the block list" and [examples/commerce.ts](../examples/commerce.ts).
+> **Verified against meta-whatsapp-rs 5c740bb62a4bdab780e4e51725b85eeb5ee5ca2d (2026-11-06).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tags `commerce`, `qr_codes`, `analytics` and `contacts`), `docs/guides/server.md` section "Commerce, QR codes, analytics and the block list" and [examples/commerce.ts](../examples/commerce.ts).
 
 Four scopes, one per family: `commerce`, `qr_codes`, `analytics` and
 `contacts`. A key minted before them has none, and `send` grants none:
@@ -9,10 +9,12 @@ mint a key for these routes on purpose.
 | Route | Does |
 | --- | --- |
 | `GET /v1/numbers/{pn}/commerce-settings`, `PATCH /v1/numbers/{pn}/commerce-settings` | the cart and the catalog's visibility; `CommerceSettingsUpdate`, `204` |
-| `GET /v1/wabas/{waba_id}/catalogs`, `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}`, `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products` | the catalog the WABA connects; its products, 1 to 100 a page (`limit`, `cursor`) |
+| `GET /v1/wabas/{waba_id}/catalogs`, `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}`, `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products` | the catalog the WABA connects; its products, 1 to 100 a page (`limit`, `cursor`, `filter`: Meta's product set filter rules as JSON text, parsed and bounded, `invalid_request` on `filter` otherwise) |
+| `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`, `…/product-sets/{set_id}`, `…/products/{product_id}` | a catalog's product sets, one set, one product (Meta's ids, not `retailer_id`); another catalog's is `not_found` |
 | `POST /v1/numbers/{pn}/qr-codes`, `GET /v1/numbers/{pn}/qr-codes` | create (`CreateQrCode`, `201`); list, 1 to 25 a page |
 | `GET /v1/numbers/{pn}/qr-codes/{code}`, `PATCH /v1/numbers/{pn}/qr-codes/{code}`, `DELETE /v1/numbers/{pn}/qr-codes/{code}` | read, change the message, delete |
-| `GET /v1/wabas/{waba_id}/analytics/messaging`, `GET /v1/wabas/{waba_id}/analytics/conversations`, `GET /v1/wabas/{waba_id}/analytics/pricing`, `GET /v1/wabas/{waba_id}/analytics/templates` | analytics, `start` and `end` as RFC 3339 times |
+| `GET /v1/wabas/{waba_id}/analytics/messaging`, `GET /v1/wabas/{waba_id}/analytics/conversations`, `GET /v1/wabas/{waba_id}/analytics/pricing`, `GET /v1/wabas/{waba_id}/analytics/templates`, `GET /v1/wabas/{waba_id}/analytics/template-groups` | analytics, `start` and `end` as RFC 3339 times |
+| `POST /v1/wabas/{waba_id}/analytics/template-insights`, `PUT /v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking` | confirm template insights (a legal act: `feature_not_available` until the deployer sets `WA_SERVER_LEGAL_ACTS=on`; it cannot be undone); opt a template out of button click tracking (`{"opted_out": true}`); both `204`, under an `Idempotency-Key`, no text of Meta's |
 | `GET /v1/numbers/{pn}/blocked-users`, `POST /v1/numbers/{pn}/blocked-users`, `POST /v1/numbers/{pn}/blocked-users/unblock` | the block list; block and unblock `BlockUsersRequest` |
 
 Block people, under a reference of your own:
@@ -62,5 +64,4 @@ export async function createQrCode(api: WhatsApp, pn: string, message: string, r
 }
 ```
 
-Not offered yet (roadmap M5g2): a catalog's product sets, one product by
-its id, template group analytics, and the two analytics switches.
+Not offered: a set's own products, and every catalog write.

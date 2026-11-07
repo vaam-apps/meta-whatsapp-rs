@@ -8,20 +8,25 @@
 //! | `PATCH /v1/numbers/{pn}/commerce-settings` | `POST /{pn}/whatsapp_commerce_settings?is_cart_enabled=…&is_catalog_visible=…` |
 //! | `GET /v1/wabas/{waba_id}/catalogs` | `GET /{waba_id}/product_catalogs?fields=id,name,product_count,vertical` |
 //! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}` | the same list, the catalog found among it |
-//! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products` | the same list (the catalog must be among it), then `GET /{catalog_id}/products` |
+//! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products` | the same list (the catalog must be among it), then `GET /{catalog_id}/products` (with a `filter`: Meta's documented JSON, parsed and bounded first) |
+//! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}` | the same list, then the catalog's products edge filtered on `product_item_id` (roadmap M5g2) |
+//! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets` | the same list, then `GET /{catalog_id}/product_sets` (roadmap M5g2) |
+//! | `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}` | the same list, then `GET /{set_id}?fields=product_catalog{id}` (its catalog must be this one), then the set (roadmap M5g2) |
 //!
 //! Pages: `catalogs/set-commerce-settings`, Meta's Catalog API (see the
 //! core's [`meta_whatsapp_server_core::commerce`]). **A catalog is its
 //! WABA's, or it does not exist**: another WABA's catalog is `404
-//! not_found`, and its products are never asked for. Not offered (roadmap
-//! M5g, partial): a catalog's product sets, one product by its id, the
-//! products edge's `filter`, and every catalog write.
+//! not_found`, and its products are never asked for. A product set or a
+//! product is its catalog's the same way (roadmap M5g2, D281): another
+//! catalog's is `404`, with only the lookups sent. Not offered: every
+//! catalog write.
 
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_server_core::commerce::{
-    self as domain, Catalogs, NumberCommerce, ProductQuery, SettingsChange,
+    self as domain, Catalogs, NumberCommerce, ProductFilter, ProductQuery, ProductSetQuery,
+    SettingsChange,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -222,8 +227,80 @@ impl From<domain::ProductPage> for ProductList {
     }
 }
 
-/// `?limit=`, `?cursor=` and `?return_only_approved_products=`, as the
-/// OpenAPI document declares them.
+/// A product set of a catalog.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ProductSet)]
+pub struct ProductSetView {
+    /// Its id.
+    pub id: String,
+    /// Its name.
+    #[schema(required = true)]
+    pub name: Option<String>,
+    /// The rule that defines the set, as the JSON-encoded string Meta
+    /// writes it.
+    #[schema(required = true)]
+    pub filter: Option<String>,
+    /// The business's own id for the set.
+    #[schema(required = true)]
+    pub retailer_id: Option<String>,
+    /// How many products it holds.
+    #[schema(required = true)]
+    pub product_count: Option<u64>,
+}
+
+impl From<domain::ProductSet> for ProductSetView {
+    fn from(set: domain::ProductSet) -> Self {
+        let domain::ProductSet {
+            id,
+            name,
+            filter,
+            retailer_id,
+            product_count,
+        } = set;
+        Self {
+            id,
+            name,
+            filter,
+            retailer_id,
+            product_count,
+        }
+    }
+}
+
+/// A page of a catalog's product sets.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProductSetList {
+    /// The sets, in Meta's order.
+    pub data: Vec<ProductSetView>,
+    /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
+}
+
+impl From<domain::ProductSetPage> for ProductSetList {
+    fn from(page: domain::ProductSetPage) -> Self {
+        Self {
+            data: page.sets.into_iter().map(ProductSetView::from).collect(),
+            next_cursor: page.next_after.as_deref().map(encode_cursor),
+        }
+    }
+}
+
+/// `?limit=` and `?cursor=` of the product sets, as the OpenAPI document
+/// declares them.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct ProductSetsQuery {
+    /// Page size, 1 to 100 (the service's bound; Meta's default without).
+    #[param(minimum = 1, maximum = 100)]
+    pub limit: Option<u32>,
+    /// `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+/// `?limit=`, `?cursor=`, `?return_only_approved_products=` and
+/// `?filter=`, as the OpenAPI document declares them.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
@@ -235,6 +312,12 @@ pub struct ProductsQuery {
     pub cursor: Option<String>,
     /// Only the products approved for WhatsApp (Meta's default: all).
     pub return_only_approved_products: Option<bool>,
+    /// Only the products a rule matches: Meta's product set filter rules
+    /// as JSON text, `{"product_type": {"i_contains": "shirt"}}`: fields
+    /// and operators from Meta's page, at most 2048 bytes, 10 fields, 4
+    /// operators a field and 50 values an operator. Parsed and checked
+    /// before any request, and written to Meta from the parsed value.
+    pub filter: Option<String>,
 }
 
 // ─── The services ────────────────────────────────────────────────────────
@@ -421,7 +504,7 @@ pub(crate) async fn get_catalog(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such WABA for this tenant, or no such catalog among its own (its products are not asked for)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `catalog_id`, `limit`, `cursor` or `query`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `catalog_id`, `limit`, `cursor`, `filter` or `query`: nothing asked of Meta", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -435,6 +518,11 @@ pub(crate) async fn list_catalog_products(
     ApiQuery(query): ApiQuery<ProductsQuery>,
 ) -> Result<Json<ProductList>, ApiError> {
     let after = listing::after(query.cursor.as_deref())?;
+    let filter = query
+        .filter
+        .as_deref()
+        .map(ProductFilter::parse)
+        .transpose()?;
     let page = catalogs(&state, &caller, &owned)?
         .products(
             &catalog_id,
@@ -442,10 +530,130 @@ pub(crate) async fn list_catalog_products(
                 limit: query.limit,
                 after,
                 return_only_approved_products: query.return_only_approved_products,
+                filter,
             },
         )
         .await?;
     Ok(Json(ProductList::from(page)))
+}
+
+/// `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}`:
+/// one product of the catalog.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}",
+    tag = "commerce",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("catalog_id" = String, Path, description = "Catalog id"),
+        ("product_id" = String, Path, description = "Product id (Meta's, not the business's `retailer_id`)"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The product", body = ProductView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, no such catalog among its own (the product is not asked for), or no such product in that catalog (another catalog's product looks like a missing one)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `catalog_id` or `product_id`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_catalog_product(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    Path((_, catalog_id, product_id)): Path<(String, String, String)>,
+) -> Result<Json<ProductView>, ApiError> {
+    let product = catalogs(&state, &caller, &owned)?
+        .product(&catalog_id, &product_id)
+        .await?;
+    Ok(Json(ProductView::from(product)))
+}
+
+/// `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`: a page of
+/// the catalog's product sets.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets",
+    tag = "commerce",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("catalog_id" = String, Path, description = "Catalog id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        ProductSetsQuery,
+    ),
+    responses(
+        (status = 200, description = "A page of product sets", body = ProductSetList),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, or no such catalog among its own (its sets are not asked for)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `catalog_id`, `limit`, `cursor` or `query`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn list_catalog_product_sets(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    Path((_, catalog_id)): Path<(String, String)>,
+    ApiQuery(query): ApiQuery<ProductSetsQuery>,
+) -> Result<Json<ProductSetList>, ApiError> {
+    let after = listing::after(query.cursor.as_deref())?;
+    let page = catalogs(&state, &caller, &owned)?
+        .product_sets(
+            &catalog_id,
+            ProductSetQuery {
+                limit: query.limit,
+                after,
+            },
+        )
+        .await?;
+    Ok(Json(ProductSetList::from(page)))
+}
+
+/// `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}`:
+/// one product set of the catalog.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}",
+    tag = "commerce",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("catalog_id" = String, Path, description = "Catalog id"),
+        ("set_id" = String, Path, description = "Product set id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The product set", body = ProductSetView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, no such catalog among its own, or no such set in that catalog (another catalog's set looks like a missing one; it is not read)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `catalog_id` or `set_id`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_catalog_product_set(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    Path((_, catalog_id, set_id)): Path<(String, String, String)>,
+) -> Result<Json<ProductSetView>, ApiError> {
+    let set = catalogs(&state, &caller, &owned)?
+        .product_set(&catalog_id, &set_id)
+        .await?;
+    Ok(Json(ProductSetView::from(set)))
 }
 
 #[cfg(test)]
@@ -498,6 +706,22 @@ mod tests {
             products: vec![product],
             next_after: Some("MjQ=".to_owned()),
         });
+        assert_eq!(
+            serde_json::to_value(ProductSetList::from(domain::ProductSetPage {
+                sets: vec![domain::ProductSet {
+                    id: "5".to_owned(),
+                    name: Some("Shirts".to_owned()),
+                    filter: Some("{\"product_type\":{\"i_contains\":\"shirt\"}}".to_owned()),
+                    retailer_id: None,
+                    product_count: Some(2),
+                }],
+                next_after: None,
+            }))
+            .unwrap(),
+            json!({"data": [{"id": "5", "name": "Shirts",
+                "filter": "{\"product_type\":{\"i_contains\":\"shirt\"}}",
+                "retailer_id": null, "product_count": 2}], "next_cursor": null})
+        );
         assert_eq!(
             serde_json::to_value(list).unwrap(),
             json!({"data": [{
