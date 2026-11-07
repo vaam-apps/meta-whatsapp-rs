@@ -2481,6 +2481,21 @@ way (design §4.4; roadmap M2c). The operator sets two things:
   tenant reach every host and port inside it (each seeing the status its
   attempt got): list the receivers' own addresses, not a whole cluster's.
 
+A platform key may add `"tenants": ["merchant-a", "merchant-b"]` (one to
+ten) to the creation: the endpoint, still the `WA-Tenant`'s, then
+receives exactly those tenants' events (name the `WA-Tenant` too to get
+its own), each delivery one tenant's event (`tenant_id` in the body). A
+tenant key sending `tenants` gets `422`; naming a tenant the key may not
+name, or that does not exist, `403`. Only a platform key that may name all
+of them reaches the endpoint afterwards (a tenant key finds it `404`);
+`PATCH` with `tenants` replaces the list. A deleted tenant leaves the
+list and its deliveries go; the list never grows by itself. `"*"` is not
+built.
+The endpoint counts toward the `WA-Tenant`'s ten endpoints, and a tenant
+key of that tenant cannot see or delete it; create such endpoints once
+every replica runs the release that has `tenants` (an older replica would
+let a tenant key of the owner change the URL).
+
 A tenant (scope `webhooks`) makes an endpoint:
 
 ```bash

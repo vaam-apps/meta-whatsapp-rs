@@ -99,6 +99,12 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "admin idempotency",
         include_str!("../migrations/0010_admin_idempotency.sql"),
     ),
+    // Roadmap M2m, after M5j2's 10.
+    (
+        11,
+        "webhook endpoint tenants",
+        include_str!("../migrations/0011_webhook_endpoint_tenants.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -1478,7 +1484,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 10] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 11] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1519,6 +1525,10 @@ mod tests {
             10,
             "805d46eed073988cf8ff26bdc87cd2d18f5b529c117f5ea099888484814d019acac59315453a0561b2577dcc569df020",
         ),
+        (
+            11,
+            "c9c2c040c3e545dede9e96a6fd78ef0b8522e81403461a3dc38f9037d39f74df34f8ac649c1ad839dc9dbc1c8a975fa4",
+        ),
     ];
 
     #[test]
@@ -1554,7 +1564,8 @@ mod tests {
                 "received media",
                 "erasure",
                 "webhooks out",
-                "admin idempotency"
+                "admin idempotency",
+                "webhook endpoint tenants"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

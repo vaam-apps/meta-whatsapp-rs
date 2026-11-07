@@ -1080,6 +1080,7 @@ fn live_postgres_cli_webhooks_reseal() {
                         types: vec!["message_received".to_owned()],
                         secret: keys.seal(&id, &secret).unwrap(),
                         cursor: 0,
+                        tenants: None,
                         now,
                     },
                     10,
@@ -1464,9 +1465,10 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
             (7, "received media", true, checksum(7)),
             (8, "erasure", true, checksum(8)),
             (9, "webhooks out", true, checksum(9)),
-            (10, "admin idempotency", true, checksum(10))
+            (10, "admin idempotency", true, checksum(10)),
+            (11, "webhook endpoint tenants", true, checksum(11))
         ],
-        "migrations 4 to 10, once each"
+        "migrations 4 to 11, once each"
     );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);

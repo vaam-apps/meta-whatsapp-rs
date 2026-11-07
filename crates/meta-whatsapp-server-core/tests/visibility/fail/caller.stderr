@@ -8,4 +8,4 @@ error: cannot construct `Caller` with struct literal syntax due to private field
 8 |         tenant,
   |         ------ private field
   |
-  = note: ...and other private field `issuer` that was not provided
+  = note: ...and other private fields `platform` and `issuer` that were not provided
