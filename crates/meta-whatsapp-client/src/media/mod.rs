@@ -216,12 +216,35 @@ impl Media {
     ///
     /// `mime_type` and the size are checked against Meta's supported-types
     /// table first ([`validate_upload`]). Not replayed on transient errors
-    /// (a replay would create a second media object).
+    /// (a replay would create a second media object). For an upload that
+    /// is not a message's media, see [`upload_with`](Self::upload_with).
     pub async fn upload(
         &self,
         data: impl Into<Bytes>,
         mime_type: &str,
         filename: &str,
+    ) -> Result<MediaId> {
+        self.upload_with(data, mime_type, filename, &UploadOptions::default())
+            .await
+    }
+
+    /// [`upload`](Self::upload) with `options`: the optional form fields
+    /// the upload takes besides the file. With the default options this is
+    /// exactly [`upload`](Self::upload); nothing more is sent unless asked
+    /// for.
+    ///
+    /// # Errors
+    ///
+    /// As [`upload`](Self::upload); and, for
+    /// [`UploadUseCase::CallVoicemailAnnouncement`], a validation error
+    /// (field `type`) unless `mime_type` is `audio/ogg`, before any request
+    /// (`calling/call-settings`: the file is Ogg with the Opus codec).
+    pub async fn upload_with(
+        &self,
+        data: impl Into<Bytes>,
+        mime_type: &str,
+        filename: &str,
+        options: &UploadOptions,
     ) -> Result<MediaId> {
         #[derive(Deserialize)]
         struct Uploaded {
@@ -229,12 +252,30 @@ impl Media {
         }
         let data = data.into();
         validate_upload(mime_type, u64::try_from(data.len()).unwrap_or(u64::MAX))?;
-        let form = Multipart::new()
+        if options.use_case == Some(UploadUseCase::CallVoicemailAnnouncement)
+            && !mime_type
+                .split(';')
+                .next()
+                .is_some_and(|base| base.trim().eq_ignore_ascii_case("audio/ogg"))
+        {
+            return Err(ValidationError::new(
+                "type",
+                "a voicemail announcement is audio/ogg (Opus)",
+            )
+            .into());
+        }
+        let mut form = Multipart::new()
             .text("messaging_product", "whatsapp")
             // The parameter table requires `type`; the curl example instead
             // sets the file part's content type. We send both.
             .text("type", mime_type)
             .file("file", filename, mime_type, data);
+        if let Some(use_case) = &options.use_case {
+            form = form.text("use_case", use_case.as_str());
+        }
+        if let Some(description) = &options.description {
+            form = form.text("description", description);
+        }
         let uploaded: Uploaded = self
             .client
             .post_at(&[self.phone_number_id.as_str(), "media"])
@@ -328,6 +369,55 @@ impl Media {
             .context("media delete response")
             .send_success()
             .await
+    }
+}
+
+/// What an upload is for, when it is not a message's media (`use_case`,
+/// `calling/call-settings`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UploadUseCase {
+    /// `call_voicemail_announcement`: the audio a caller hears when a call
+    /// goes to voicemail. Meta skips the 30-day media lifetime for it and
+    /// the media can be used for nothing else (not as a message's media).
+    CallVoicemailAnnouncement,
+}
+
+impl UploadUseCase {
+    /// The value Meta takes.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CallVoicemailAnnouncement => "call_voicemail_announcement",
+        }
+    }
+}
+
+/// The optional fields of [`Media::upload_with`]; the default sends none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UploadOptions {
+    /// `use_case`; none unless set.
+    pub use_case: Option<UploadUseCase>,
+    /// `description` (the calling page's voicemail example sends one);
+    /// none unless set.
+    pub description: Option<String>,
+}
+
+impl UploadOptions {
+    /// The options of a voicemail announcement upload.
+    #[must_use]
+    pub fn voicemail_announcement() -> Self {
+        Self {
+            use_case: Some(UploadUseCase::CallVoicemailAnnouncement),
+            description: None,
+        }
+    }
+
+    /// Add a `description`.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 }
 
