@@ -1320,7 +1320,11 @@ and the thread's owner, and sends replies.
   reply, which Meta also sends to the Incoming Call primary and the
   standby partners), 24 hours without the customer mean it is idle;
   `Inbox::record_release` and `Inbox::record_thread_owner` record this
-  app's own `release`, `pass` and `take`, which no webhook reports to it.
+  app's own `release`, `pass` and `take`, which no webhook reports to it
+  (`Inbox::record_release_of` and `record_thread_owner_of` take the user
+  as a `Recipient` and record under `Inbox::conversation_of`, the
+  conversation the sink records a handover under; the service's thread
+  control routes call them once Meta answered, roadmap M5l2).
   `Inbox::send` refuses a
   service message locally while another app owns the thread
   (`ValidationError::thread_owned_elsewhere()`, kind

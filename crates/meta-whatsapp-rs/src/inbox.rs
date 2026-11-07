@@ -99,7 +99,10 @@
 //!   `messages`, and "does not change thread ownership"
 //!   (`conversation-routing/calling-webhooks`);
 //! - this app's own `release`, `pass` or `take` (no webhook reports them
-//!   to this app): [`Inbox::record_release`], [`Inbox::record_thread_owner`];
+//!   to this app): [`Inbox::record_release`], [`Inbox::record_thread_owner`],
+//!   or, naming the user as the request did ([`Recipient`], a phone number
+//!   the inbox linked to a BSUID included), [`Inbox::record_release_of`],
+//!   [`Inbox::record_thread_owner_of`] under [`Inbox::conversation_of`];
 //! - 24 hours without the customer ([`Inbox::THREAD_IDLE_AFTER`], or
 //!   [`Inbox::with_thread_idle_after`]): the thread is idle again
 //!   ([`Inbox::thread_owner`] derives it).
