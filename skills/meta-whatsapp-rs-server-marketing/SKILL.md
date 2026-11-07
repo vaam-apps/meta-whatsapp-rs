@@ -148,15 +148,10 @@ refusal. The welcome text is in no log.
 ## What meta-whatsapp-rs does not do
 
 Not offered: a GIF header's send-time parameter (no page of Meta's shows
-it; create the template with a `GIF` header format, send it as Meta's
-object). The operator (admin key) also reads the agreement's state
-(`POST /v1/admin/businesses/{business_id}/max-price-agreement/state` with
-the `token` in the body; the answer is `{status}`, never the signer), asks
-a business's admins to accept the terms (`POST
-/v1/admin/partners/businesses/{business_id}/marketing-onboarding`, a legal
-act, off until `WA_SERVER_LEGAL_ACTS=on`) and lists the client WABAs by
-onboarding status (`GET /v1/admin/partners/client-wabas`); the invitation
-is not the acceptance, which a person gives in WhatsApp Manager. object). No call of these routes was run against Meta live.
+it; send the template as Meta's object). The operator's admin routes read
+the agreement's state (never the signer), invite a business's admins to
+accept the terms (a legal act) and list client WABAs by onboarding status:
+see `references/routes.md`. No call was run against Meta live.
 
 ## Related skills
 

@@ -46,7 +46,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   in `is_legal_admin_act`), once, audited `marketing_onboarding_requested`.
   `GET /v1/admin/partners/client-wabas` lists the client WABAs by
   onboarding status. OpenAPI additive only (three paths, six schemas).
-  A GIF header's send-time parameter stays open: no page shows it (D435).
+  A GIF header's send-time parameter stays open (roadmap M5h3): no page shows it (D435).
   All names pending the owner's confirmation before the first release.
 
 ### Added (roadmap M2j)

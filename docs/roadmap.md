@@ -7375,21 +7375,21 @@ or WABA fails the family's own cross-tenant test).
     route (a tenant event since M2d).
   - **Not done here:** see M5h2. No call of these routes was run against
     Meta live.
-- [ ] **M5h2. What M5h did not route** (rows 136, 137, 154): the max price
+- [x] **M5h2. What M5h did not route** (rows 136, 137): the max price
   agreement's state read (`GET /{business}/max_price_agreements` answers
   the signer, so it is the operator's, with the token in the request, and
   its answer keeps the signer out), the partner Intent API
   (`request_onboarding`, an admin action: it emails a business's admins
   an invitation to accept the terms), the client WABAs listing by
-  onboarding status (`client_wabas_with_status`), and a GIF header's
-  send-time parameter once a page of Meta's shows it (typed in the
-  library first). The click tracking opt-out is M5g2's.
+  onboarding status (`client_wabas_with_status`). A GIF header's send-time
+  parameter (row 154) is M5h3: no page of Meta's shows it. The click
+  tracking opt-out is M5g2's.
   - **After:** M5h.
   - **Decisive:** every route that takes a business id or a token in its
     body is an admin route whose body and answer hold no signer (a test
     plants one and finds it in no line), refused with nothing sent when the
     setting is off if it acts for a business; no other route calls it.
-  - **Landed (all but the GIF header; the item stays open for it):** three
+  - **Landed:** three
     admin routes, OpenAPI additive only (three paths, six schemas). `POST
     /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
     agreement's state with the operator's `token` in the body (a system or
@@ -7424,9 +7424,21 @@ or WABA fails the family's own cross-tenant test).
     and `list_client_wabas`, and the audit actions
     `marketing_onboarding_requested` and `max_price_agreement_read`.
   - **Not done here:** a GIF header's send-time parameter: no page of
-    Meta's shows it (re-read 2026-11-07, D435), so nothing is typed and row
-    154 stays partial; the WhatsApp Manager visibility switch. No call of
-    these routes was run against Meta live.
+    Meta's shows it (re-read 2026-11-07, D435), so nothing is typed and the
+    item that carries it is M5h3; the WhatsApp Manager visibility switch.
+    No call of these routes was run against Meta live.
+- [ ] **M5h3. A GIF header's send-time parameter** (row 154): typed in the
+  library first, once a page of Meta's shows the parameter a send carries
+  for a GIF header; none does (re-read 2026-11-07: `templates/components`,
+  `templates/template-media`, `marketing-messages/features`,
+  `marketing-messages/send-marketing-messages`, the marketing templates and
+  media messages pages), so a field name is not guessed. Until then
+  `client::templates::Parameter::Other` carries one verbatim and the
+  service's sends take the template as Meta's object.
+  - **After:** M5h2.
+  - **Decisive:** a page of Meta's shows the parameter; the library types
+    it and a test sends the page's example; the service's template and
+    marketing sends pass it; row 154 is done on both sides.
 
 - [ ] **M5i. In-App Signup** (row 125): accepting Meta's terms on a
   business's first signup is an explicit, audited operator action, off
