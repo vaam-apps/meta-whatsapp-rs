@@ -1161,11 +1161,9 @@ mod tests {
         assert_eq!(counts.accepted(), 3);
     }
 
-    /// Over TLS: the reuse needs the same host name (SNI and certificate)
-    /// as well as the address; the certificate is checked once, at the
-    /// handshake the connection was made by.
-    #[tokio::test]
-    async fn over_tls_a_connection_is_reused_for_the_same_name_only() {
+    /// A TLS keep-alive receiver on 127.0.0.1 whose certificate covers
+    /// `one.test` and `two.test`, and the roots trusting it.
+    async fn tls_keepalive() -> (u16, Counts, RootCertStore) {
         let key = rcgen::KeyPair::generate().unwrap();
         let cert =
             rcgen::CertificateParams::new(vec!["one.test".to_owned(), "two.test".to_owned()])
@@ -1202,6 +1200,15 @@ mod tests {
         });
         let mut roots = RootCertStore::empty();
         roots.add(der).unwrap();
+        (port, counts, roots)
+    }
+
+    /// Over TLS: the reuse needs the same host name (SNI and certificate)
+    /// as well as the address; the certificate is checked once, at the
+    /// handshake the connection was made by.
+    #[tokio::test]
+    async fn over_tls_a_connection_is_reused_for_the_same_name_only() {
+        let (port, counts, roots) = tls_keepalive().await;
         let sender = HyperSender::with_roots(roots).unwrap();
         let resolver = Answer::new("127.0.0.1");
         let policy = loopback();
@@ -1396,5 +1403,272 @@ mod tests {
             Ok(Ok(200))
         );
         assert_eq!(sender.idle_connections(), 0);
+    }
+    /// The scheme is part of the key: a TLS connection to an address is
+    /// never handed to a plain `http` attempt for the same address, port
+    /// and name (its request would ride the encrypted session, unchecked
+    /// by the plain attempt's own rules). The plain attempt opens its own
+    /// connection, which this TLS port refuses. Decisive: `https` in
+    /// [`PoolKey`].
+    #[tokio::test]
+    async fn the_scheme_is_part_of_the_key() {
+        let (port, counts, roots) = tls_keepalive().await;
+        let sender = HyperSender::with_roots(roots).unwrap();
+        let resolver = Answer::new("127.0.0.1");
+        let policy = loopback();
+        assert_eq!(
+            deliver(
+                &sender,
+                &policy,
+                &resolver,
+                &format!("https://one.test:{port}/")
+            )
+            .await,
+            Ok(Ok(204))
+        );
+        assert_eq!(sender.idle_connections(), 1);
+        let plain = deliver(
+            &sender,
+            &policy,
+            &resolver,
+            &format!("http://one.test:{port}/"),
+        )
+        .await;
+        assert!(matches!(plain, Ok(Err(_))), "{plain:?}");
+        assert_eq!(
+            (counts.accepted(), counts.requests()),
+            (2, 1),
+            "a connection of its own, and no request through the TLS one"
+        );
+    }
+
+    /// A host name is one key however it is written: case and a trailing
+    /// dot do not split the pool (and, since the TLS name is the same
+    /// one, share nothing they should not). Decisive: the core's
+    /// normalisation, which the key takes the name from.
+    #[tokio::test]
+    async fn a_host_name_written_differently_is_one_key() {
+        let (addr, counts) = keepalive("127.0.0.1", 0, false).await;
+        let sender = HyperSender::new().unwrap();
+        let resolver = Answer::new("127.0.0.1");
+        let policy = loopback();
+        let port = addr.port();
+        for host in ["receiver.test", "Receiver.TEST", "receiver.test.", "RECEIVER.test."] {
+            assert_eq!(
+                deliver(&sender, &policy, &resolver, &format!("http://{host}:{port}/")).await,
+                Ok(Ok(204)),
+                "{host}"
+            );
+        }
+        assert_eq!((counts.accepted(), counts.requests()), (1, 4));
+    }
+
+    /// A receiver that answers `answer` to the first request and then
+    /// keeps the connection open for a while: the sender's decision not
+    /// to pool is its own, not the peer's close.
+    async fn holding_receiver(answer: &'static [u8]) -> (SocketAddr, Counts) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let counts = Counts::default();
+        let c = counts.clone();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = listener.accept().await {
+                c.accepted.fetch_add(1, Ordering::SeqCst);
+                let c = c.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !head.windows(4).any(|x| x == b"\r\n\r\n") {
+                        match tcp.read(&mut buf).await {
+                            Ok(n) if n > 0 => head.extend_from_slice(&buf[..n]),
+                            _ => return,
+                        }
+                    }
+                    c.requests.fetch_add(1, Ordering::SeqCst);
+                    let _ = tcp.write_all(answer).await;
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                });
+            }
+        });
+        (addr, counts)
+    }
+
+    /// An answer that ends the connection (`Connection: close`, or
+    /// HTTP/1.0 without keep-alive) is not pooled, though the receiver
+    /// still holds its socket; the same answer without the close is
+    /// (the control).
+    #[tokio::test]
+    async fn an_answer_that_closes_the_connection_is_not_pooled() {
+        let cases: [(&[u8], usize); 3] = [
+            (
+                b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n",
+                0,
+            ),
+            (b"HTTP/1.0 200 OK\r\ncontent-length: 0\r\n\r\n", 0),
+            (b"HTTP/1.1 204 No Content\r\n\r\n", 1),
+        ];
+        for (answer, idle) in cases {
+            let (addr, counts) = holding_receiver(answer).await;
+            let sender = HyperSender::new().unwrap();
+            let resolver = Answer::new("127.0.0.1");
+            let url = format!("http://receiver.test:{}/", addr.port());
+            let first = deliver(&sender, &loopback(), &resolver, &url).await;
+            assert!(matches!(first, Ok(Ok(200 | 204))), "{first:?}");
+            assert_eq!(
+                sender.idle_connections(),
+                idle,
+                "{}",
+                String::from_utf8_lossy(answer)
+            );
+            assert_eq!(counts.requests(), 1);
+        }
+    }
+
+    /// An answer whose body is past `max_response_bytes` is not pooled
+    /// even when all of it has already arrived (hyper holds it, unread
+    /// past the limit): the connection is closed, whatever its state.
+    #[tokio::test]
+    async fn a_body_past_the_limit_is_not_pooled_though_it_arrived_whole() {
+        let mut answer = b"HTTP/1.1 200 OK\r\ncontent-length: 1500\r\n\r\n".to_vec();
+        answer.resize(answer.len() + 1500, b'x');
+        let answer: &'static [u8] = Box::leak(answer.into_boxed_slice());
+        let (addr, _) = holding_receiver(answer).await;
+        let sender = HyperSender::new().unwrap();
+        let resolver = Answer::new("127.0.0.1");
+        let url = format!("http://receiver.test:{}/", addr.port());
+        assert_eq!(
+            deliver(&sender, &loopback(), &resolver, &url).await,
+            Ok(Ok(200))
+        );
+        assert_eq!(sender.idle_connections(), 0);
+    }
+
+    fn pool_key(address: SocketAddr) -> PoolKey {
+        PoolKey {
+            address,
+            https: false,
+            host: PoolHost::Name("receiver.test".to_owned()),
+        }
+    }
+
+    /// The idle time is checked when a connection is handed out, not only
+    /// by its reaper: the thread is blocked past the idle time (the
+    /// reaper cannot run on this single-threaded runtime), and the
+    /// connection, still open and ready, is not handed out. Decisive: the
+    /// check in [`Pool::take`].
+    #[tokio::test]
+    async fn a_connection_past_its_idle_time_is_not_handed_out() {
+        let (addr, _) = keepalive("127.0.0.1", 0, false).await;
+        let pool = Pool::new(PoolSettings {
+            idle_timeout: Duration::from_millis(200),
+            ..PoolSettings::default()
+        });
+        let connection = handshake(TcpStream::connect(addr).await.unwrap())
+            .await
+            .unwrap();
+        let key = pool_key(addr);
+        pool.put(key.clone(), connection);
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(pool.take(&key).await.is_none());
+        // The control: within the idle time it is handed out.
+        let connection = handshake(TcpStream::connect(addr).await.unwrap())
+            .await
+            .unwrap();
+        pool.put(key.clone(), connection);
+        assert!(pool.take(&key).await.is_some());
+    }
+
+    /// A connection that fails after the request was written is never
+    /// retried (a delivery would be sent twice), while one that could
+    /// not take the request at all is `NotSent`. Decisive: the
+    /// classification in [`exchange`].
+    #[tokio::test]
+    async fn only_a_request_that_was_never_written_may_be_retried() {
+        // Closed by the peer before the request: nothing was written.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                drop(tcp);
+            }
+        });
+        let mut connection = handshake(TcpStream::connect(addr).await.unwrap())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let outcome = exchange(
+            &mut connection,
+            &request("http://receiver.test/", addr),
+            Bytes::from_static(b"{}"),
+        )
+        .await;
+        assert!(matches!(outcome, Err(Failure::NotSent)));
+
+        // Closed by the peer after reading the request: it was written.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = tcp.read(&mut buf).await;
+            }
+        });
+        let mut connection = handshake(TcpStream::connect(addr).await.unwrap())
+            .await
+            .unwrap();
+        let outcome = exchange(
+            &mut connection,
+            &request("http://receiver.test/", addr),
+            Bytes::from_static(b"{}"),
+        )
+        .await;
+        assert!(matches!(outcome, Err(Failure::Failed(_))));
+    }
+
+    /// Through the sender: the pooled connection takes a request, the
+    /// receiver reads it and closes without answering. The attempt
+    /// fails, and the receiver saw that request once, on the one
+    /// connection: no second connection carried it again.
+    #[tokio::test]
+    async fn a_request_the_peer_read_is_not_sent_again() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let counts = Counts::default();
+        let c = counts.clone();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = listener.accept().await {
+                c.accepted.fetch_add(1, Ordering::SeqCst);
+                let c = c.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    // The first request overall is answered; later ones
+                    // are read and the connection closed.
+                    loop {
+                        let Ok(n) = tcp.read(&mut buf).await else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        if c.requests.fetch_add(1, Ordering::SeqCst) == 0 {
+                            let _ = tcp.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").await;
+                        } else {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let sender = HyperSender::new().unwrap();
+        let resolver = Answer::new("127.0.0.1");
+        let url = format!("http://receiver.test:{}/", addr.port());
+        assert_eq!(
+            deliver(&sender, &loopback(), &resolver, &url).await,
+            Ok(Ok(204))
+        );
+        let second = deliver(&sender, &loopback(), &resolver, &url).await;
+        assert!(matches!(second, Ok(Err(_))), "{second:?}");
+        settle().await;
+        assert_eq!((counts.accepted(), counts.requests()), (1, 2));
     }
 }
