@@ -1,6 +1,6 @@
 # Hosted signup, several WABAs per signup and pre-verified numbers
 
-> **Verified against meta-whatsapp-rs 93691cb49b9867a76f02c9ed44bf5d2d424c946f (2026-11-06).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
+> **Verified against meta-whatsapp-rs d5b9444ed2f6b0c3dd75e33bbed6530bcd939425 (2026-11-07).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
 
 The code is in [examples/onboarding.ts](../examples/onboarding.ts) (the
 functions below, plus one that adds a number to the pool), type-checked
