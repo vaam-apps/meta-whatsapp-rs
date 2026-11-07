@@ -83,7 +83,7 @@ person who never got the message, never a second message.
 export async function progress(api: WhatsApp, pn: string, id: string): Promise<Broadcast> {
 ```
 
-`state` is `queued`, `running`, `completed`, `cancelled` or `stopped` (given
+`state` is `queued`, running, completed, `cancelled` or stopped (given
 up after its retries: a number whose token cannot be used; the people left
 are in `queued`). The counts are `recipients`, `queued`, `sent`, `failed`,
 `unknown` and `limited`, and `failures` says which refusals, by the
@@ -115,12 +115,12 @@ never made are the same `404 not_found`.
 
 The people, their parameters and Meta's texts are in no log line, error,
 audit event or answer of the service. Each create and each cancel is an
-audit event (`broadcast_created`, `broadcast_cancelled`) holding the key,
+audit event (broadcast_created, broadcast_cancelled) holding the key,
 tenant, WABA, number, the broadcast's id and how many people. The service
 keeps the people and parameters as you gave them, in its key/value store,
 until the broadcast settles and 30 days after.
 
-## What meta-whatsapp-rs does not do (yet)
+## What meta-whatsapp-rs does not do
 
 It does not offer the bot API, a time to send at, a list of your
 broadcasts, a rate per tenant, or the per-user marketing limit (`131049`)
