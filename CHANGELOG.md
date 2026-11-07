@@ -12,6 +12,30 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5e2)
+
+- Calling, what M5e did not route (design D410 to D416, the implementer's
+  proposals, not decided, each swappable). The library: `Media::upload_with`
+  takes `UploadOptions` (a `use_case`, a description) and
+  `UploadOptions::voicemail_announcement()` sends Meta's
+  `use_case=call_voicemail_announcement`; `Media::upload` is unchanged and
+  sends neither. The service: `GET
+  /v1/numbers/{pn}/call-settings/sip-credentials` reads a SIP server's
+  password behind a new scope, `call_credentials` (no key holds it unless
+  given) **and** `WA_SERVER_CALL_SIP_CREDENTIALS=on` (off by default: `403
+  feature_not_available`, Meta not asked); `Cache-Control: no-store`, its own
+  audit event `call_sip_credentials_read`, the password in no log, audit
+  event, error or idempotency record. `POST
+  /v1/numbers/{pn}/call-settings/voicemail-announcement` uploads an
+  Ogg/Opus file (`201 {media_id}`, an `Idempotency-Key`, audited as
+  `call_voicemail_announcement_uploaded`). The permission request message is
+  the send route's and was routed already; a call's recording and
+  transcript download through the media route, whether Meta serves them to
+  `?phone_number_id=` being open (D414). The scope, the setting, the two
+  routes and the two audit actions are pending the owner's confirmation
+  before the first release. The OpenAPI document is additive only. No legal
+  act.
+
 ### Added (roadmap M5f3)
 
 - **The group records go with the binding** (roadmap M5f3; D380-D382): a per-number index beside `wa.server.group`
@@ -299,9 +323,9 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   scope, namespace, operation ids and audit actions are pending the owner's
   confirmation before the first release. The OpenAPI document is additive
   only. No legal act and no consent decision in code.
-  - Not offered (M5e2): the SIP password, a voicemail announcement upload
-    with Meta's `use_case`, classifying Meta's calling error codes, the
-    permission request message (a send).
+  - Not offered (M5e2 routes the first two, the permission request message
+    and the recording media; see that entry): the SIP password, a voicemail
+    announcement upload with Meta's `use_case`.
 
 ### Added (roadmap M5l2)
 
