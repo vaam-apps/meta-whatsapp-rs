@@ -36,6 +36,11 @@ async fn two_tenants() -> Harness {
     // M5c1): without one, the route asks Meta nothing.
     let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
         app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
+        // The SIP password read (roadmap M5e2, D410) answers only when the
+        // deployment enables it, before the vault: on here so that the
+        // sweeps below reach it as every other owned route
+        // (`tests/calls_m5e2.rs` has it off).
+        call_sip_credentials: true,
         ..common::test_settings()
     });
     h.tenant(A).await;
@@ -631,16 +636,7 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 18] = [
-    // The SIP password read is off unless the deployment enables it
-    // (roadmap M5e2, D410): the harness's default, so A's own call is
-    // refused after the vault and Meta is not asked. `tests/calls.rs` has
-    // it on.
-    (
-        Method::GET,
-        "/v1/numbers/{pn}/call-settings/sip-credentials",
-        StatusCode::FORBIDDEN,
-    ),
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 17] = [
     // A WABA's Flow key (roadmap M5d2) is the service's own: the vault
     // is read for the capability, Meta is never asked.
     (Method::PUT, "/v1/wabas/{waba_id}/flow-key", StatusCode::OK),
