@@ -7327,11 +7327,14 @@ or WABA fails the family's own cross-tenant test).
     `complete_hosted_signup`, which holds the `pin` only as present: D350).
     The claim composes with its one-claim CAS: a failure that proves nothing
     was sent puts the arrival back and releases the key, one Meta may have
-    received puts it back and keeps the answer (D351); `verify` takes none.
+    received (also a `503` after Meta onboarded the WABA) puts it back and keeps
+    the answer (D351); `verify` takes none.
     No new stored name, no migration. Decisive:
     `a_code_request_retried_after_a_504_is_one_request_to_meta`,
     `a_hosted_claim_retried_after_a_failure_meta_may_have_seen_runs_once`,
     `a_claim_that_stopped_before_the_store_puts_the_arrival_back_and_releases_the_key`,
+    `a_claim_that_failed_after_meta_onboarded_keeps_its_key`,
+    `two_admin_keys_do_not_share_a_key_string`,
     and the core's `the_pool_and_hosted_fingerprints_are_per_route_body_and_number`.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.

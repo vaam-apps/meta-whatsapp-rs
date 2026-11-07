@@ -1304,9 +1304,10 @@ another body, or for the code another number, is `422
 idempotency_key_reused`. A claim keeps the arrival's one-claim rule: a
 claim that proves nothing was sent (`not_found`, a refusal, Meta's `4xx`)
 puts the arrival back and leaves the key free, so the same key retries; one
-Meta may have received puts the arrival back and the key keeps the
-`onboarding_failed`, so repeat it to read the answer and claim again under a
-new key. The PIN is never stored, and is not compared: a repeat under the
+Meta may have received (a timeout, a `5xx`, or a `503` after Meta
+onboarded the WABA, such as one that moved before the connection was
+confirmed) puts the arrival back and the key keeps the answer, so repeat it
+to read it and claim again under a new key. The PIN is never stored, and is not compared: a repeat under the
 same key with another PIN gets the first answer. The pool's `verify` takes
 no key (a code twice is harmless).
 

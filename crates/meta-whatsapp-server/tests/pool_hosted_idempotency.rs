@@ -516,3 +516,96 @@ async fn the_keyed_claim_and_code_request_log_no_pin_or_token() {
     );
     assert_eq!(secrets.leaks(&captured.text()), None);
 }
+
+/// A claim whose onboarding went through at Meta (token fetched, app
+/// subscribed, number registered with the PIN) but whose WABA moved before
+/// the connection was confirmed is `503`: the arrival is put back, and the
+/// key **keeps** the answer, since Meta received the onboarding's requests.
+/// The same key and body replays it and asks Meta nothing. Decisive:
+/// `may_have_been_sent` on that failure (false, the key is released and the
+/// same key runs the onboarding at Meta a second time).
+#[tokio::test]
+async fn a_claim_that_failed_after_meta_onboarded_keeps_its_key() {
+    use common::moving::{AfterPut, move_waba};
+    use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server::store::MemoryStore;
+    use std::sync::Arc;
+
+    let kv = Arc::new(AfterPut::new(Arc::new(MemoryKvStore::new())));
+    let h = Harness::on_with(
+        Arc::new(MemoryStore::new()),
+        kv.clone(),
+        common::signup::settings(tech_provider().hosted_signup(AccessToken::new(HOSTED_TOKEN))),
+    );
+    let admin = h.admin_key().await;
+    h.tenant(A).await;
+    h.tenant("merchant-b").await;
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    let (store, vault) = (h.store.clone(), h.vault.clone());
+    kv.after_storing(
+        WABA,
+        Box::pin(async move {
+            move_waba(
+                store.as_ref(),
+                &vault,
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PHONE).unwrap(),
+                "merchant-b",
+                Some("TOKEN-OF-B"),
+            )
+            .await;
+        }),
+    );
+    script_hosted(&h);
+    let body = hosted_body(A, Some(PIN));
+    let first = h.call(keyed(HOSTED, &admin, "moved-1", &body)).await;
+    assert_eq!(first.code(), "storage_unavailable", "{}", first.text);
+    assert_eq!(first.json()["error"]["may_have_been_sent"], true);
+    assert!(arrived(&h).await, "the arrival was put back");
+    let asked = h.graph.requests().len();
+
+    let again = h.call(keyed(HOSTED, &admin, "moved-1", &body)).await;
+    assert_eq!(
+        again.headers["idempotent-replayed"],
+        "true",
+        "{}",
+        again.text
+    );
+    assert_eq!(again.text, first.text);
+    assert_eq!(h.graph.requests().len(), asked, "Meta was not asked again");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// One key string held by two admin keys is two records: the second key's
+/// request is not the first's replay or its `422`, and runs. Decisive: the
+/// admin key's id in the scope.
+#[tokio::test]
+async fn two_admin_keys_do_not_share_a_key_string() {
+    let h = both();
+    let first = h.admin_key().await;
+    let second = h.admin_key().await;
+    h.graph.push_json(200, json!({"id": PRE_VERIFIED}));
+    let one = h
+        .call(keyed(
+            POOL,
+            &first,
+            "shared",
+            &json!({"phone_number": "+1 555 078 3881"}),
+        ))
+        .await;
+    assert_eq!(one.status, StatusCode::CREATED, "{}", one.text);
+    h.graph.push_json(200, json!({"id": "1972385232742998"}));
+    let other = h
+        .call(keyed(
+            POOL,
+            &second,
+            "shared",
+            &json!({"phone_number": "+1 555 078 3882"}),
+        ))
+        .await;
+    assert_eq!(other.status, StatusCode::CREATED, "{}", other.text);
+    assert!(!other.headers.contains_key("idempotent-replayed"));
+    assert_eq!(h.graph.requests().len(), 2);
+    assert_eq!(h.graph.remaining(), 0);
+}

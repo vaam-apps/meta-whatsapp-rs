@@ -157,8 +157,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5j3)
 
 - **Idempotency on the pool's `add` and `request-code` and on the hosted
-  claim** (roadmap M5j3, design D292 done, D350 and D351, the implementer's
-  proposals): `POST /v1/admin/pre-verified-numbers`,
+  claim** (roadmap M5j3, design D292 done, D350 and D351): `POST /v1/admin/pre-verified-numbers`,
   `POST /v1/admin/pre-verified-numbers/{id}/code` and
   `POST /v1/admin/signup/hosted` take an optional `Idempotency-Key`, scoped
   to the admin key as M5j2's: the same key and body after a `504` is one
@@ -168,6 +167,10 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   back and frees the key; its `pin` is in the fingerprint only as present.
   Additive in the OpenAPI document (the header and the `504`/`409`/`422`
   descriptions); no migration, no new stored name.
+- A hosted claim that failed in the service after Meta onboarded the WABA
+  (the WABA moved before the connection was confirmed) now answers its `503`
+  with `may_have_been_sent: true`, so a key keeps it instead of releasing it
+  and running the onboarding at Meta again.
 
 ### Added (roadmap M5j2)
 
