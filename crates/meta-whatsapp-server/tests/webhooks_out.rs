@@ -739,11 +739,12 @@ impl meta_whatsapp_server::store::WebhookStore for Gate {
         secret: &meta_whatsapp_server_core::webhooks_out::SealedSecret,
         previous_until: time::OffsetDateTime,
         now: time::OffsetDateTime,
+        through: Option<&[meta_whatsapp_server::model::TenantId]>,
     ) -> meta_whatsapp_server::store::StoreResult<
         Option<meta_whatsapp_server_core::webhooks_out::Endpoint>,
     > {
         self.inner
-            .rotate_secret(t, id, secret, previous_until, now)
+            .rotate_secret(t, id, secret, previous_until, now, through)
             .await
     }
     async fn all_endpoints(
@@ -766,8 +767,9 @@ impl meta_whatsapp_server::store::WebhookStore for Gate {
         &self,
         t: &meta_whatsapp_server::model::TenantId,
         id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        through: Option<&[meta_whatsapp_server::model::TenantId]>,
     ) -> meta_whatsapp_server::store::StoreResult<bool> {
-        self.inner.delete_endpoint(t, id).await
+        self.inner.delete_endpoint(t, id, through).await
     }
     async fn active_endpoints(
         &self,
@@ -793,10 +795,13 @@ impl meta_whatsapp_server::store::WebhookStore for Gate {
         t: &meta_whatsapp_server::model::TenantId,
         endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
         delivery: &meta_whatsapp_server_core::webhooks_out::store::NewDelivery,
+        through: Option<&[meta_whatsapp_server::model::TenantId]>,
     ) -> meta_whatsapp_server::store::StoreResult<
         Option<meta_whatsapp_server_core::webhooks_out::Delivery>,
     > {
-        self.inner.insert_delivery(t, endpoint, delivery).await
+        self.inner
+            .insert_delivery(t, endpoint, delivery, through)
+            .await
     }
     async fn claim(
         &self,

@@ -1097,6 +1097,7 @@ fn live_postgres_cli_webhooks_reseal() {
                         &keys.seal(&id, &rotated).unwrap(),
                         now + time::Duration::hours(24),
                         now,
+                        None,
                     )
                     .await
                     .unwrap()
@@ -1196,7 +1197,12 @@ fn live_postgres_cli_webhooks_reseal() {
     // The unreadable endpoint gone, a run is clean: it exits 0, and
     // re-seals nothing (the exit status is what lets a script drop the key).
     runtime.block_on(async {
-        assert!(store.delete_endpoint(&tenant, &made[2].0).await.unwrap());
+        assert!(
+            store
+                .delete_endpoint(&tenant, &made[2].0, None)
+                .await
+                .unwrap()
+        );
     });
     let third = run();
     let third_out = String::from_utf8_lossy(&third.stdout).into_owned();

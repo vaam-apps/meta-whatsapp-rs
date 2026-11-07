@@ -204,6 +204,55 @@ impl PgWebhookStore {
     }
 }
 
+/// Lock `tenant`'s endpoint `id`'s row and check that its set of named
+/// tenants is `through` (D342): `None` for a missing endpoint or a set
+/// that changed, else whether the endpoint has a set. The set is read
+/// under the row's lock, so no other change of it slips in before the
+/// caller's write in the same transaction.
+async fn lock_if_reached(
+    tx: &mut sqlx::PgConnection,
+    tenant: &TenantId,
+    id: &EndpointId,
+    through: Option<&[TenantId]>,
+) -> StoreResult<Option<bool>> {
+    let has_set: Option<bool> = sqlx::query_scalar(
+        "SELECT named_tenants FROM wa_server_webhook_endpoints \
+         WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+    )
+    .bind(id.as_str())
+    .bind(tenant.as_str())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(backend)?;
+    let Some(has_set) = has_set else {
+        return Ok(None);
+    };
+    let current: Option<Vec<TenantCursor>> = if has_set {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT tenant_id FROM wa_server_webhook_endpoint_tenants WHERE endpoint_id = $1",
+        )
+        .bind(id.as_str())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(backend)?;
+        Some(
+            rows.iter()
+                .map(|t| {
+                    TenantId::parse(t)
+                        .map(|tenant| TenantCursor { tenant, cursor: 0 })
+                        .ok_or_else(|| corrupt("tenant_id"))
+                })
+                .collect::<StoreResult<Vec<_>>>()?,
+        )
+    } else {
+        None
+    };
+    if !reached_through_holds(current.as_deref(), through) {
+        return Ok(None);
+    }
+    Ok(Some(has_set))
+}
+
 #[async_trait]
 impl WebhookStore for PgWebhookStore {
     async fn create_endpoint(
@@ -320,44 +369,11 @@ impl WebhookStore for PgWebhookStore {
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let has_set: Option<bool> = sqlx::query_scalar(
-            "SELECT named_tenants FROM wa_server_webhook_endpoints \
-             WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
-        )
-        .bind(id.as_str())
-        .bind(tenant.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(backend)?;
-        let Some(has_set) = has_set else {
+        let Some(has_set) =
+            lock_if_reached(&mut tx, tenant, id, change.reached_through.as_deref()).await?
+        else {
             return Ok(None);
         };
-        // The set the caller was checked against must still be the
-        // endpoint's (D342): read under the row's lock, so no other change
-        // of the set slips in between.
-        let current: Option<Vec<TenantCursor>> = if has_set {
-            let rows: Vec<String> = sqlx::query_scalar(
-                "SELECT tenant_id FROM wa_server_webhook_endpoint_tenants WHERE endpoint_id = $1",
-            )
-            .bind(id.as_str())
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(backend)?;
-            Some(
-                rows.iter()
-                    .map(|t| {
-                        TenantId::parse(t)
-                            .map(|tenant| TenantCursor { tenant, cursor: 0 })
-                            .ok_or_else(|| corrupt("tenant_id"))
-                    })
-                    .collect::<StoreResult<Vec<_>>>()?,
-            )
-        } else {
-            None
-        };
-        if !reached_through_holds(current.as_deref(), change.reached_through.as_deref()) {
-            return Ok(None);
-        }
         if let (true, Some(set)) = (has_set, &change.tenants) {
             let names: Vec<String> = set.iter().map(|t| t.tenant.as_str().to_owned()).collect();
             // A tenant left out stops: its row first (a fan-out holding it
@@ -428,7 +444,15 @@ impl WebhookStore for PgWebhookStore {
         secret: &SealedSecret,
         previous_until: OffsetDateTime,
         now: OffsetDateTime,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Endpoint>> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        if lock_if_reached(&mut tx, tenant, id, reached_through)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE wa_server_webhook_endpoints SET \
                previous_secret = secret, previous_secret_until = $4, secret = $3, updated_at = $5 \
@@ -439,10 +463,12 @@ impl WebhookStore for PgWebhookStore {
         .bind(secret.as_stored())
         .bind(previous_until)
         .bind(now)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(backend)?;
-        Ok(endpoints_of(&self.pool, &rows).await?.pop())
+        let rotated = endpoints_of(&mut *tx, &rows).await?.pop();
+        tx.commit().await.map_err(backend)?;
+        Ok(rotated)
     }
 
     async fn all_endpoints(&self, page: &PageRequest) -> StoreResult<Listing<Endpoint>> {
@@ -483,14 +509,27 @@ impl WebhookStore for PgWebhookStore {
         Ok(done.rows_affected() > 0)
     }
 
-    async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool> {
+    async fn delete_endpoint(
+        &self,
+        tenant: &TenantId,
+        id: &EndpointId,
+        reached_through: Option<&[TenantId]>,
+    ) -> StoreResult<bool> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        if lock_if_reached(&mut tx, tenant, id, reached_through)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
         let done =
             sqlx::query("DELETE FROM wa_server_webhook_endpoints WHERE id = $1 AND tenant_id = $2")
                 .bind(id.as_str())
                 .bind(tenant.as_str())
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         Ok(done.rows_affected() > 0)
     }
 
@@ -591,9 +630,17 @@ impl WebhookStore for PgWebhookStore {
         tenant: &TenantId,
         endpoint: &EndpointId,
         delivery: &NewDelivery,
+        reached_through: Option<&[TenantId]>,
     ) -> StoreResult<Option<Delivery>> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        if lock_if_reached(&mut tx, tenant, endpoint, reached_through)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
         // The tenant from the endpoint's own row: nothing for another's.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        let made = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO wa_server_webhook_deliveries \
              (id, endpoint_id, tenant_id, event_id, sequence, event_type, status, \
               next_attempt_at, give_up_at, created_at) \
@@ -609,12 +656,14 @@ impl WebhookStore for PgWebhookStore {
         .bind(&delivery.event_type)
         .bind(delivery.created_at)
         .bind(delivery.give_up_at)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(backend)?
         .as_ref()
         .map(delivery_row)
-        .transpose()
+        .transpose()?;
+        tx.commit().await.map_err(backend)?;
+        Ok(made)
     }
 
     async fn claim(&self, request: &ClaimRequest) -> StoreResult<Vec<Claimed>> {
