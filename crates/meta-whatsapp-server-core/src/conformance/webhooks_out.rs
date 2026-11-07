@@ -52,7 +52,9 @@ use super::outbox::{bind, row};
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
-use crate::model::{DeleteTenantOutcome, KeyOwner, PageRequest, Scope, TenantId, TenantStatus};
+use crate::model::{
+    DeleteTenantOutcome, KeyOwner, MAX_PAGE_SIZE, PageRequest, Scope, TenantId, TenantStatus,
+};
 use crate::outbox::NewEvent;
 use crate::webhooks_out::destination::{DestinationPolicy, ResolveError, Resolver};
 use crate::webhooks_out::dispatch::{
@@ -92,6 +94,9 @@ pub async fn run(backend: &dyn Backend) {
     a_reseal_is_a_compare_and_set(backend).await;
     resealing_lets_the_old_key_go(backend).await;
     a_rotation_during_the_walk_is_not_overwritten(backend).await;
+    the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend).await;
+    the_walk_follows_every_page(backend).await;
+    the_listing_survives_changes_between_pages(backend).await;
 }
 
 /// The instant the fake clocks start at: whole seconds, which every
@@ -2850,4 +2855,197 @@ pub async fn a_rotation_during_the_walk_is_not_overwritten(backend: &dyn Backend
         Some(first.expose()),
         "and the one it replaced"
     );
+}
+
+/// An endpoint sealed under `keys`, as the service would have made it:
+/// its row, and the secret it was made with.
+async fn sealed_endpoint(
+    store: &dyn WebhookStore,
+    keys: &DataKeys,
+    tenant_id: &str,
+) -> (crate::webhooks_out::Endpoint, EndpointSecret) {
+    let id = EndpointId::generate().unwrap();
+    let secret = EndpointSecret::generate().unwrap();
+    let mut new = new_endpoint(tenant_id, 0);
+    new.id = id.clone();
+    new.secret = keys.seal(&id, &secret).unwrap();
+    (created(store, &new).await, secret)
+}
+
+/// Roadmap M2i: what the walk cannot read it lists and leaves; what it can
+/// read of the same endpoint it re-seals; an endpoint deleted between the
+/// read and the write is skipped (counted as changed), never an error.
+/// Decisive: `failed`, `current` and `changed` of one batch, and the rows.
+pub async fn the_walk_reports_what_it_cannot_read_and_skips_what_is_gone(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let t = unique_tenant("wh-reseal-edge");
+    records.create_tenant(&tenant(&t), "").await.unwrap();
+    let old = old_keys();
+    // Half readable: an unreadable current secret over a previous one
+    // that `k1` sealed.
+    let (half, previous) = sealed_endpoint(store.as_ref(), &old, &t).await;
+    store
+        .rotate_secret(
+            &tenant(&t),
+            &half.id,
+            &sealed(2),
+            START + time::Duration::hours(24),
+            START + time::Duration::minutes(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    // Unreadable alone.
+    let lost = created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    // Readable, but gone before the write.
+    let (gone, _) = sealed_endpoint(store.as_ref(), &old, &t).await;
+    let mut read = Vec::new();
+    for id in [&half.id, &lost.id, &gone.id] {
+        read.push(store.endpoint(&tenant(&t), id).await.unwrap().unwrap());
+    }
+    assert!(store.delete_endpoint(&tenant(&t), &gone.id).await.unwrap());
+
+    let mut report = ResealReport::default();
+    reseal_batch(store.as_ref(), &rotating_keys(), &read, &mut report)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.endpoints,
+            report.resealed,
+            report.current,
+            report.changed
+        ),
+        (3, 1, 0, 1),
+        "{report:?}"
+    );
+    assert_eq!(report.failed, [half.id.clone(), lost.id.clone()]);
+    assert!(!report.complete());
+    let row = store
+        .endpoint(&tenant(&t), &half.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.secret, sealed(2), "the unreadable one is left as it is");
+    assert_eq!(
+        new_keys_alone()
+            .open(&half.id, row.previous_secret.as_ref().unwrap())
+            .map(|s| s.expose()),
+        Some(previous.expose()),
+        "what could be re-sealed was"
+    );
+    let row = store
+        .endpoint(&tenant(&t), &lost.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.secret, sealed(1), "never overwritten or repaired");
+    assert!(
+        store
+            .endpoint(&tenant(&t), &gone.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a write does not bring a deleted endpoint back"
+    );
+    // `complete` is a clean run: nothing changed meanwhile, nothing unread.
+    assert!(ResealReport::default().complete());
+    for stuck in [
+        ResealReport {
+            changed: 1,
+            ..ResealReport::default()
+        },
+        ResealReport {
+            failed: vec![lost.id.clone()],
+            ..ResealReport::default()
+        },
+    ] {
+        assert!(!stuck.complete());
+    }
+}
+
+/// Roadmap M2i: a walk of more endpoints than a page holds re-seals them
+/// all (the pages are followed to the end). Decisive: the last endpoint.
+pub async fn the_walk_follows_every_page(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let old = old_keys();
+    let mut made = Vec::new();
+    // Ten endpoints at most per tenant.
+    for _ in 0..=MAX_PAGE_SIZE / 9 {
+        let t = unique_tenant("wh-reseal-pages");
+        records.create_tenant(&tenant(&t), "").await.unwrap();
+        for _ in 0..9 {
+            let (endpoint, secret) = sealed_endpoint(store.as_ref(), &old, &t).await;
+            made.push((t.clone(), endpoint.id, secret));
+        }
+    }
+    assert!(made.len() > MAX_PAGE_SIZE);
+    let report = reseal_secrets(store.as_ref(), &rotating_keys())
+        .await
+        .unwrap();
+    assert!(report.endpoints as usize >= made.len(), "{report:?}");
+    assert!(report.resealed as usize >= made.len(), "{report:?}");
+    let keys = new_keys_alone();
+    for (t, id, secret) in &made {
+        let row = store.endpoint(&tenant(t), id).await.unwrap().unwrap();
+        assert_eq!(
+            keys.open(id, &row.secret).map(|s| s.expose()),
+            Some(secret.expose()),
+            "{id:?}"
+        );
+    }
+}
+
+/// `all_endpoints` pages by an exclusive lower bound on the id, so an
+/// endpoint deleted or created between two pages neither repeats nor
+/// skips any other: the pages after the cursor hold exactly what is there.
+pub async fn the_listing_survives_changes_between_pages(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = backend.webhooks();
+    let t = unique_tenant("wh-pages");
+    records.create_tenant(&tenant(&t), "").await.unwrap();
+    for _ in 0..5 {
+        created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    }
+    let first = store
+        .all_endpoints(&PageRequest {
+            after: None,
+            limit: 2,
+        })
+        .await
+        .unwrap();
+    let cursor = first.next_after.clone().unwrap();
+    let last = first.items.last().unwrap();
+    assert_eq!(last.id.as_str(), cursor);
+    // Between the pages: the cursor's own row goes, three are created.
+    assert!(store.delete_endpoint(&last.tenant, &last.id).await.unwrap());
+    for _ in 0..3 {
+        created(store.as_ref(), &new_endpoint(&t, 0)).await;
+    }
+    let mut rest = Vec::new();
+    let mut page = PageRequest {
+        after: Some(cursor.clone()),
+        limit: 2,
+    };
+    loop {
+        let listing = store.all_endpoints(&page).await.unwrap();
+        rest.extend(listing.items.iter().map(|e| e.id.as_str().to_owned()));
+        let Some(after) = listing.next_after else {
+            break;
+        };
+        page.after = Some(after);
+    }
+    assert!(
+        rest.windows(2).all(|w| w[0] < w[1]) && rest.iter().all(|id| *id > cursor),
+        "ascending, past the cursor, once each: {rest:?}"
+    );
+    let now: Vec<String> = every_endpoint(store.as_ref(), 100)
+        .await
+        .iter()
+        .map(|e| e.id.as_str().to_owned())
+        .filter(|id| *id > cursor)
+        .collect();
+    assert_eq!(rest, now, "exactly what is there after the cursor");
 }

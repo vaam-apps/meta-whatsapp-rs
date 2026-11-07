@@ -421,4 +421,47 @@ mod tests {
         assert!(debug.contains("k1"));
         assert!(!debug.contains(&B64.encode([1u8; 32])));
     }
+
+    /// `reseal` leaves a secret under the active key alone, seals a
+    /// previous key's under the active one with a fresh nonce (same
+    /// secret, a different stored value each time), and leaves a secret no
+    /// listed key opens, or sealed for another endpoint, unreadable. The
+    /// `Debug` of the outcome shows nothing of the value.
+    #[test]
+    fn a_reseal_moves_a_secret_to_the_active_key_only() {
+        let endpoint = EndpointId::generate().unwrap();
+        let secret = EndpointSecret::generate().unwrap();
+        let old = keys().seal(&endpoint, &secret).unwrap();
+        let rotating = DataKeys::new(DataKey::generate("k2").unwrap())
+            .with_previous(DataKey::from_base64("k1", &B64.encode([1u8; 32])).unwrap())
+            .unwrap();
+        let Resealed::Sealed(new) = rotating.reseal(&endpoint, &old) else {
+            panic!("a previous key's secret is sealed anew");
+        };
+        assert!(new.as_stored().starts_with("v1.k2."));
+        assert_ne!(new, old);
+        let Resealed::Sealed(again) = rotating.reseal(&endpoint, &old) else {
+            panic!("sealed anew");
+        };
+        assert_ne!(again, new, "a fresh nonce each time");
+        assert_eq!(
+            rotating.open(&endpoint, &new).map(|s| s.expose()),
+            Some(secret.expose())
+        );
+        assert_eq!(rotating.reseal(&endpoint, &new), Resealed::Current);
+        let other = EndpointId::generate().unwrap();
+        assert_eq!(rotating.reseal(&other, &old), Resealed::Unreadable);
+        assert_eq!(
+            DataKeys::new(DataKey::generate("k3").unwrap()).reseal(&endpoint, &old),
+            Resealed::Unreadable,
+            "a key not listed"
+        );
+        let mut altered = old.as_stored().to_owned();
+        altered.push('A');
+        assert_eq!(
+            rotating.reseal(&endpoint, &SealedSecret::from_stored(altered)),
+            Resealed::Unreadable
+        );
+        assert!(!format!("{:?}", Resealed::Sealed(new)).contains("v1.k2"));
+    }
 }
