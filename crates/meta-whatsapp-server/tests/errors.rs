@@ -356,6 +356,9 @@ const CALLS_META: &[&str] = &[
     "PATCH /v1/numbers/{pn}/profile",
     "DELETE /v1/wabas/{waba_id}",
     "POST /v1/admin/tenants/{id}/wabas",
+    // Roadmap M5h2: the agreement's state read signs nothing, so it is not
+    // gated and meets Meta (D430).
+    "POST /v1/admin/businesses/{business_id}/max-price-agreement/state",
     "DELETE /v1/admin/tenants/{id}",
     "DELETE /v1/admin/wabas/{waba_id}/binding",
     "POST /v1/numbers/{pn}/messages",

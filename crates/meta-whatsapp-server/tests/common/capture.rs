@@ -3954,6 +3954,36 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
     h.graph
         .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
     ok(&h.call(sign(BUSINESS_TOKEN)).await, 504);
+    // Roadmap M5h2: the operator reads the agreement's state with the same
+    // token: Meta's answer names the signer, and so does its refusal.
+    let read = |token: &str| {
+        Call::new(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement/state"),
+        )
+        .key(admin)
+        .json(&json!({ "token": token }))
+    };
+    h.graph.push_json(
+        200,
+        json!({"status": "accepted", "signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL}),
+    );
+    let state = h.call(read(BUSINESS_TOKEN)).await;
+    ok(&state, 200);
+    assert_eq!(state.json(), json!({"status": "accepted"}));
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) Invalid email {SIGNER_EMAIL}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": format!("{SIGNER_NAME} {SIGNER_EMAIL}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused_read = h.call(read(BUSINESS_TOKEN)).await;
+    assert!(
+        refused_read.status.is_client_error(),
+        "{}",
+        refused_read.text
+    );
     // Bodies that are not the documented one, each carrying the token and
     // the signer: refused as `422 body` or on the input, never logged.
     for body in [
@@ -5238,6 +5268,51 @@ async fn partners(h: &Harness, admin: &str) -> Vec<String> {
             204,
         );
     }
+    // Roadmap M5h2: the partner Intent API (a legal act: the setting is on
+    // in the capture), once refused with a text quoting the business, once
+    // taken; and the client WABAs listing.
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#1752041) {QUOTED}"), "type": "OAuthException",
+                         "code": 1_752_041, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused_invitation = h
+        .call(admin_call(
+            Method::POST,
+            "/v1/admin/partners/businesses/2780023991704/marketing-onboarding",
+        ))
+        .await;
+    assert!(
+        refused_invitation.status.is_client_error(),
+        "{}",
+        refused_invitation.text
+    );
+    h.graph
+        .push_json(200, json!({"request_id": "893436979557695"}));
+    ok(
+        &h.call(
+            admin_call(
+                Method::POST,
+                "/v1/admin/partners/businesses/2780023991704/marketing-onboarding",
+            )
+            .json(&json!({"solution_id": SOLUTION})),
+        )
+        .await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "46302397361990", "name": QUOTED,
+                         "timezone_id": "1", "message_template_namespace": "93d3e793_8a4f"}]}),
+    );
+    ok(
+        &h.call(admin_call(
+            Method::GET,
+            "/v1/admin/partners/client-wabas?onboarding_status=ELIGIBLE",
+        ))
+        .await,
+        200,
+    );
     // The tenant's WABA.
     let tenant = |method: Method, path: String| Call::new(method, path).key(&key);
     h.graph.push_json(
@@ -5375,6 +5450,7 @@ fn check_partner_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
             fields["action"].as_str().is_some_and(|action| {
                 action.starts_with("partner_solution_")
                     || action.starts_with("business_verification_")
+                    || action.starts_with("marketing_onboarding_")
             })
         })
         .collect();
@@ -5393,6 +5469,7 @@ fn check_partner_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
             "partner_solution_deactivation_requested",
             "partner_solution_deactivation_accepted",
             "partner_solution_deactivation_rejected",
+            "marketing_onboarding_requested",
         ],
         "the operator's partner acts"
     );
