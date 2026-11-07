@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod erasure;
+pub mod failing_conversations;
 pub mod flows;
 pub mod inbox;
 pub mod media;

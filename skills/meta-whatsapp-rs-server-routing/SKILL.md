@@ -34,7 +34,16 @@ The three actions answer `200 {request_id}` (Meta's, for its support) and
 take an `Idempotency-Key`. Meta tells the caller nothing more: the new
 owner of a pass gets control_passed, the previous owner of a take gets
 control_taken, a release has no event, and **no call says who owns a
-thread** (keep that state yourself, from those events and your own calls).
+thread**. The service keeps the part that is its own: once Meta answers a
+pass, a take or a release, it records the new owner in the inbox the
+reply routes read, so a free-form reply after a pass is
+`409 thread_owned_elsewhere` with nothing sent to Meta, and after a release it
+goes on to Meta's window check. Naming the user by phone is fine when the
+inbox keys the customer by BSUID: the record goes where a handover for the
+same user would. A refusal or a `504 timeout` records nothing (the thread
+may or may not have changed hands: read your `thread_control_changed`
+events, or retry with the same `Idempotency-Key`). What other responders do
+reaches you only as events.
 
 ## The user, and a role never an app
 
@@ -109,12 +118,11 @@ the person.
 
 It does not accept Meta's Business Agents and Platform Terms of Service,
 which thread control needs and only the business can accept in Meta
-Business Suite. It does not report a thread's owner (Meta offers no call),
-and the service does not record your own pass, take or release in its
-inbox's owner state: after a pass, a free-form reply through the inbox
-routes may still be let through and Meta then refuses it
-(`409 thread_owned_elsewhere`). It does not take a thread implicitly: the
-escalation partner's service message does, with no call.
+Business Suite. It does not report a thread's owner (Meta offers no call):
+the inbox knows your own answered actions and the events it received. It
+does not record an action whose outcome is unknown (a timeout), and it does
+not take a thread implicitly: the escalation partner's service message
+does, with no call.
 
 ## Related skills
 

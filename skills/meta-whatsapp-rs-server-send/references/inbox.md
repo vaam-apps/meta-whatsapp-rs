@@ -42,7 +42,8 @@ export async function reply(api: WhatsApp, pn: string, contact: string, message:
   free-form content outside the 24-hour window (it counts the customer's
   calls too: send a template), `thread_owned_elsewhere` while another app
   owns the thread under Conversation Routing (wait for it back, or send
-  a template). A template is exempt from both. The operator may turn a
+  a template; a pass or a release made through the service's thread
+  control routes is known to the inbox once Meta answered it). A template is exempt from both. The operator may turn a
   check off per number (`WA_SERVER_INBOX_REPLY_CHECKS`); Meta then
   decides.
 - A number that moved to you from another tenant shows nothing from
