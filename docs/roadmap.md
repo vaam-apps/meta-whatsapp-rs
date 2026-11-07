@@ -5867,7 +5867,7 @@ design's (§9).
     attempt opens a connection to it, never the pooled one; a pooled
     connection to an address the list no longer admits is never used.
   - **Landed:** `HyperSender` keeps connections idle between attempts
-    (design D400 to D404, implementer's proposals, swappable): a kept
+    (design D400 to D404, the coordinator's decisions, swappable): a kept
     connection is handed out only for an exact (checked address and port,
     URL host name, scheme) match, taken after the core's fresh lookup and
     allow-list check, whose pinned address is all the sender is given; the
@@ -5881,6 +5881,13 @@ design's (§9).
     connection; a narrowed list refuses before the sender),
     `two_host_names_at_one_address_do_not_share_a_connection`,
     `over_tls_a_connection_is_reused_for_the_same_name_only`,
+    `the_scheme_is_part_of_the_key`,
+    `a_host_name_written_differently_is_one_key`,
+    `an_answer_that_closes_the_connection_is_not_pooled`,
+    `a_connection_past_its_idle_time_is_not_handed_out`,
+    `only_a_request_that_was_never_written_may_be_retried`,
+    `a_request_the_peer_read_is_not_sent_again`,
+    `a_body_past_the_limit_is_not_pooled_though_it_arrived_whole`,
     `an_idle_connection_is_closed_after_the_idle_time` and
     `with_the_pool_off_every_attempt_opens_its_own_connection`; end to
     end `deliveries_to_one_endpoint_share_a_connection` (a rotation in
@@ -7082,7 +7089,7 @@ or WABA fails the family's own cross-tenant test).
     id), is inert once its number is not the tenant's, and the tenant
     deletion and the erasure of a customer (M2f: customers, not groups)
     leave nothing a person is named by. A deployment that must not keep
-    even that waits for M5f3.
+    even that waits for M5f3 (landed below).
 - [x] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
   over the library's `Group::set_picture` (a multipart upload of a
   square JPEG of at most 5 MiB; Meta checks the shape and the 192×192
@@ -7128,7 +7135,7 @@ or WABA fails the family's own cross-tenant test).
     `group_settings_update` event, which the service records as any
     event and does not wait for; no call of this route was run against
     Meta live.
-- [ ] **M5f3. Purging the group records** (D150): the records of a
+- [x] **M5f3. Purging the group records** (D150): the records of a
   number's groups (`wa.server.group`) go when the number's WABA is
   unbound, when its tenant is deleted (M3a), and when the operator asks
   for a number's. Needs a way to find a number's records: a per-number
@@ -7138,6 +7145,36 @@ or WABA fails the family's own cross-tenant test).
   - **Decisive:** after a tenant's deletion and after an unbind, no key
     of the namespace names the number; a number's records of another
     number are untouched.
+  - **Landed** (*PR number to be added when it lands*): a per-number
+    index on `KvStore` (`wa.server.group.index`, 256 hashed shards, no
+    port change), written before the record and read again after it;
+    `GroupRecords::purge`; the `Authorizer` purges the numbers of every
+    WABA it unbinds (`unbind_if`, `unbind`: a tenant's disconnection,
+    a tenant's deletion, the operator's unbind with or without a usable
+    token, Embedded Signup's offboarding), and the operator can ask for
+    one number's that is not bound (`DELETE
+    /v1/admin/numbers/{phone_number_id}/group-records`, audited
+    `group_records_purged`; a bound number is `409 number_still_bound`,
+    nothing deleted). Tests: `conformance::groups` (both
+    backends, live on Postgres: a purge takes a number's records and
+    index and no other's; an unbind, a tokenless unbind, the request and
+    a tenant's deletion leave no key of the two namespaces),
+    `tests/groups.rs` (over HTTP: the tenant's disconnection, the
+    operator's unbind, the tenant's deletion, the route's authz),
+    the same suite's refusal of a bound number (nothing deleted) and its stale unbinding (nothing purged),
+    `groups::tests` (the interleavings of `record`, `forget` and `purge`, one per guard),
+    `tests/unbinding_purges.rs`. OpenAPI additive only (one operation,
+    one schema). **Decided by the coordinator under the owner's delegation,
+    swappable** (D380-D382): the index over a port change
+    (swap: `KvStore::delete_prefix`), the purge in the `Authorizer` and a
+    failed purge not failing the unbinding (swap: fail it with `503`), the
+    route refusing a bound number (swap: allowing it, the owner's call). Pending the owner's confirmation
+    before the first release: `wa.server.group.index`, the shard key
+    domain, the operation id, the path and the audit action.
+  - **Not done here:** records written before the index and not named
+    since are not found (the first release has none); a purge of a
+    number added to a WABA between the read of its numbers and the
+    unbinding is the operator's request.
 - [x] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.

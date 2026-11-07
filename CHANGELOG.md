@@ -14,8 +14,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M2j)
 
-- **A connection pool for webhooks out** (roadmap M2j; D400 to D404,
-  proposals): `HyperSender` keeps connections idle between attempts and
+- **A connection pool for webhooks out** (roadmap M2j; D400 to D404): `HyperSender` keeps connections idle between attempts and
   reuses one only for the address that attempt's own fresh lookup was
   checked at, the same port, host name and scheme, after the allow-list
   check; 30 s idle, 2 per destination, 64 destinations. New variables
@@ -25,6 +24,18 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `WA_SERVER_WEBHOOK_POOL_DESTINATIONS`, pending the owner's confirmation
   before the first release. The library's `PoolSettings` and
   `HyperSender::with_pool` are in `meta-whatsapp-server-http`.
+
+### Added (roadmap M5f3)
+
+- **The group records go with the binding** (roadmap M5f3; D380-D382): a per-number index beside `wa.server.group`
+  (`wa.server.group.index`, hashed shards, no `KvStore` change) lets the
+  service purge a number's records when its WABA is unbound (a tenant's
+  disconnection, a tenant's deletion, the operator's unbind, Embedded
+  Signup's offboarding), and `DELETE
+  /v1/admin/numbers/{phone_number_id}/group-records` purges the records of
+  one number that is not bound, on the operator's request (audited
+  `group_records_purged`; a bound number is refused, `409
+  number_still_bound`, a new code, with nothing deleted; OpenAPI additive).
 
 ### Changed (roadmap M2l)
 

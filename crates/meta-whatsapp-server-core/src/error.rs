@@ -115,6 +115,7 @@ codes! {
     NUMBER_NOT_CONNECTED = ("number_not_connected", 409, "The phone number has no stored token: connect it first."),
     RECONNECT_REQUIRED = ("reconnect_required", 409, "The number's token is no longer valid: connect it again."),
     WABA_OWNED_BY_ANOTHER_TENANT = ("waba_owned_by_another_tenant", 409, "This WhatsApp Business Account, or one of its numbers, belongs to another tenant."),
+    NUMBER_STILL_BOUND = ("number_still_bound", 409, "The phone number is still bound to a tenant: unbind its WABA first; its group records go with the binding."),
     TENANT_EXISTS = ("tenant_exists", 409, "A tenant with this id exists."),
     IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
