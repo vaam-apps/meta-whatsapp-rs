@@ -447,6 +447,33 @@ async fn each_admin_change_logs_its_own_audit_event_and_a_refused_one_none() {
     .await;
     assert_eq!(logged, none);
 
+    // Purging a number's group records (roadmap M5f3, D382): audited with
+    // the number's id and nothing else, for a number that is not bound; a
+    // refused call (not digits, or a number still bound) is not, and a
+    // bound number's refusal deletes nothing.
+    let purge = |pn: &str| {
+        Call::new(
+            Method::DELETE,
+            format!("/v1/admin/numbers/{pn}/group-records"),
+        )
+        .key(&admin)
+    };
+    let deletions = h.kv.deletions();
+    let (_, logged) = run(purge("1972385232742141"), StatusCode::CONFLICT).await;
+    assert_eq!(logged, none, "a bound number's purge is refused, unaudited");
+    assert_eq!(h.kv.deletions(), deletions, "the refusal deleted nothing");
+    let (_, logged) = run(purge("106540352242922"), StatusCode::OK).await;
+    assert_eq!(
+        logged,
+        [event(
+            "group_records_purged",
+            admin_id,
+            &[("phone_number_id", "106540352242922")]
+        )]
+    );
+    let (_, logged) = run(purge("not-a-number"), StatusCode::NOT_FOUND).await;
+    assert_eq!(logged, none, "a refused purge is not audited");
+
     // A tenant's deletion: Meta failing to unsubscribe logs nothing; then
     // each WABA's disconnection, then the deletion.
     h.graph.push_json(

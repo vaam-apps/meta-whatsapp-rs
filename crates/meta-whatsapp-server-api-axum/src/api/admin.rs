@@ -1081,6 +1081,48 @@ pub(crate) async fn unbind_waba(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What purging a number's group records did.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GroupRecordsPurged {
+    /// How many records of the number's groups were deleted (no group's
+    /// id is in the answer).
+    pub deleted: u64,
+}
+
+/// Purge the service's records of the groups a number held (roadmap
+/// M5f3), which the unbinding of the number's WABA and a tenant's deletion
+/// purge already: for one number that is **not bound**, so that an operator
+/// can finish a purge that failed after an unbinding. A number still bound
+/// to a tenant is refused (`409 number_still_bound`, nothing deleted): the
+/// deletion is irreversible, which is the owner's decision. The records are
+/// the service's own notes of which groups the number holds (never Meta's
+/// data). Idempotent. Audited as `group_records_purged`, with the number's
+/// id.
+#[utoipa::path(
+    delete,
+    path = "/v1/admin/numbers/{phone_number_id}/group-records",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("phone_number_id" = String, Path, description = "The number's id (digits only)")),
+    responses(
+        (status = 200, description = "Purged (the number is not bound): how many records were deleted (zero when there were none)", body = GroupRecordsPurged),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 404, description = "`not_found`: not a number's id", body = ErrorBody),
+        (status = 409, description = "`number_still_bound`: the number is bound to a tenant; unbind its WABA first. Nothing deleted", body = ErrorBody),
+    )
+)]
+pub(crate) async fn purge_group_records(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(phone_number_id): Path<String>,
+) -> Result<Json<GroupRecordsPurged>, ApiError> {
+    let deleted = operations(&state, &admin)?
+        .purge_group_records(&phone_number_id)
+        .await?;
+    Ok(Json(GroupRecordsPurged { deleted }))
+}
+
 // ─── Vault ───────────────────────────────────────────────────────────────
 
 /// Re-encrypt every bound WABA's token (and its credit ledger) under the

@@ -1024,6 +1024,27 @@ listed), a group you just asked for is `404` too; wait for the event, or
 list. A number that moves to another tenant keeps its groups' records
 under the old tenant: list its groups to make them the new one's.
 
+**The records go with the binding** (roadmap M5f3; design D380-D382).
+When a WABA is unbound (a tenant disconnecting it, the tenant's
+deletion, the operator's `DELETE /v1/admin/wabas/{waba_id}/binding`,
+Embedded Signup's offboarding), the service deletes the records of its
+numbers' groups, and the index it keeps of them (the namespaces
+`wa.server.group` and `wa.server.group.index`: after it no key of either
+names the number); another number's records are untouched. A purge that
+fails after the unbinding is logged (`warn`, target
+`meta_whatsapp_server::api::groups`, the WABA's id) and does not undo it;
+the operator finishes it with `DELETE
+/v1/admin/numbers/{phone_number_id}/group-records` (admin key; `200
+{"deleted": n}`, `404` for an id that is not digits; idempotent; audited
+`group_records_purged`). The route takes only a number that is **not
+bound**: for a number still bound to a tenant it answers `409
+number_still_bound` and deletes nothing, because deleting a bound number's
+records is a deletion no other operator action performs and irreversible
+deletion is the owner's decision (design D382; unbind the WABA to purge,
+or allow the route for bound numbers, which is the owner's call). The
+records are the service's notes, not Meta's data: no group is deleted at
+Meta.
+
 **The picture** (roadmap M5f2; Meta's `groups/reference`, "Update group
 settings") is a form of one field, `file`: a JPEG of at most 5 MiB, square,
 at least 192 by 192 pixels. The service judges the bytes, never the
