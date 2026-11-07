@@ -409,6 +409,41 @@ pub struct MarketingFacts<'a> {
     pub disabled: Option<bool>,
 }
 
+/// A tenant's analytics switch (roadmap M5g2; docs/design/server.md,
+/// D286): template insights confirmed for a WABA, or a template opted out
+/// of, or back into, button click tracking. Logged like [`tenant_audit`]
+/// (target `audit`, message `tenant change`) with `outcome` and the ids and
+/// flag of [`AnalyticsFacts`]. Never a template's name or content, and
+/// none of Meta's texts.
+pub fn analytics_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    facts: &AnalyticsFacts<'_>,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        template_id = facts.template_id,
+        opted_out = facts.opted_out,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What an [`analytics_audit`] event names besides its [`Subject`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AnalyticsFacts<'a> {
+    /// The template whose click tracking changed.
+    pub template_id: Option<&'a str>,
+    /// Whether click tracking is now opted out of (`true`: off).
+    pub opted_out: Option<bool>,
+}
+
 /// The operator's signing of Meta's max price beta agreement (roadmap
 /// M5h; docs/design/server.md, D231; `OPEN_QUESTIONS.md` #45): a legal act,
 /// logged like [`audit`] (target `audit`, message `admin change`) with the

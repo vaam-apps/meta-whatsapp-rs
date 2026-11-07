@@ -2065,6 +2065,9 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
     const PN: &str = "1972385232742141";
     const CATALOG: &str = "194836987003835";
     const CODE: &str = "4O4YGZEG3RIVE1";
+    const SET: &str = "5000000000000101";
+    const GROUP: &str = "1044106240855852";
+    const TEMPLATE: &str = "245435364965041";
     let minted = h
         .call(
             Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
@@ -2270,6 +2273,99 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
         ))
         .await;
     ok(&templates, 200);
+    // M5g2: a catalog's product sets and one product, template group
+    // analytics and the two switches (the insights, a legal act, are on in
+    // this harness). Meta's texts of a refusal are in no line.
+    let one_catalog = json!({"data": [{"id": CATALOG, "name": "Lucky Shrub", "product_count": 1, "vertical": "commerce"}]});
+    h.graph.push_json(200, one_catalog.clone());
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": SET, "name": "Shirts", "filter": "{}", "product_count": 1}]}),
+    );
+    let sets = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets"),
+        ))
+        .await;
+    ok(&sets, 200);
+    h.graph.push_json(200, one_catalog.clone());
+    h.graph
+        .push_json(200, json!({"id": SET, "product_catalog": {"id": CATALOG}}));
+    h.graph
+        .push_json(200, json!({"id": SET, "name": "Shirts", "filter": "{}"}));
+    let set = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets/{SET}"),
+        ))
+        .await;
+    ok(&set, 200);
+    h.graph.push_json(200, one_catalog.clone());
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "5000000000000001", "retailer_id": "sku-1", "name": "Mug"}]}),
+    );
+    let product = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products/5000000000000001"),
+        ))
+        .await;
+    ok(&product, 200);
+    h.graph.push_json(200, one_catalog);
+    h.graph.push_json(200, json!({"data": []}));
+    let filtered = h
+        .call(call(
+            Method::GET,
+            format!(
+                "/v1/wabas/{WABA}/catalogs/{CATALOG}/products?filter=%7B%22brand%22%3A%7B%22eq%22%3A%22Acme%22%7D%7D"
+            ),
+        ))
+        .await;
+    ok(&filtered, 200);
+    h.graph.push_json(
+        200,
+        json!({"id": GROUP, "whatsapp_business_account": {"id": WABA}}),
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"granularity": "DAILY", "data_points": [
+            {"template_group_id": GROUP, "start": s, "end": e, "sent": 1, "delivered": 1, "read": 1}]}]}),
+    );
+    let groups = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/template-groups?{times}&group_ids={GROUP}"),
+        ))
+        .await;
+    ok(&groups, 200);
+    h.graph
+        .push_json(200, json!({"id": 102_290_129_340_398_u64}));
+    let insights = h
+        .call(call(
+            Method::POST,
+            format!("/v1/wabas/{WABA}/analytics/template-insights"),
+        ))
+        .await;
+    ok(&insights, 204);
+    h.graph
+        .push_json(200, json!({"name": "seasonal_sale_promo", "id": TEMPLATE}));
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": TEMPLATE, "category": "MARKETING"}]}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let tracking = h
+        .call(
+            call(
+                Method::PUT,
+                format!("/v1/wabas/{WABA}/analytics/templates/{TEMPLATE}/click-tracking"),
+            )
+            .json(&json!({"opted_out": true})),
+        )
+        .await;
+    ok(&tracking, 204);
     // The block list: a page, a block answered in part (Meta's texts quote
     // the person), an unblock, a block cut by a timeout, a block Meta
     // refuses with a text quoting the person.
@@ -4204,6 +4300,8 @@ fn check_audit(logs: &str) {
             "flow_deleted",
             // Roadmap M5g: a QR code's deletion, the blocks and the unblock.
             "qr_code_deleted",
+            "template_insights_enabled",
+            "template_click_tracking_set",
             "users_blocked",
             "users_unblocked",
             "users_blocked",

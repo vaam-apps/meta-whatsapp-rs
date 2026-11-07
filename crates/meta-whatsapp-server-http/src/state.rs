@@ -141,7 +141,8 @@ pub struct Settings {
     /// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3, pending the owner's
     /// confirmation before the first release): whether the legal acts a
     /// tenant may ask for are taken: the compliance information
-    /// declaration (design D192; the set is
+    /// declaration (design D192), and since roadmap M5g2 the confirmation of
+    /// template insights (D285; the set is
     /// `meta_whatsapp_server_core::number_settings::is_legal_act`). Off
     /// (the default), it is `403 feature_not_available` and nothing is
     /// asked of Meta. AGENTS.md, Legal acts: never on by itself.
