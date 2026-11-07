@@ -997,6 +997,38 @@ impl<'a> Admin<'a> {
         }
     }
 
+    /// Purge the records of the groups the number `phone_number_id` holds
+    /// (roadmap M5f3, design D381): what the unbinding of its WABA and a
+    /// tenant's deletion do already, asked for one number, bound or not
+    /// (the way to finish a purge that failed after an unbinding). The
+    /// records are the service's own notes of which groups a number holds
+    /// (never Meta's data): a bound number's are made again by its next
+    /// `group_lifecycle_update` event and its next listing. Audited
+    /// (`group_records_purged`, with the number's id and no count of
+    /// groups' ids). Returns how many records it deleted.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` for an id that is not a number's (digits only), read
+    /// before anything is touched; `500 internal` when the service keeps
+    /// no group records; the store's failure.
+    pub async fn purge_group_records(&self, phone_number_id: &str) -> Result<u64, ServiceError> {
+        let number = PhoneNumberId::new(phone_number_id).map_err(|_| ServiceError::not_found())?;
+        let groups = self
+            .authz
+            .group_records()
+            .ok_or_else(ServiceError::internal)?;
+        let deleted = groups.purge(&number).await?;
+        self.audit(
+            "group_records_purged",
+            Subject {
+                phone_number_id: Some(number.as_str()),
+                ..Subject::default()
+            },
+        );
+        Ok(deleted)
+    }
+
     /// [`Self::unbind`] for an opened WABA.
     async fn unsubscribe_and_forget(&self, owned: OwnedWaba) -> Result<(), ServiceError> {
         // Moved since it was made: its token is not the new holder's to

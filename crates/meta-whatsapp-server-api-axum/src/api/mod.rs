@@ -152,6 +152,7 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         ))
         .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
+        .routes(routes!(admin::purge_group_records))
         .routes(routes!(admin::rotate_vault))
         .routes(routes!(admin::reseal_webhook_secrets))
         // Roadmap M5h: a legal act, gated by `WA_SERVER_LEGAL_ACTS`.

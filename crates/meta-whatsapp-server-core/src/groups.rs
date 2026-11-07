@@ -76,7 +76,7 @@ use meta_whatsapp_rs::client::groups::{
 use meta_whatsapp_rs::core::GraphApiError;
 use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::error::StorageError;
-use meta_whatsapp_rs::core::ids::{GroupId, PhoneNumberId, UserId, WaId};
+use meta_whatsapp_rs::core::ids::{GroupId, PhoneNumberId, UserId, WaId, WabaId};
 use meta_whatsapp_rs::core::recipient::Recipient;
 use meta_whatsapp_rs::core::store::{Expiry, JsonStore, KvStore};
 use meta_whatsapp_rs::webhooks::WebhookEvent;
@@ -99,6 +99,11 @@ const LOG_TARGET: &str = "meta_whatsapp_server::api::groups";
 /// The `KvStore` namespace of the groups' records: a stored name, pending
 /// the owner's confirmation before the first release.
 pub const NAMESPACE: &str = "wa.server.group";
+
+/// The `KvStore` namespace of the per-number index of the groups' records
+/// (roadmap M5f3, design D380): a stored name, pending the owner's
+/// confirmation before the first release.
+pub const INDEX_NAMESPACE: &str = "wa.server.group.index";
 
 /// The audit actions (docs/design/server.md, D155); pending the owner's
 /// confirmation before the first release.
@@ -137,6 +142,21 @@ struct Record {
     phone_number_id: String,
 }
 
+/// A shard of a number's index (roadmap M5f3): the hashes, in hex, of the
+/// records of the number's groups whose hash starts with the shard's two
+/// hex digits. No number, no group id: the hashes only.
+#[derive(Default, Serialize, Deserialize)]
+struct Shard {
+    groups: Vec<String>,
+}
+
+/// How many times an index write retries against a concurrent one before
+/// it answers `Busy`.
+const INDEX_ATTEMPTS: usize = 16;
+
+/// The shards of a number's index: one per first byte of a record's hash.
+const SHARDS: usize = 256;
+
 /// The records of the groups each number holds, over the bundle's
 /// `KvStore` (a typed store on the port, never a port of its own): what
 /// decides, before any token is opened, whether a group is a number's
@@ -144,6 +164,7 @@ struct Record {
 #[derive(Clone)]
 pub struct GroupRecords {
     store: JsonStore<Record>,
+    index: JsonStore<Shard>,
 }
 
 impl fmt::Debug for GroupRecords {
@@ -173,24 +194,128 @@ impl GroupRecords {
     /// The records in `kv`.
     pub fn new(kv: Arc<dyn KvStore>) -> Self {
         Self {
-            store: JsonStore::new(kv, NAMESPACE),
+            store: JsonStore::new(kv.clone(), NAMESPACE),
+            index: JsonStore::new(kv, INDEX_NAMESPACE),
         }
     }
 
-    /// The record's key: the number, and a hash of the group's id.
-    fn key(number: &PhoneNumberId, group: &GroupId) -> String {
+    /// The hash, in hex, of a group of a number: what names the group in
+    /// the record's key and in the number's index.
+    pub(crate) fn hash(number: &PhoneNumberId, group: &GroupId) -> String {
         let mut hash = Sha256::new();
         hash.update(b"meta-whatsapp-server/group/v1\0");
         hash.update(number.as_str().as_bytes());
         hash.update(b"\0");
         hash.update(group.as_str().as_bytes());
-        format!("{}.{}", number.as_str(), hex::encode(hash.finalize()))
+        hex::encode(hash.finalize())
+    }
+
+    /// The record's key: the number, a dot and the hash of the group's id.
+    fn key_of(number: &PhoneNumberId, hash: &str) -> String {
+        format!("{}.{hash}", number.as_str())
+    }
+
+    /// The record's key: the number, and a hash of the group's id.
+    pub(crate) fn key(number: &PhoneNumberId, group: &GroupId) -> String {
+        Self::key_of(number, &Self::hash(number, group))
+    }
+
+    /// The key of the index shard `shard` (two hex digits) of `number`:
+    /// itself a hash, so that the index names neither the number nor a
+    /// group.
+    fn shard_key(number: &PhoneNumberId, shard: &str) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"meta-whatsapp-server/group-index/v1\0");
+        hash.update(number.as_str().as_bytes());
+        hash.update(b"\0");
+        hash.update(shard.as_bytes());
+        hex::encode(hash.finalize())
+    }
+
+    /// The shard of the record whose hash is `hash`.
+    fn shard_of(hash: &str) -> &str {
+        hash.get(..2).unwrap_or(hash)
+    }
+
+    /// Add `hash` to `number`'s index (nothing when it is there).
+    async fn index_add(&self, number: &PhoneNumberId, hash: &str) -> Result<(), StorageError> {
+        let key = Self::shard_key(number, Self::shard_of(hash));
+        for _ in 0..INDEX_ATTEMPTS {
+            let written = match self.index.get(&key).await? {
+                Some((shard, _, _)) if shard.groups.iter().any(|held| held == hash) => {
+                    return Ok(());
+                }
+                Some((mut shard, version, _)) => {
+                    shard.groups.push(hash.to_owned());
+                    self.index
+                        .compare_and_swap(&key, version, Some(&shard), Expiry::Never)
+                        .await?
+                }
+                None => {
+                    let shard = Shard {
+                        groups: vec![hash.to_owned()],
+                    };
+                    self.index
+                        .put_if_absent(&key, &shard, Expiry::Never)
+                        .await?
+                }
+            };
+            if written.is_some() {
+                return Ok(());
+            }
+        }
+        Err(StorageError::Busy)
+    }
+
+    /// Take `hash` out of `number`'s index (nothing when it is not there;
+    /// an emptied shard is deleted).
+    async fn index_remove(&self, number: &PhoneNumberId, hash: &str) -> Result<(), StorageError> {
+        let key = Self::shard_key(number, Self::shard_of(hash));
+        for _ in 0..INDEX_ATTEMPTS {
+            let Some((mut shard, version, _)) = self.index.get(&key).await? else {
+                return Ok(());
+            };
+            let before = shard.groups.len();
+            shard.groups.retain(|held| held != hash);
+            if shard.groups.len() == before {
+                return Ok(());
+            }
+            let new = (!shard.groups.is_empty()).then_some(&shard);
+            if self
+                .index
+                .compare_and_swap(&key, version, new, Expiry::Never)
+                .await?
+                .is_some()
+            {
+                return Ok(());
+            }
+        }
+        Err(StorageError::Busy)
+    }
+
+    /// Whether `number`'s index holds `hash`.
+    pub(crate) async fn indexed(
+        &self,
+        number: &PhoneNumberId,
+        hash: &str,
+    ) -> Result<bool, StorageError> {
+        let key = Self::shard_key(number, Self::shard_of(hash));
+        Ok(self
+            .index
+            .get(&key)
+            .await?
+            .is_some_and(|(shard, _, _)| shard.groups.iter().any(|held| held == hash)))
     }
 
     /// Keep `group` as `tenant`'s number `number`'s. Crate-private: only
     /// the webhook pipeline and [`Groups::list`] write the records. A
     /// record already naming the same tenant and number is not written
     /// again.
+    ///
+    /// The number's index is written **first**, then the record, and the
+    /// index read again after it (roadmap M5f3, design D380): a purge that
+    /// ran between the two has taken the entry away, and the record, which
+    /// the purge may have missed, is deleted here.
     pub(crate) async fn record(
         &self,
         tenant: &TenantId,
@@ -200,7 +325,11 @@ impl GroupRecords {
         if !keyable(number) {
             return Ok(());
         }
-        let key = Self::key(number, group);
+        let hash = Self::hash(number, group);
+        let key = Self::key_of(number, &hash);
+        // Also for a record held already: one written before the index
+        // existed is indexed by the next listing or event that names it.
+        self.index_add(number, &hash).await?;
         if let Some((held, _, _)) = self.store.get(&key).await?
             && held.tenant == tenant.as_str()
             && held.phone_number_id == number.as_str()
@@ -212,10 +341,15 @@ impl GroupRecords {
             phone_number_id: number.as_str().to_owned(),
         };
         self.store.put(&key, &record, Expiry::Never).await?;
+        if !self.indexed(number, &hash).await? {
+            self.store.delete(&key).await?;
+        }
         Ok(())
     }
 
     /// Forget `group` of `number`. Crate-private: the webhook pipeline's.
+    /// The record goes, then its entry in the number's index, then the
+    /// record again (a write racing the deletion is not left unindexed).
     pub(crate) async fn forget(
         &self,
         number: &PhoneNumberId,
@@ -224,8 +358,86 @@ impl GroupRecords {
         if !keyable(number) {
             return Ok(());
         }
-        self.store.delete(&Self::key(number, group)).await?;
+        let hash = Self::hash(number, group);
+        let key = Self::key_of(number, &hash);
+        self.store.delete(&key).await?;
+        self.index_remove(number, &hash).await?;
+        self.store.delete(&key).await?;
         Ok(())
+    }
+
+    /// Delete every record of `number`'s groups and its index (roadmap
+    /// M5f3, design D380): what an unbinding of the number's WABA, a
+    /// tenant's deletion and the operator's request do. Returns how many
+    /// records were deleted. Records written before the index existed and
+    /// not named since are not found (they stay inert: [`Self::owned`]
+    /// compares the tenant). Idempotent, safe to repeat after a failure.
+    ///
+    /// Each shard of the index is read, its records deleted, the shard
+    /// deleted only if it did not change meanwhile (otherwise read again),
+    /// and its records deleted once more. Against [`Self::record`] (index,
+    /// record, index again) that leaves no record behind that is not
+    /// indexed; an event recorded for the number after the purge is a
+    /// record again, indexed, which the next purge finds.
+    ///
+    /// # Errors
+    ///
+    /// The store's failure, or `Busy` when a shard kept changing; what was
+    /// deleted stays deleted and a repeat finishes.
+    pub async fn purge(&self, number: &PhoneNumberId) -> Result<u64, StorageError> {
+        if !keyable(number) {
+            return Ok(0);
+        }
+        let mut deleted = 0;
+        for n in 0..SHARDS {
+            let key = Self::shard_key(number, &format!("{n:02x}"));
+            let mut settled = false;
+            for _ in 0..INDEX_ATTEMPTS {
+                let Some((shard, version, _)) = self.index.get(&key).await? else {
+                    settled = true;
+                    break;
+                };
+                for hash in &shard.groups {
+                    if self.store.delete(&Self::key_of(number, hash)).await? {
+                        deleted += 1;
+                    }
+                }
+                if self
+                    .index
+                    .compare_and_swap(&key, version, None, Expiry::Never)
+                    .await?
+                    .is_some()
+                {
+                    for hash in &shard.groups {
+                        self.store.delete(&Self::key_of(number, hash)).await?;
+                    }
+                    settled = true;
+                    break;
+                }
+            }
+            if !settled {
+                return Err(StorageError::Busy);
+            }
+        }
+        Ok(deleted)
+    }
+
+    /// [`Self::purge`] for each of `numbers`, once their WABA `waba_id` is
+    /// unbound. A failure is logged (the WABA's id and the error, never a
+    /// group) and goes no further: the unbinding is done, the records are
+    /// inert without it, and the operator's purge finishes the job.
+    pub(crate) async fn purge_after_unbind(&self, waba_id: &WabaId, numbers: &[PhoneNumberId]) {
+        for number in numbers {
+            if let Err(error) = self.purge(number).await {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    waba_id = waba_id.as_str(),
+                    error = %error,
+                    "a number's group records could not be purged after its WABA was unbound; \
+                     the operator's purge finishes it"
+                );
+            }
+        }
     }
 
     /// What a recorded webhook event says about the groups of a number
@@ -2032,5 +2244,240 @@ mod tests {
             (record.tenant.as_str(), record.phone_number_id.as_str()),
             ("merchant-42", "106540352242922")
         );
+    }
+
+    // ─── Roadmap M5f3: the per-number index and the purge ────────────────
+
+    use futures::future::BoxFuture;
+    use meta_whatsapp_rs::core::store::{StoreKey, Versioned};
+    use std::sync::Mutex;
+
+    type Hook = BoxFuture<'static, ()>;
+
+    /// A store that runs one hook just before the next write of a kind:
+    /// a put into the records' namespace, or a delete of an index shard.
+    struct Hooked {
+        inner: Arc<dyn KvStore>,
+        before_record_put: Mutex<Option<Hook>>,
+        before_shard_delete: Mutex<Option<Hook>>,
+    }
+
+    impl fmt::Debug for Hooked {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Hooked").finish_non_exhaustive()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for Hooked {
+        async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+            self.inner.get(key).await
+        }
+        async fn put(&self, key: &StoreKey, v: Vec<u8>, e: Expiry) -> Result<u64, StorageError> {
+            if key.namespace() == NAMESPACE {
+                let hook = self.before_record_put.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    hook.await;
+                }
+            }
+            self.inner.put(key, v, e).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            v: Vec<u8>,
+            e: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner.put_if_absent(key, v, e).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            new: Option<Vec<u8>>,
+            e: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            if key.namespace() == INDEX_NAMESPACE && new.is_none() {
+                let hook = self.before_shard_delete.lock().unwrap().take();
+                if let Some(hook) = hook {
+                    hook.await;
+                }
+            }
+            self.inner.compare_and_swap(key, expected, new, e).await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
+    fn hooked() -> (Arc<Hooked>, Arc<dyn KvStore>) {
+        use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+        let inner: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let hooked = Arc::new(Hooked {
+            inner: inner.clone(),
+            before_record_put: Mutex::new(None),
+            before_shard_delete: Mutex::new(None),
+        });
+        (hooked, inner)
+    }
+
+    async fn live(kv: &Arc<dyn KvStore>, namespace: &str, key: &str) -> bool {
+        kv.get(&StoreKey::new(namespace.to_owned(), key.to_owned()))
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    /// The index's stored names, and its shard key: a hash of the number
+    /// and the shard, so the index names neither. Decisive:
+    /// `INDEX_NAMESPACE`, `GroupRecords::shard_key`.
+    #[test]
+    fn the_index_namespace_and_its_shard_key_are_pinned() {
+        assert_eq!(INDEX_NAMESPACE, "wa.server.group.index");
+        let number = PhoneNumberId::new("106540352242922").unwrap();
+        let key = GroupRecords::shard_key(&number, "1b");
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(!key.contains("106540352242922"));
+        assert_eq!(
+            key, "d957048129795fa8a6bfb2b2a56b257592080be67c7bc52c663a2b81fe97ca17",
+            "the shard key of the number and shard 1b under the domain meta-whatsapp-server/group-index/v1"
+        );
+        assert_ne!(
+            key,
+            GroupRecords::shard_key(&PhoneNumberId::new("106540352242923").unwrap(), "1b")
+        );
+        assert_ne!(key, GroupRecords::shard_key(&number, "1c"));
+        // The record whose key is pinned above is in shard "1b".
+        assert_eq!(
+            GroupRecords::shard_of(
+                "1bd826a5cbb5abb66e438945d54e62079cc22bdd0f11627c880307ab33ded3d4"
+            ),
+            "1b"
+        );
+    }
+
+    /// A purge that runs between a record's index entry and the record's
+    /// write has taken the entry away: the record, written after, deletes
+    /// itself (it would be unindexed, and no later purge would find it).
+    /// Decisive: the index read again after the put in `record`.
+    #[tokio::test]
+    async fn a_purge_between_the_index_and_the_record_leaves_no_record() {
+        let (kv, inner) = hooked();
+        let records = GroupRecords::new(kv.clone());
+        let plain = GroupRecords::new(inner.clone());
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let group = GroupId::new("Y2FwaV9ncm91cDox");
+        {
+            let (plain, pn) = (plain.clone(), pn.clone());
+            *kv.before_record_put.lock().unwrap() = Some(Box::pin(async move {
+                plain.purge(&pn).await.unwrap();
+            }));
+        }
+        records.record(&tenant, &pn, &group).await.unwrap();
+        assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
+        let hash = GroupRecords::hash(&pn, &group);
+        let shard = GroupRecords::shard_key(&pn, GroupRecords::shard_of(&hash));
+        assert!(!live(&inner, INDEX_NAMESPACE, &shard).await);
+    }
+
+    /// A record written whole between a purge's first deletion of the
+    /// records and its deletion of the shard (the shard then unchanged:
+    /// the entry was there already) is deleted by the purge's second pass.
+    /// Decisive: the second deletion in `purge`.
+    #[tokio::test]
+    async fn a_record_written_while_the_shard_is_deleted_is_deleted_by_the_second_pass() {
+        let (kv, inner) = hooked();
+        let purging = GroupRecords::new(kv.clone());
+        let plain = GroupRecords::new(inner.clone());
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let group = GroupId::new("Y2FwaV9ncm91cDox");
+        // Its entry is in the index (a record in flight), no record yet.
+        plain
+            .index_add(&pn, &GroupRecords::hash(&pn, &group))
+            .await
+            .unwrap();
+        {
+            let (plain, inner, pn, tenant, group) = (
+                plain.clone(),
+                inner.clone(),
+                pn.clone(),
+                tenant.clone(),
+                group.clone(),
+            );
+            *kv.before_shard_delete.lock().unwrap() = Some(Box::pin(async move {
+                plain.record(&tenant, &pn, &group).await.unwrap();
+                assert!(live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
+            }));
+        }
+        assert_eq!(purging.purge(&pn).await.unwrap(), 0);
+        assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
+    }
+
+    /// A group forgotten leaves neither its record nor its index entry,
+    /// and the other groups of the number keep theirs.
+    #[tokio::test]
+    async fn a_forgotten_group_leaves_neither_record_nor_index_entry() {
+        use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+        let records = GroupRecords::new(Arc::new(MemoryKvStore::new()));
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let (one, two) = (GroupId::new("one"), GroupId::new("two"));
+        records.record(&tenant, &pn, &one).await.unwrap();
+        records.record(&tenant, &pn, &two).await.unwrap();
+        records.forget(&pn, &one).await.unwrap();
+        let (h1, h2) = (GroupRecords::hash(&pn, &one), GroupRecords::hash(&pn, &two));
+        assert!(!records.indexed(&pn, &h1).await.unwrap());
+        assert!(records.indexed(&pn, &h2).await.unwrap());
+        assert!(
+            records
+                .store
+                .get(&GroupRecords::key(&pn, &one))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            records
+                .store
+                .get(&GroupRecords::key(&pn, &two))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(records.purge(&pn).await.unwrap(), 1);
+    }
+
+    /// A record held before the index existed is indexed by the next
+    /// event or listing that names it (so a later purge finds it); until
+    /// then a purge does not.
+    #[tokio::test]
+    async fn a_record_from_before_the_index_is_indexed_when_named_again() {
+        use meta_whatsapp_rs::adapters::store::MemoryKvStore;
+        let records = GroupRecords::new(Arc::new(MemoryKvStore::new()));
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let group = GroupId::new("old");
+        records
+            .store
+            .put(
+                &GroupRecords::key(&pn, &group),
+                &Record {
+                    tenant: tenant.as_str().to_owned(),
+                    phone_number_id: pn.as_str().to_owned(),
+                },
+                Expiry::Never,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            records.purge(&pn).await.unwrap(),
+            0,
+            "not indexed: not found"
+        );
+        records.record(&tenant, &pn, &group).await.unwrap();
+        assert_eq!(records.purge(&pn).await.unwrap(), 1);
     }
 }
