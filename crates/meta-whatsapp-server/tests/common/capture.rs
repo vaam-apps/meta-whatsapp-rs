@@ -967,6 +967,7 @@ async fn purge_group_records(h: &Harness, admin: &str) {
             .key(admin),
         )
         .await;
+    // A number that is not bound (D382): a bound one is refused.
     assert_eq!(purged.status.as_u16(), 200, "{}", purged.text);
 }
 

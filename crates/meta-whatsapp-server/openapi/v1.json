@@ -238,7 +238,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Purge the service's records of the groups a number holds (roadmap\nM5f3), which the unbinding of the number's WABA and a tenant's deletion\npurge already: for one number, bound or not, so that an operator can\nfinish a purge that failed after an unbinding. The records are the\nservice's own notes of which groups the number holds (never Meta's\ndata): a bound number's are made again by its next\n`group_lifecycle_update` event and its next group listing, and until\nthen its groups answer `404`. Idempotent. Audited as\n`group_records_purged`, with the number's id.",
+        "summary": "Purge the service's records of the groups a number held (roadmap\nM5f3), which the unbinding of the number's WABA and a tenant's deletion\npurge already: for one number that is **not bound**, so that an operator\ncan finish a purge that failed after an unbinding. A number still bound\nto a tenant is refused (`409 number_still_bound`, nothing deleted): the\ndeletion is irreversible, which is the owner's decision. The records are\nthe service's own notes of which groups the number holds (never Meta's\ndata). Idempotent. Audited as `group_records_purged`, with the number's\nid.",
         "operationId": "purge_group_records",
         "parameters": [
           {
@@ -253,7 +253,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Purged: how many records were deleted (zero when there were none)",
+            "description": "Purged (the number is not bound): how many records were deleted (zero when there were none)",
             "content": {
               "application/json": {
                 "schema": {
@@ -284,6 +284,16 @@
           },
           "404": {
             "description": "`not_found`: not a number's id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_still_bound`: the number is bound to a tenant; unbind its WABA first. Nothing deleted",
             "content": {
               "application/json": {
                 "schema": {
@@ -34424,6 +34434,7 @@
           "number_not_connected",
           "reconnect_required",
           "waba_owned_by_another_tenant",
+          "number_still_bound",
           "tenant_exists",
           "idempotency_in_progress",
           "outcome_unknown",

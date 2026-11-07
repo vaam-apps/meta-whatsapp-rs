@@ -1333,6 +1333,8 @@ async fn live_group_keys(h: &Harness) -> Vec<String> {
 
 const THIRD_WABA: &str = "102290129340397";
 const THIRD_PN: &str = "106540352242925";
+const FOURTH_WABA: &str = "102290129340396";
+const FOURTH_PN: &str = "106540352242926";
 
 fn naming(live: &[String], pn: &str) -> usize {
     live.iter()
@@ -1344,7 +1346,9 @@ fn naming(live: &[String], pn: &str) -> usize {
 /// after the operator's unbind and after a tenant's deletion, no key of
 /// the namespaces names the number, and another number's records (another
 /// tenant's, another WABA's) are untouched. The operator's route for one
-/// number purges it, bound or not, and is admin-only.
+/// number purges the records of a number that is not bound (what a failed
+/// purge left) and refuses a bound one (`409 number_still_bound`, D382),
+/// deleting nothing; it is admin-only.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn a_numbers_group_records_go_with_its_binding_and_by_the_operators_request() {
@@ -1395,24 +1399,54 @@ async fn a_numbers_group_records_go_with_its_binding_and_by_the_operators_reques
         "refused calls purge nothing"
     );
 
-    // 1. The operator's request for the first WABA's second number.
+    // 1. A number still bound is refused (D382): nothing deleted, nothing
+    // sent, no token read, and its groups are still its own.
+    let (deletions, reads) = (h.kv.deletions(), h.kv.vault_reads());
+    let sent = h.graph.requests().len();
+    for bound in [PN, PN_2] {
+        let refused = h
+            .call(Call::new(Method::DELETE, route(bound)).key(&admin))
+            .await;
+        assert_eq!(
+            (refused.status, refused.code().as_str()),
+            (StatusCode::CONFLICT, "number_still_bound"),
+            "{}",
+            refused.text
+        );
+    }
+    assert_eq!(h.kv.deletions(), deletions, "a refusal deletes nothing");
+    assert_eq!(h.kv.vault_reads(), reads);
+    let live = live_group_keys(&h).await;
+    assert_eq!(naming(&live, PN), 2);
+    assert_eq!(naming(&live, PN_2), 1);
+    assert_eq!(h.graph.requests().len(), sent, "nothing sent to Meta");
+
+    // 1b. A purge that failed after an unbinding: the WABA is unbound
+    // straight through the records (no purge), and the operator's request
+    // finishes it. Idempotent.
+    h.connect(TENANT, FOURTH_WABA, &[FOURTH_PN], TOKEN).await;
+    let reply = h
+        .webhook(&event(CREATE_SUCCEED, FOURTH_WABA, FOURTH_PN, GROUP))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert_eq!(naming(&live_group_keys(&h).await, FOURTH_PN), 1);
+    assert!(
+        h.store
+            .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(FOURTH_WABA).unwrap())
+            .await
+            .unwrap()
+    );
+    assert_eq!(naming(&live_group_keys(&h).await, FOURTH_PN), 1, "left");
     let purged = h
-        .call(Call::new(Method::DELETE, route(PN_2)).key(&admin))
+        .call(Call::new(Method::DELETE, route(FOURTH_PN)).key(&admin))
         .await;
     assert_eq!(purged.status, StatusCode::OK, "{}", purged.text);
     assert_eq!(purged.json(), json!({"deleted": 1}));
     let live = live_group_keys(&h).await;
-    assert_eq!(naming(&live, PN_2), 0);
-    assert_eq!(naming(&live, PN), 2, "another number of the same WABA");
-    // The group is not the number's any longer: 404 with the vault unread.
-    let reads = h.kv.vault_reads();
-    let gone = h
-        .call(Call::get(format!("/v1/numbers/{PN_2}/groups/{GROUP}")).key(&key))
-        .await;
-    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
-    assert_eq!(h.kv.vault_reads(), reads);
+    assert_eq!(naming(&live, FOURTH_PN), 0);
+    assert_eq!(naming(&live, PN), 2, "another number is untouched");
     let again = h
-        .call(Call::new(Method::DELETE, route(PN_2)).key(&admin))
+        .call(Call::new(Method::DELETE, route(FOURTH_PN)).key(&admin))
         .await;
     assert_eq!(again.json(), json!({"deleted": 0}));
 

@@ -7124,18 +7124,23 @@ or WABA fails the family's own cross-tenant test).
     WABA it unbinds (`unbind_if`, `unbind`: a tenant's disconnection,
     a tenant's deletion, the operator's unbind with or without a usable
     token, Embedded Signup's offboarding), and the operator can ask for
-    one number's (`DELETE /v1/admin/numbers/{phone_number_id}/group-records`,
-    audited `group_records_purged`). Tests: `conformance::groups` (both
+    one number's that is not bound (`DELETE
+    /v1/admin/numbers/{phone_number_id}/group-records`, audited
+    `group_records_purged`; a bound number is `409 number_still_bound`,
+    nothing deleted). Tests: `conformance::groups` (both
     backends, live on Postgres: a purge takes a number's records and
     index and no other's; an unbind, a tokenless unbind, the request and
     a tenant's deletion leave no key of the two namespaces),
     `tests/groups.rs` (over HTTP: the tenant's disconnection, the
     operator's unbind, the tenant's deletion, the route's authz),
-    `groups::tests` (two interleavings, one per guard),
+    the same suite's refusal of a bound number (nothing deleted) and its stale unbinding (nothing purged),
+    `groups::tests` (the interleavings of `record`, `forget` and `purge`, one per guard),
     `tests/unbinding_purges.rs`. OpenAPI additive only (one operation,
-    one schema). **Proposed, not decided** (D380-D382): the index over a
-    port change, the purge in the `Authorizer` and a failed purge not
-    failing the unbinding, the route. Pending the owner's confirmation
+    one schema). **Decided by the coordinator under the owner's delegation,
+    swappable** (D380-D382): the index over a port change
+    (swap: `KvStore::delete_prefix`), the purge in the `Authorizer` and a
+    failed purge not failing the unbinding (swap: fail it with `503`), the
+    route refusing a bound number (swap: allowing it, the owner's call). Pending the owner's confirmation
     before the first release: `wa.server.group.index`, the shard key
     domain, the operation id, the path and the audit action.
   - **Not done here:** records written before the index and not named

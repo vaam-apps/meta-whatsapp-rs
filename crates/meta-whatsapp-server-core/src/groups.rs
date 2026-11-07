@@ -2416,6 +2416,98 @@ mod tests {
         assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
     }
 
+    /// A group recorded while a purge is about to delete the shard changes
+    /// the shard: the purge reads it again and takes that record too.
+    /// Decisive: the version the shard is deleted by in `purge` (a delete
+    /// that ignored it would leave the new record unindexed).
+    #[tokio::test]
+    async fn a_shard_that_changes_under_a_purge_is_read_again() {
+        let (kv, inner) = hooked();
+        let purging = GroupRecords::new(kv.clone());
+        let plain = GroupRecords::new(inner.clone());
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let first = GroupId::new("Y2FwaV9ncm91cDox");
+        // Another group of the same shard: hashes starting alike are found
+        // by trying ids until one lands in the first's shard.
+        let shard = GroupRecords::shard_of(&GroupRecords::hash(&pn, &first)).to_owned();
+        let second = (0..100_000)
+            .map(|n| GroupId::new(format!("same-shard-{n}")))
+            .find(|g| GroupRecords::shard_of(&GroupRecords::hash(&pn, g)) == shard)
+            .unwrap();
+        plain.record(&tenant, &pn, &first).await.unwrap();
+        {
+            let (plain, pn, tenant, second) =
+                (plain.clone(), pn.clone(), tenant.clone(), second.clone());
+            *kv.before_shard_delete.lock().unwrap() = Some(Box::pin(async move {
+                plain.record(&tenant, &pn, &second).await.unwrap();
+            }));
+        }
+        assert_eq!(purging.purge(&pn).await.unwrap(), 2);
+        assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &second)).await);
+        assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &first)).await);
+    }
+
+    /// The entry is in the index before the record is written: a hook at
+    /// the record's put finds it. Decisive: the order in `record` (a
+    /// record written first would be unindexed while a purge looks).
+    #[tokio::test]
+    async fn the_index_entry_is_written_before_the_record() {
+        let (kv, inner) = hooked();
+        let records = GroupRecords::new(kv.clone());
+        let plain = GroupRecords::new(inner.clone());
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let group = GroupId::new("Y2FwaV9ncm91cDox");
+        let hash = GroupRecords::hash(&pn, &group);
+        let seen = Arc::new(Mutex::new(None));
+        {
+            let (plain, pn, hash, seen) = (plain.clone(), pn.clone(), hash.clone(), seen.clone());
+            *kv.before_record_put.lock().unwrap() = Some(Box::pin(async move {
+                *seen.lock().unwrap() = Some(plain.indexed(&pn, &hash).await.unwrap());
+            }));
+        }
+        records.record(&tenant, &pn, &group).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), Some(true));
+    }
+
+    /// A record written whole while `forget` removes the group's entry
+    /// (after its first deletion of the record) is deleted by `forget`'s
+    /// last deletion, not left unindexed. Decisive: the second record
+    /// delete in `forget`.
+    #[tokio::test]
+    async fn a_record_written_while_the_entry_is_removed_is_deleted_by_forget() {
+        let (kv, inner) = hooked();
+        let forgetting = GroupRecords::new(kv.clone());
+        let plain = GroupRecords::new(inner.clone());
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let group = GroupId::new("Y2FwaV9ncm91cDox");
+        plain.record(&tenant, &pn, &group).await.unwrap();
+        {
+            let (plain, inner, pn, tenant, group) = (
+                plain.clone(),
+                inner.clone(),
+                pn.clone(),
+                tenant.clone(),
+                group.clone(),
+            );
+            // The removal of the only entry deletes the shard.
+            *kv.before_shard_delete.lock().unwrap() = Some(Box::pin(async move {
+                plain.record(&tenant, &pn, &group).await.unwrap();
+                assert!(live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
+            }));
+        }
+        forgetting.forget(&pn, &group).await.unwrap();
+        assert!(!live(&inner, NAMESPACE, &GroupRecords::key(&pn, &group)).await);
+        assert!(
+            !plain
+                .indexed(&pn, &GroupRecords::hash(&pn, &group))
+                .await
+                .unwrap()
+        );
+    }
+
     /// A group forgotten leaves neither its record nor its index entry,
     /// and the other groups of the number keep theirs.
     #[tokio::test]

@@ -1036,10 +1036,14 @@ fails after the unbinding is logged (`warn`, target
 the operator finishes it with `DELETE
 /v1/admin/numbers/{phone_number_id}/group-records` (admin key; `200
 {"deleted": n}`, `404` for an id that is not digits; idempotent; audited
-`group_records_purged`). The same route works on a bound number: its groups
-answer `404` until its next `group_lifecycle_update` event or listing makes
-them its own again. The records are the service's notes, not Meta's data:
-no group is deleted at Meta.
+`group_records_purged`). The route takes only a number that is **not
+bound**: for a number still bound to a tenant it answers `409
+number_still_bound` and deletes nothing, because deleting a bound number's
+records is a deletion no other operator action performs and irreversible
+deletion is the owner's decision (design D382; unbind the WABA to purge,
+or allow the route for bound numbers, which is the owner's call). The
+records are the service's notes, not Meta's data: no group is deleted at
+Meta.
 
 **The picture** (roadmap M5f2; Meta's `groups/reference`, "Update group
 settings") is a form of one field, `file`: a JPEG of at most 5 MiB, square,

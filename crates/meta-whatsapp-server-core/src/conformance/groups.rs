@@ -12,6 +12,7 @@
 //! decisive test of roadmap M5f3 runs live.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -38,6 +39,7 @@ use crate::store::RecordStore;
 pub async fn run(backend: &dyn Backend) {
     a_purge_takes_a_numbers_records_and_index_and_no_others(backend).await;
     unbinding_and_deleting_purge_the_numbers_records(backend).await;
+    a_stale_unbinding_purges_nothing(backend).await;
 }
 
 /// A key/value store that remembers every key of the groups' two
@@ -45,6 +47,9 @@ pub async fn run(backend: &dyn Backend) {
 struct Tracked {
     inner: Arc<dyn KvStore>,
     keys: Mutex<BTreeSet<(String, String)>>,
+    /// Deletions of the namespaces' keys that reached the store (`delete`
+    /// and a compare and swap that deletes).
+    deletions: AtomicUsize,
 }
 
 impl Tracked {
@@ -52,6 +57,7 @@ impl Tracked {
         Arc::new(Self {
             inner,
             keys: Mutex::new(BTreeSet::new()),
+            deletions: AtomicUsize::new(0),
         })
     }
 
@@ -61,6 +67,12 @@ impl Tracked {
                 .lock()
                 .unwrap()
                 .insert((key.namespace().to_owned(), key.key().to_owned()));
+        }
+    }
+
+    fn deleting(&self, key: &StoreKey) {
+        if key.namespace() == NAMESPACE || key.namespace() == INDEX_NAMESPACE {
+            self.deletions.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -118,9 +130,13 @@ impl KvStore for Tracked {
         e: Expiry,
     ) -> Result<Option<u64>, StorageError> {
         self.note(key);
+        if new.is_none() {
+            self.deleting(key);
+        }
         self.inner.compare_and_swap(key, expected, new, e).await
     }
     async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.deleting(key);
         self.inner.delete(key).await
     }
 }
@@ -344,8 +360,10 @@ async fn connect(
 ///    untouched.
 /// 3. The operator unbinds WABA 3, whose token no longer opens (the path
 ///    that deletes without opening it): a4 purged.
-/// 4. The operator asks for b1's records: purged, with the count; a repeat
-///    finds none; a3 stays.
+/// 4. The operator asks for b1's records while it is bound: `409
+///    number_still_bound`, nothing deleted. Its WABA is unbound without a
+///    purge (a failed one), then the request purges it, with the count; a
+///    repeat finds none; a3 stays.
 /// 5. Tenant A is deleted (WABA 2 is disconnected on the way): a3 purged.
 ///
 /// Decisive: any one of the unbinding paths not purging fails its step.
@@ -406,7 +424,27 @@ pub async fn unbinding_and_deleting_purge_the_numbers_records(backend: &dyn Back
     assert_eq!(named(&now, &a3).len(), 10);
     assert_eq!(named(&now, &b1).len(), 10);
 
-    // 4. The operator's request for one number.
+    // 4. The operator's request for one number: refused while the number
+    // is bound (D382), deleting nothing; once its WABA is unbound without a
+    // purge (what a failed purge leaves), it finishes the job.
+    let deletions = kv.deletions.load(Ordering::SeqCst);
+    let refused = service.purge_group_records(b1.as_str()).await.unwrap_err();
+    assert_eq!(
+        (refused.status(), refused.code()),
+        (409, "number_still_bound")
+    );
+    assert_eq!(
+        kv.deletions.load(Ordering::SeqCst),
+        deletions,
+        "a refusal deletes nothing"
+    );
+    assert_eq!(named(&live().await, &b1).len(), 10, "b1 still bound");
+    assert!(rig.records.unbind_waba(&waba(w4)).await.unwrap());
+    assert_eq!(
+        named(&live().await, &b1).len(),
+        10,
+        "left by a failed purge"
+    );
     assert_eq!(service.purge_group_records(b1.as_str()).await.unwrap(), 10);
     assert_eq!(service.purge_group_records(b1.as_str()).await.unwrap(), 0);
     let now = live().await;
@@ -427,4 +465,34 @@ pub async fn unbinding_and_deleting_purge_the_numbers_records(backend: &dyn Back
     // Everything that was written under the namespaces is gone: the index
     // shards too (none of them was left behind by any of the paths).
     assert_eq!(now, BTreeSet::new(), "a key of the namespaces is left");
+}
+
+/// An unbinding that did not happen purges nothing: `Authorizer::unbind_if`
+/// with the epoch of a binding that is gone (another generation) unbinds
+/// nothing, and the number, still bound, keeps its records. The same epoch
+/// made current then purges.
+///
+/// Decisive: a purge that runs whether or not the unbinding happened.
+pub async fn a_stale_unbinding_purges_nothing(backend: &dyn Backend) {
+    let kv = Tracked::new(backend.kv());
+    let rig = rig(backend, kv.clone());
+    let t = tenant(&format!("grp-s-{}", &unique_digits()[20..]));
+    rig.records.create_tenant(&t, "").await.unwrap();
+    let (w, n) = (unique_digits(), pn(&unique_digits()));
+    connect(&rig, &t, &w, &[&n], true).await;
+    for i in 0..5 {
+        rig.groups.record(&t, &n, &group(i)).await.unwrap();
+    }
+    let current = rig.records.waba(&waba(&w)).await.unwrap().unwrap().epoch();
+    let mut stale = current.clone();
+    stale.generation += 1;
+    assert!(!rig.authz.unbind_if(&stale).await.unwrap());
+    assert!(rig.records.waba(&waba(&w)).await.unwrap().is_some());
+    assert_eq!(
+        naming(&kv.live().await, &n).len(),
+        5,
+        "a stale unbinding purged a bound number's records"
+    );
+    assert!(rig.authz.unbind_if(&current).await.unwrap());
+    assert_eq!(naming(&kv.live().await, &n), Vec::new());
 }
