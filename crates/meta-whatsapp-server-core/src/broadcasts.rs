@@ -27,7 +27,7 @@
 //! tenant's id, another number's id and an id that was never made are all
 //! `404 not_found`, before the jobs are read. A queued send finds its
 //! token the same way, from the record's tenant
-//! ([`Authorizer::broadcast_sender`], steps 4 and 5): a number unbound or
+//! (`Authorizer::broadcast_sender`, steps 4 and 5): a number unbound or
 //! attached by another tenant since sends nothing.
 //!
 //! **Rate** (D421). Each number's budget is the deployment's
