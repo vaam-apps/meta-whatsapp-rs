@@ -5387,9 +5387,7 @@ design's (§9).
     runs a dispatcher round too.
   - **Left, and why:** `tenants` on a platform key's endpoint (an endpoint
     is one tenant's: D112; M2m); a walk re-sealing the endpoints under a
-    new data key (a previous key keeps opening them; M2i); a connection
-    pool to the receivers (each attempt connects to the address it
-    checked; M2j); the pending webhooks-out metric of design §7.3 (M2k);
+    new data key (a previous key keeps opening them; M2i); the pending webhooks-out metric of design §7.3 (M2k);
     a fan-out read each page's event data (up to 8 MiB) to learn ids
     (an id-only outbox read, since M2l);
     replicas' clocks must agree within the lease (D107); a suspended
@@ -5872,7 +5870,7 @@ design's (§9).
     re-seals nothing) and `a_rotation_during_the_walk_is_not_overwritten`;
     `a_reseal_is_a_compare_and_set` at the port.
 
-- [ ] **M2j. A connection pool for webhooks out** (added by M2c; D109,
+- [x] **M2j. A connection pool for webhooks out** (added by M2c; D109,
   D113): connections kept between attempts to one endpoint, reused only
   for the address the attempt's own fresh lookup checked and the same
   host name, never past the allow-list.
@@ -5881,6 +5879,33 @@ design's (§9).
     one TCP connection; when the lookup answers another address, the
     attempt opens a connection to it, never the pooled one; a pooled
     connection to an address the list no longer admits is never used.
+  - **Landed:** `HyperSender` keeps connections idle between attempts
+    (design D400 to D404, the coordinator's decisions, swappable): a kept
+    connection is handed out only for an exact (checked address and port,
+    URL host name, scheme) match, taken after the core's fresh lookup and
+    allow-list check, whose pinned address is all the sender is given; the
+    answer's body must have been read whole (within its 1 KiB bound) and
+    the connection still open to be kept; 30 s idle (a task closes it),
+    2 per destination, 64 destinations, `WA_SERVER_WEBHOOK_POOL=off` and
+    `…_POOL_IDLE`, `…_POOL_PER_DESTINATION`, `…_POOL_DESTINATIONS`.
+    Decisive, in `meta-whatsapp-server-http`:
+    `a_pooled_connection_serves_only_the_address_its_attempt_checked`
+    (one connection for two attempts; another address, another
+    connection; a narrowed list refuses before the sender),
+    `two_host_names_at_one_address_do_not_share_a_connection`,
+    `over_tls_a_connection_is_reused_for_the_same_name_only`,
+    `the_scheme_is_part_of_the_key`,
+    `a_host_name_written_differently_is_one_key`,
+    `an_answer_that_closes_the_connection_is_not_pooled`,
+    `a_connection_past_its_idle_time_is_not_handed_out`,
+    `only_a_request_that_was_never_written_may_be_retried`,
+    `a_request_the_peer_read_is_not_sent_again`,
+    `a_body_past_the_limit_is_not_pooled_though_it_arrived_whole`,
+    `an_idle_connection_is_closed_after_the_idle_time` and
+    `with_the_pool_off_every_attempt_opens_its_own_connection`; end to
+    end `deliveries_to_one_endpoint_share_a_connection` (a rotation in
+    between included). There is no reqwest in the path. No metric and no
+    log (D404).
 
 - [x] **M2k. The pending webhooks-out metric** (design §7.3; added by
   M2c): the pending deliveries and the age of the oldest due one, on
