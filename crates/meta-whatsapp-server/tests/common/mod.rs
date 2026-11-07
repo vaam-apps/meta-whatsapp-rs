@@ -73,6 +73,7 @@ pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
+    deletions: AtomicUsize,
     writes: Mutex<Vec<(StoreKey, Option<Vec<u8>>)>>,
     /// Namespace whose next present read is followed by the record's
     /// deletion (see [`Self::lose_next_read_in`]).
@@ -85,6 +86,7 @@ impl CountingKv {
         Self {
             inner,
             vault_reads: AtomicUsize::new(0),
+            deletions: AtomicUsize::new(0),
             writes: Mutex::new(Vec::new()),
             lose_next: Mutex::new(None),
         }
@@ -124,6 +126,13 @@ impl CountingKv {
             .lock()
             .unwrap()
             .push((key.clone(), value.map(<[u8]>::to_vec)));
+    }
+
+    /// How many deletions reached the store so far: `delete` calls and
+    /// compare and swaps that delete (roadmap M5f3: a refused purge makes
+    /// none).
+    pub fn deletions(&self) -> usize {
+        self.deletions.load(Ordering::SeqCst)
     }
 
     /// Reads of the vault's namespace so far.
@@ -180,11 +189,15 @@ impl KvStore for CountingKv {
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
         self.wrote(key, new.as_deref());
+        if new.is_none() {
+            self.deletions.fetch_add(1, Ordering::SeqCst);
+        }
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
     }
     async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.deletions.fetch_add(1, Ordering::SeqCst);
         self.inner.delete(key).await
     }
 }

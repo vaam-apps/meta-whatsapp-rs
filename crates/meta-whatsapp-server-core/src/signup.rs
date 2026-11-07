@@ -602,7 +602,7 @@ impl Signups {
         };
         // The token `owned` read, then the binding it was made from: a
         // token stored or a binding made since is the new holder's.
-        if !offboarded.token_deleted || !records.unbind_waba_if(owned.epoch()).await? {
+        if !offboarded.token_deleted || !authz.unbind_if(owned.epoch()).await? {
             let moved = !owned.still_bound(authz).await.unwrap_or(false);
             tracing::warn!(
                 waba_id = waba_id.as_str(),
@@ -1200,7 +1200,7 @@ impl<'a> Signup<'a> {
         if step_of(error) == Some(steps::STORE_TOKEN)
             && let Some(Approval::Bound { epoch, fresh: true }) = approval
         {
-            match self.records().unbind_waba_if(epoch).await {
+            match self.authz.unbind_if(epoch).await {
                 Ok(_) => {}
                 Err(storage) => tracing::warn!(
                     error = %storage,
@@ -1643,7 +1643,7 @@ impl AccountUpdates {
             return Ok(());
         }
         let unbound = match &binding {
-            Some(binding) => records.unbind_waba_if(&binding.epoch()).await?,
+            Some(binding) => self.authz.unbind_if(&binding.epoch()).await?,
             None => false,
         };
         tracing::info!(
