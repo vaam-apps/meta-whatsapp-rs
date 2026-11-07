@@ -13,8 +13,8 @@ use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use meta_whatsapp_server_core::model::{TenantId, WabaBinding};
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
-    StoredEvent,
+    EventHeader, EventPage, EventQuery, GuardedBinding, HeaderPage, HeaderQuery, NewEvent, Outbox,
+    RECEIVED_MEDIA_ROWS, ReceivedMedia, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 use mongodb::bson::oid::ObjectId;
@@ -141,6 +141,19 @@ impl Step for PageStep<'_> {
         session: &'s mut ClientSession,
     ) -> Attempt<'s, EventPage> {
         Box::pin(outbox.page_attempt(session, self.0))
+    }
+}
+
+struct HeaderStep<'a>(&'a HeaderQuery);
+
+impl Step for HeaderStep<'_> {
+    type Output = HeaderPage;
+    fn attempt<'s>(
+        &'s self,
+        outbox: &'s MongoOutbox,
+        session: &'s mut ClientSession,
+    ) -> Attempt<'s, HeaderPage> {
+        Box::pin(outbox.headers_attempt(session, self.0))
     }
 }
 
@@ -776,6 +789,72 @@ impl MongoOutbox {
         })
     }
 
+    async fn headers_attempt(
+        &self,
+        session: &mut ClientSession,
+        query: &HeaderQuery,
+    ) -> Result<HeaderPage, Failure> {
+        let tenant = query.tenant.as_str();
+        let Some(stream) = self
+            .streams()
+            .find_one(doc! { "_id": tenant })
+            .session(&mut *session)
+            .await?
+        else {
+            return Ok(HeaderPage {
+                headers: Vec::new(),
+                more: false,
+                purged_through: 0,
+                high_water: 0,
+            });
+        };
+        let purged_through = i64_of(&stream, s::STREAMS, s::STREAM_PURGED)?;
+        let high_water = i64_of(&stream, s::STREAMS, s::STREAM_LAST)?;
+        let after = query.after.unwrap_or(purged_through);
+        let mut filter = doc! {
+            s::EVENT_STREAM: tenant,
+            s::EVENT_SEQUENCE: { "$gt": after },
+        };
+        if let Some(types) = &query.types {
+            filter.insert(s::EVENT_TYPE, doc! { "$in": types.clone() });
+        }
+        // The projection leaves `data` out: the server never sends it.
+        // One more than the limit tells `more`.
+        let mut headers = Vec::new();
+        let mut cursor = self
+            .events()
+            .find(filter)
+            .sort(doc! { s::EVENT_SEQUENCE: 1 })
+            .limit(i64_saturating(query.limit.saturating_add(1)))
+            .projection(doc! {
+                "_id": 1,
+                s::EVENT_SEQUENCE: 1,
+                s::EVENT_TENANT: 1,
+                s::EVENT_TYPE: 1,
+            })
+            .session(&mut *session)
+            .await?;
+        while let Some(row) = cursor.next(&mut *session).await {
+            let row = row?;
+            headers.push(EventHeader {
+                sequence: i64_of(&row, s::EVENTS, s::EVENT_SEQUENCE)?,
+                id: str_of(&row, s::EVENTS, "_id")?.to_owned(),
+                tenant: optional_str(&row, s::EVENTS, s::EVENT_TENANT)?
+                    .map(|t| TenantId::parse(t).ok_or_else(|| corrupt(s::EVENTS, s::EVENT_TENANT)))
+                    .transpose()?,
+                event_type: str_of(&row, s::EVENTS, s::EVENT_TYPE)?.to_owned(),
+            });
+        }
+        let more = headers.len() > query.limit;
+        headers.truncate(query.limit);
+        Ok(HeaderPage {
+            headers,
+            more,
+            purged_through,
+            high_water,
+        })
+    }
+
     async fn purge_attempt(
         &self,
         session: &mut ClientSession,
@@ -940,6 +1019,10 @@ impl Outbox for MongoOutbox {
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
         self.transaction(&PageStep(query)).await
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        self.transaction(&HeaderStep(query)).await
     }
 
     async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {

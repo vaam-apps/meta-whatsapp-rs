@@ -36,7 +36,9 @@ use meta_whatsapp_rs::core::ids::MediaId;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_server_core::erasure::Erasures;
 use meta_whatsapp_server_core::model::TenantId;
-use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox, ReceivedMedia};
+use meta_whatsapp_server_core::outbox::{
+    EventPage, EventQuery, HeaderPage, HeaderQuery, NewEvent, Outbox, ReceivedMedia,
+};
 use meta_whatsapp_server_core::store::StoreResult;
 
 /// The control: each `Authorizer` accepts what it made, and the service
@@ -322,6 +324,9 @@ struct Untouched;
 impl Outbox for Untouched {
     async fn insert(&self, _: &NewEvent) -> StoreResult<Option<i64>> {
         panic!("the outbox was written")
+    }
+    async fn headers_after(&self, _: &HeaderQuery) -> StoreResult<HeaderPage> {
+        panic!("the outbox was read")
     }
     async fn page(&self, _: &EventQuery) -> StoreResult<EventPage> {
         panic!("the outbox was read")
