@@ -201,6 +201,21 @@ pub struct Attempt {
     pub disable_if_failing_since: Option<OffsetDateTime>,
 }
 
+/// The backlog of webhook deliveries (`wa_server_webhooks_out_*` metrics,
+/// roadmap M2k): every pending one, whatever its endpoint or tenant. No
+/// id, URL or tenant: it is a count and an instant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingDeliveries {
+    /// The deliveries still pending (not delivered, not failed): due or
+    /// waiting for a retry, claimed or not, of an enabled endpoint or not.
+    pub count: u64,
+    /// The earliest `next_attempt_at` among the pending ones due by the
+    /// instant asked (`next_attempt_at <= now`); `None` when none is due.
+    /// A retry waiting for its backoff is not due, so it never ages the
+    /// backlog.
+    pub oldest_due: Option<OffsetDateTime>,
+}
+
 /// The webhooks-out records. Implementations must be safe to share
 /// between replicas (a shared database) or tasks (memory).
 #[async_trait]
@@ -313,4 +328,10 @@ pub trait WebhookStore: Send + Sync + 'static {
     /// retried by hand yesterday stays). How many went. No lock of its
     /// own: housekeeping runs it.
     async fn purge_deliveries(&self, before: OffsetDateTime) -> StoreResult<u64>;
+
+    /// The pending deliveries, every tenant's, and the earliest due by
+    /// `now` ([`PendingDeliveries`]): what the backlog metrics read. A
+    /// read of the pending set only (on Postgres, the partial index
+    /// `wa_server_webhook_deliveries_due_idx`); the caller bounds its time.
+    async fn pending(&self, now: OffsetDateTime) -> StoreResult<PendingDeliveries>;
 }

@@ -13,7 +13,7 @@ use meta_whatsapp_server_core::model::{Listing, PageRequest, TenantId, TenantSta
 use meta_whatsapp_server_core::store::{StoreResult, listing};
 use meta_whatsapp_server_core::webhooks_out::store::{
     Attempt, ClaimRequest, ClaimToken, Claimed, CreateOutcome, EndpointChange, NewDelivery,
-    NewEndpoint, Outcome, WebhookStore,
+    NewEndpoint, Outcome, PendingDeliveries, WebhookStore,
 };
 use meta_whatsapp_server_core::webhooks_out::{
     Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId, SealedSecret,
@@ -489,5 +489,22 @@ impl WebhookStore for MemoryWebhookStore {
                 || r.delivery.last_attempt_at.unwrap_or(r.delivery.created_at) >= before
         });
         Ok(u64::try_from(held - state.deliveries.len()).unwrap_or(u64::MAX))
+    }
+
+    async fn pending(&self, now: OffsetDateTime) -> StoreResult<PendingDeliveries> {
+        let state = self.lock();
+        let mut count = 0_u64;
+        let mut oldest_due: Option<OffsetDateTime> = None;
+        for row in state.deliveries.values() {
+            let d = &row.delivery;
+            if d.status != DeliveryStatus::Pending {
+                continue;
+            }
+            count += 1;
+            if let Some(due) = d.next_attempt_at.filter(|due| *due <= now) {
+                oldest_due = Some(oldest_due.map_or(due, |best| best.min(due)));
+            }
+        }
+        Ok(PendingDeliveries { count, oldest_due })
     }
 }

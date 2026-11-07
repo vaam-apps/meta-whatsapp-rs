@@ -182,6 +182,9 @@ impl Default for Settings {
     }
 }
 
+/// How long a scrape waits for the webhooks-out backlog.
+pub const BACKLOG_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Shared state. Cheap to clone.
 #[derive(Clone)]
 pub struct AppState {
@@ -215,6 +218,9 @@ struct Inner {
     streams: Streams,
     registration_attempts: RegistrationAttempts,
     webhooks: WebhookEndpoints,
+    /// Held while a scrape reads the webhooks-out backlog: another scrape
+    /// meanwhile serves the values read last, never a second query.
+    backlog_read: tokio::sync::Mutex<()>,
     flows: Option<FlowsEndpoint>,
 }
 
@@ -333,6 +339,7 @@ impl AppState {
                 streams,
                 registration_attempts,
                 webhooks,
+                backlog_read: tokio::sync::Mutex::new(()),
                 flows,
                 settings,
             }),
@@ -472,6 +479,21 @@ impl AppState {
     /// The live event streams of this replica.
     pub(crate) fn streams(&self) -> &Streams {
         &self.inner.streams
+    }
+
+    /// Read the webhooks-out backlog into the metrics (roadmap M2k), as a
+    /// scrape asks: the pending deliveries and the age of the oldest due
+    /// one, counts only. One read at a time, and none for longer than
+    /// [`BACKLOG_READ_TIMEOUT`]: a slow store never holds a scrape, which
+    /// serves the values read last (a failed read leaves them, too).
+    pub(crate) async fn read_backlog(&self) {
+        let Ok(_reading) = self.inner.backlog_read.try_lock() else {
+            return;
+        };
+        let read = tokio::time::timeout(BACKLOG_READ_TIMEOUT, self.inner.webhooks.backlog()).await;
+        if let Ok(Ok(Some(backlog))) = read {
+            self.inner.metrics.webhooks_out_backlog(backlog);
+        }
     }
 
     /// Live event streams open now on this replica.
