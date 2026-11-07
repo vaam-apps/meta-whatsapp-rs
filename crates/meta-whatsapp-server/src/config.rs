@@ -35,6 +35,7 @@
 //! | `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `ffmpeg` from `PATH` | with `ffmpeg` only: the program to run (an absolute path is safest); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply) names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches (roadmap M5c5, design D37); `off`: a send names none and Meta resolves the account from the token; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow: the India compliance information declaration (`PUT /v1/numbers/{pn}/compliance-info`; roadmap M5c3, design D192), and the operator the max price agreement's signing (`POST /v1/admin/businesses/{business_id}/max-price-agreement`; roadmap M5h, design D231); off, each is `403 feature_not_available` with nothing asked of Meta (the Official Business Account application and the contact book erasure are not gated by it); pending the owner's confirmation before the first release |
+//! | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on` lets a key holding the scope `call_credentials` read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`; roadmap M5e2, design D410); off, it is `403 feature_not_available` with nothing asked of Meta, whichever key asks; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
 //! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
@@ -1027,6 +1028,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         legal_acts: legal_acts(r)?,
         flows_deployment_key_fallback: flows_deployment_key_fallback(r)?,
         send_messaging_account_id: send_messaging_account_id(r)?,
+        call_sip_credentials: call_sip_credentials(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
@@ -1055,6 +1057,21 @@ fn legal_acts(r: &Reader<'_>) -> Result<bool, ConfigError> {
         Some("on") => Ok(true),
         Some(_) => Err(ConfigError::Invalid {
             name: "WA_SERVER_LEGAL_ACTS",
+            reason: "expected `off` or `on`",
+        }),
+    }
+}
+
+/// `WA_SERVER_CALL_SIP_CREDENTIALS` (roadmap M5e2, design D410): `off`
+/// (the default) or `on`. On, a key holding the scope `call_credentials`
+/// may read a SIP server's password.
+fn call_sip_credentials(r: &Reader<'_>) -> Result<bool, ConfigError> {
+    const NAME: &str = "WA_SERVER_CALL_SIP_CREDENTIALS";
+    match r.plain(NAME)?.as_deref().map(str::trim) {
+        None | Some("" | "off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(_) => Err(ConfigError::Invalid {
+            name: NAME,
             reason: "expected `off` or `on`",
         }),
     }

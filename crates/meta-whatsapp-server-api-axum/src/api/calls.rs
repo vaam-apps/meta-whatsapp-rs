@@ -29,7 +29,7 @@
 use std::collections::BTreeMap;
 
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::State;
+use meta_whatsapp_rs::webhooks::axum::extract::{Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::calls::{
@@ -37,6 +37,7 @@ use meta_whatsapp_server_core::calls::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use meta_whatsapp_server_http::api::media::read_file_form;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, rfc3339};
@@ -420,6 +421,71 @@ pub struct StartedView {
     pub call_id: String,
 }
 
+/// A SIP server with the password Meta generated for it: **a secret**,
+/// answered by the one route behind the scope `call_credentials`. No
+/// `Debug` output of its fields.
+#[derive(Serialize, ToSchema)]
+#[schema(as = CallSipCredential)]
+pub struct SipCredentialView {
+    /// The server's host name.
+    pub hostname: String,
+    /// Its port, when Meta reports one.
+    #[schema(required = true)]
+    pub port: Option<u16>,
+    /// The digest password Meta generated for the business on this
+    /// server: authenticates the business to Meta. A secret: keep it out
+    /// of logs and of any store that is not a secret manager. Null when
+    /// Meta did not send one.
+    #[schema(required = true)]
+    pub sip_user_password: Option<String>,
+}
+
+impl std::fmt::Debug for SipCredentialView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SipCredentialView").finish_non_exhaustive()
+    }
+}
+
+/// A number's SIP servers with their passwords.
+#[derive(Serialize, ToSchema)]
+#[schema(as = CallSipCredentials)]
+pub struct SipCredentialsView {
+    /// `ENABLED` or `DISABLED`; null when SIP was never configured.
+    #[schema(required = true)]
+    pub status: Option<String>,
+    /// The servers, each with its password.
+    pub servers: Vec<SipCredentialView>,
+}
+
+impl std::fmt::Debug for SipCredentialsView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SipCredentialsView")
+            .field("servers", &self.servers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The voicemail announcement that was uploaded.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = CallVoicemailAnnouncementUploaded)]
+pub struct AnnouncementUploadedView {
+    /// Its media id: what `voicemail.audio.default.announcement_media_id`
+    /// of the call settings takes. The media is usable as a voicemail
+    /// announcement only, not as a message's media.
+    pub media_id: String,
+}
+
+/// A voicemail announcement's form (`multipart/form-data`).
+#[derive(Debug, ToSchema)]
+#[schema(as = CallVoicemailAnnouncementUpload)]
+pub struct VoicemailUpload {
+    /// An Ogg file with the Opus codec (judged by its bytes, not by the
+    /// part's type), shorter than 60 seconds, at most 16 MiB. The form
+    /// takes no other field.
+    #[schema(value_type = String, format = Binary)]
+    pub file: Vec<u8>,
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 fn calls<'a>(
@@ -433,6 +499,7 @@ fn calls<'a>(
         number.capability(state),
         state.call_records(),
     )?
+    .with_sip_credentials(state.settings().call_sip_credentials)
     .observed_by(state.metrics())
     .naming_the_account(state.settings().send_messaging_account_id))
 }
@@ -596,6 +663,134 @@ pub(crate) async fn get_call_permissions(
             })
             .collect(),
     }))
+}
+
+/// `GET /v1/numbers/{pn}/call-settings/sip-credentials`: the number's SIP
+/// servers with their passwords.
+#[utoipa::path(
+    get,
+    path = "/v1/numbers/{pn}/call-settings/sip-credentials",
+    tag = "calls",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The SIP servers, each with its password: the only answer of the service that carries one. `Cache-Control: no-store`. Audited as `call_sip_credentials_read` (who and which number, never a host or a password)", body = SipCredentialsView,
+            headers(("Cache-Control" = String, description = "`no-store`"))),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden` (the key lacks the scope `call_credentials`), `tenant_suspended`, `feature_not_available` (the deployment has not enabled the read, `WA_SERVER_CALL_SIP_CREDENTIALS`: nothing was asked of Meta), or Meta's refusal (`calling_temporarily_disabled`)", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`)", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_call_sip_credentials(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedNumber,
+) -> Result<Response, ApiError> {
+    let credentials = calls(&state, &caller, &owned)?.sip_credentials().await?;
+    let view = SipCredentialsView {
+        status: credentials.status.clone(),
+        servers: credentials
+            .servers
+            .iter()
+            .map(|server| SipCredentialView {
+                hostname: server.hostname().to_owned(),
+                port: server.port(),
+                sip_user_password: server.password().map(str::to_owned),
+            })
+            .collect(),
+    };
+    let mut response = Json(view).into_response();
+    response.headers_mut().insert(
+        meta_whatsapp_rs::webhooks::axum::http::header::CACHE_CONTROL,
+        meta_whatsapp_rs::webhooks::axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+/// Upload the announcement: `201` with its media id.
+async fn upload_announcement(
+    service: &Calls<'_>,
+    audio: &domain::VoicemailAudio,
+) -> Result<Success, ApiError> {
+    let uploaded = service.upload_voicemail_announcement(audio).await?;
+    Success::json(
+        StatusCode::CREATED,
+        &AnnouncementUploadedView {
+            media_id: uploaded.media_id,
+        },
+    )
+}
+
+/// `POST /v1/numbers/{pn}/call-settings/voicemail-announcement`: upload an
+/// audio file as the number's voicemail announcement.
+#[utoipa::path(
+    post,
+    path = "/v1/numbers/{pn}/call-settings/voicemail-announcement",
+    tag = "calls",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and file never upload twice"),
+    ),
+    request_body(content = VoicemailUpload, content_type = "multipart/form-data"),
+    responses(
+        (status = 201, description = "Uploaded on this number with `use_case=call_voicemail_announcement`: name the media id in the settings' `voicemail.audio.default.announcement_media_id`. Audited", body = AnnouncementUploadedView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 413, description = "`media_too_large`: larger than 16 MiB or `WA_SERVER_MEDIA_MAX_BYTES`; `payload_too_large`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `file` (not Ogg with Opus, empty or missing) or `body` (not a form of `file` alone, or its framing past 16 KiB); `idempotency_key_reused`: nothing sent", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's rate limit, or its share of the replica's media slots busy", body = ErrorBody),
+        (status = 502, description = "Meta failed (`media_upload_failed`, …)", body = ErrorBody),
+        (status = 504, description = "`timeout`: the upload may have happened", body = ErrorBody),
+    )
+)]
+pub(crate) async fn upload_call_voicemail_announcement(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedNumber,
+    KeyHeader(key): KeyHeader,
+    request: Request,
+) -> Response {
+    let service = match calls(&state, &caller, &owned) {
+        Ok(service) => service,
+        Err(error) => return error.into_response(),
+    };
+    // The slot is taken before the body is read, as an upload's: a body
+    // that trickles in holds one of its tenant's slots, never another's.
+    let permit = match service.transfer_slot(state.media_slots()) {
+        Ok(permit) => permit,
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let cap = domain::VOICEMAIL_MAX_BYTES.min(state.settings().media_max_bytes);
+    let audio = match read_file_form(cap, request).await {
+        Ok(data) => domain::VoicemailAudio::new(data),
+        Err(error) => return error.into_response(),
+    };
+    let audio = match audio {
+        Ok(audio) => audio,
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let fingerprint = Fingerprint::upload_call_voicemail_announcement(owned.phone_number_id(), &audio);
+    let response = state
+        .idempotent(
+            &caller,
+            key,
+            fingerprint,
+            upload_announcement(&service, &audio),
+        )
+        .await;
+    drop(permit);
+    response
 }
 
 /// Place the call: `201` with its id.

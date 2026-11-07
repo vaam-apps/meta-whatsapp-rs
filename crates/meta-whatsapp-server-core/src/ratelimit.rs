@@ -127,6 +127,7 @@ impl RouteClass {
             | Operation::GetCallSettings
             | Operation::GetCallPermissions
             | Operation::GetCallAnalytics
+            | Operation::GetCallSipCredentials
             | Operation::GetBusinessVerification
             | Operation::GetSolutionMigrationIntent
             | Operation::GetBillingMigration
@@ -158,6 +159,7 @@ impl RouteClass {
             | Operation::SendMessage
             | Operation::MarkRead
             | Operation::UploadMedia
+            | Operation::UploadCallVoicemailAnnouncement
             | Operation::StartMediaUpload
             | Operation::UploadMediaChunk
             | Operation::DeleteMedia
@@ -675,6 +677,8 @@ mod tests {
             ("reject_call", RouteClass::Send),
             ("terminate_call", RouteClass::Send),
             ("get_call_analytics", RouteClass::Read),
+            ("get_call_sip_credentials", RouteClass::Read),
+            ("upload_call_voicemail_announcement", RouteClass::Send),
             ("get_business_verification", RouteClass::Read),
             ("create_solution_migration_intent", RouteClass::Send),
             ("get_solution_migration_intent", RouteClass::Read),
