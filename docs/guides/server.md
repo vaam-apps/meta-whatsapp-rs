@@ -2474,6 +2474,10 @@ of them reaches the endpoint afterwards (a tenant key finds it `404`);
 `PATCH` with `tenants` replaces the list. A deleted tenant leaves the
 list and its deliveries go; the list never grows by itself. `"*"` is not
 built.
+The endpoint counts toward the `WA-Tenant`'s ten endpoints, and a tenant
+key of that tenant cannot see or delete it; create such endpoints once
+every replica runs the release that has `tenants` (an older replica would
+let a tenant key of the owner change the URL).
 
 A tenant (scope `webhooks`) makes an endpoint:
 
