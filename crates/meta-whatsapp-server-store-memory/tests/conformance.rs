@@ -20,7 +20,8 @@ use meta_whatsapp_server_core::conformance;
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::notify::{EventNotifier, Hub, LocalNotifier, Subscription, Wakeup};
 use meta_whatsapp_server_core::outbox::{
-    AfterMove, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    AfterMove, EventPage, EventQuery, GuardedBinding, HeaderPage, HeaderQuery, NewEvent, Outbox,
+    RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
@@ -215,6 +216,13 @@ impl Outbox for IgnoresTheGuard {
         Ok(Some(sequence))
     }
 
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        let page = self
+            .page(&query.as_event_query(meta_whatsapp_server_core::events::MAX_PAGE_DATA_BYTES))
+            .await?;
+        Ok(HeaderPage::from_page(page))
+    }
+
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
         let rows = self.rows.lock().unwrap();
         let stream: Vec<&StoredEvent> = rows
@@ -389,6 +397,10 @@ impl Outbox for RewritesTheGuard {
             ..event.clone()
         };
         self.inner.insert(&event).await
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        self.inner.headers_after(query).await
     }
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
@@ -598,6 +610,13 @@ struct IgnoresTheTenant {
 impl Outbox for IgnoresTheTenant {
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
         self.inner.insert(event).await
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        let page = self
+            .page(&query.as_event_query(meta_whatsapp_server_core::events::MAX_PAGE_DATA_BYTES))
+            .await?;
+        Ok(HeaderPage::from_page(page))
     }
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {

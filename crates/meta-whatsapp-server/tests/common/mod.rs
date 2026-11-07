@@ -295,6 +295,13 @@ impl EventStore for RecordingEvents {
         Ok(outcome)
     }
 
+    async fn headers_after(
+        &self,
+        query: &meta_whatsapp_server_core::outbox::HeaderQuery,
+    ) -> Result<meta_whatsapp_server_core::outbox::HeaderPage, StorageError> {
+        self.inner.headers_after(query).await
+    }
+
     async fn page(&self, query: &EventQuery) -> Result<EventPage, StorageError> {
         self.inner.page(query).await
     }

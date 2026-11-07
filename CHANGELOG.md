@@ -12,6 +12,19 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Changed (roadmap M2l)
+
+- **The webhook fan-out reads events' ids, not their data** (roadmap
+  M2l; D106): `Outbox::headers_after` answers the sequences, ids, tenants
+  and types after a cursor without the data (Postgres selects only those
+  columns, MongoDB projects them), and `Dispatcher::fan_out` uses it; it
+  paged up to 8 MiB of data a round per endpoint to learn the ids. The
+  delivery attempt still reads its event whole by id. No migration, no
+  API change. **Breaking for an `Outbox` implemented outside this
+  repository** (before the first release): `headers_after` is a required
+  method (`HeaderPage::from_page` answers it from `page`, reading the
+  data).
+
 ### Added
 
 - **A Flow key per tenant** (roadmap M5d2, first slice; proposals D370 to
