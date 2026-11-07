@@ -119,9 +119,7 @@ impl ConversationStore for FailingOwnerWrites {
         ownership: ThreadOwnership,
     ) -> Result<bool> {
         if self.failing.load(Ordering::SeqCst) {
-            return Err(StorageError::Backend(anyhow::anyhow!(
-                "the store is down"
-            )));
+            return Err(StorageError::Backend(anyhow::anyhow!("the store is down")));
         }
         self.inner.set_thread_owner(key, ownership).await
     }
@@ -173,6 +171,8 @@ impl ConversationStore for FailingOwnerWrites {
         phone_number_id: Option<&PhoneNumberId>,
         keep_last: usize,
     ) -> Result<Purged> {
-        self.inner.trim_conversations(phone_number_id, keep_last).await
+        self.inner
+            .trim_conversations(phone_number_id, keep_last)
+            .await
     }
 }

@@ -856,7 +856,10 @@ async fn a_record_that_cannot_be_stored_does_not_fail_the_action_or_name_the_use
             "pass",
             json!({"user": {"phone": PHONE}, "target_role": "marketing", "metadata": note}),
         ),
-        ("take", json!({"user": {"user_id": BSUID}, "metadata": note})),
+        (
+            "take",
+            json!({"user": {"user_id": BSUID}, "metadata": note}),
+        ),
         ("release", json!({"user": {"wa_id": WA_ID}})),
     ] {
         h.graph.push_json(200, accepted());
@@ -883,7 +886,10 @@ async fn a_record_that_cannot_be_stored_does_not_fail_the_action_or_name_the_use
         "{logs}"
     );
     for line in &lines {
-        assert_eq!(line["target"], "meta_whatsapp_server::api::routing", "{line}");
+        assert_eq!(
+            line["target"], "meta_whatsapp_server::api::routing",
+            "{line}"
+        );
         assert!(line["fields"]["kind"].is_string(), "{line}");
     }
     let mut secrets = Secrets::new(
