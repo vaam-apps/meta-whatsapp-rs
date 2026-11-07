@@ -36,6 +36,11 @@ async fn two_tenants() -> Harness {
     // M5c1): without one, the route asks Meta nothing.
     let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
         app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
+        // The SIP password read (roadmap M5e2, D410) answers only when the
+        // deployment enables it, before the vault: on here so that the
+        // sweeps below reach it as every other owned route
+        // (`tests/calls_m5e2.rs` has it off).
+        call_sip_credentials: true,
         ..common::test_settings()
     });
     h.tenant(A).await;

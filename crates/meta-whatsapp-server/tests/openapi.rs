@@ -452,6 +452,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/blocked-users",
             "POST /v1/numbers/{pn}/blocked-users/unblock",
             "POST /v1/numbers/{pn}/broadcasts",
+            "POST /v1/numbers/{pn}/call-settings/voicemail-announcement",
             "POST /v1/numbers/{pn}/calls",
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/conversations/{contact}/read",

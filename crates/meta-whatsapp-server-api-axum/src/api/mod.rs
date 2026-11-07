@@ -297,11 +297,17 @@ fn calls_routes() -> OpenApiRouter<Grant> {
             calls::update_call_settings
         ))
         .routes(routes!(calls::get_call_permissions))
+        .routes(routes!(calls::upload_call_voicemail_announcement))
         .routes(routes!(calls::connect_call))
         .routes(routes!(calls::pre_accept_call))
         .routes(routes!(calls::accept_call))
         .routes(routes!(calls::reject_call))
         .routes(routes!(calls::terminate_call))
+}
+
+/// Roadmap M5e2: the SIP password, behind a scope of its own.
+fn call_credentials_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new().routes(routes!(calls::get_call_sip_credentials))
 }
 
 fn groups_routes() -> OpenApiRouter<Grant> {
@@ -579,6 +585,7 @@ fn api_routes(
         .merge(tenant(routing_routes(), Scope::Routing))
         .merge(tenant(broadcasts_routes(), Scope::Broadcasts))
         .merge(tenant(calls_routes(), Scope::Calls))
+        .merge(tenant(call_credentials_routes(), Scope::CallCredentials))
         .merge(tenant(partners_routes(), Scope::Partners))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))

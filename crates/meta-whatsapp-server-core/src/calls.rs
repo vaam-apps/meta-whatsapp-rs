@@ -5,6 +5,8 @@
 //! | Operation | Graph call |
 //! | --- | --- |
 //! | [`Calls::settings`] | `GET /{pn}/settings` (the `calling` object; **never** with `include_sip_credentials`) |
+//! | [`Calls::sip_credentials`] | `GET /{pn}/settings?include_sip_credentials=true`: the one place it is sent (scope `call_credentials` and the deployment's setting; roadmap M5e2) |
+//! | [`Calls::upload_voicemail_announcement`] | `POST /{pn}/media` with `use_case=call_voicemail_announcement` (roadmap M5e2) |
 //! | [`Calls::update_settings`] | `POST /{pn}/settings` with `{"calling": …}` (a voicemail announcement's media looked up first, as the number's own) |
 //! | [`Calls::permissions`] | `GET /{pn}/call_permissions?user_wa_id=…` or `?recipient=…` |
 //! | [`Calls::connect`] | `POST /{pn}/calls` with `action: connect` and the caller's SDP offer |
@@ -42,8 +44,9 @@
 //! **Secrets.** An SDP offer or answer carries the endpoint's addresses and
 //! its ICE credentials, and a SIP server's password authenticates the
 //! business to Meta. Neither reaches a log, an error, an audit event or
-//! `Debug`; the SIP password is never asked of Meta (`include_sip_credentials`
-//! is never sent) and never answered; a failed call answers Meta's code and
+//! `Debug`; the SIP password is asked of Meta (`include_sip_credentials`) and
+//! answered only by [`Calls::sip_credentials`], never by [`Calls::settings`];
+//! a failed call answers Meta's code and
 //! the service's kind, never Meta's text (it may quote an SDP line).
 //!
 //! **Recording and transcription are the caller's per-call choice** and the
@@ -62,6 +65,7 @@ use meta_whatsapp_rs::client::calling::settings::{
 use meta_whatsapp_rs::client::calling::{
     AcceptOptions, CallPermissions, CallRecording, CallTranscription, ConnectCall,
 };
+use meta_whatsapp_rs::client::media::UploadOptions;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{CallId, MediaId, PhoneNumberId, UserId};
 use meta_whatsapp_rs::core::recipient::Recipient;
@@ -79,6 +83,7 @@ use crate::error::ServiceError;
 use crate::messages::is_e164;
 use crate::model::TenantId;
 use crate::observe::Observer;
+use crate::ratelimit::{Slot, Slots};
 use crate::request::typed_graph_id;
 
 /// The target of this module's log lines.
@@ -101,6 +106,9 @@ const CALL_PRE_ACCEPTED: &str = "call_pre_accepted";
 const CALL_ACCEPTED: &str = "call_accepted";
 const CALL_REJECTED: &str = "call_rejected";
 const CALL_TERMINATED: &str = "call_terminated";
+/// Roadmap M5e2, design D410 and D411.
+const SIP_CREDENTIALS_READ: &str = "call_sip_credentials_read";
+const VOICEMAIL_UPLOADED: &str = "call_voicemail_announcement_uploaded";
 
 /// Longest a call id may be: the service's own bound (Meta's ids are
 /// `wacid.` and about thirty characters; none is documented).
@@ -687,7 +695,7 @@ pub struct Restriction {
 }
 
 /// `settings` with every SIP server's password removed: the second lock
-/// after the request's (`include_sip_credentials` is never sent), for a
+/// after the request's (`include_sip_credentials` is not sent), for a
 /// password Meta answers anyway. Decisive: the unit test sets one and reads
 /// it back through the field, which no serializer can hide.
 fn without_sip_passwords(mut settings: CallingSettings) -> CallingSettings {
@@ -717,6 +725,119 @@ impl Settings {
     }
 }
 
+/// One SIP server of a number's calling settings, with the password Meta
+/// generated for it: **a secret** (D410). Its `Debug` shows neither the
+/// host nor the password; [`Self::password`] is the one way to it, for
+/// the answer of the route behind `call_credentials` and nothing else.
+#[derive(Clone)]
+pub struct SipCredential {
+    hostname: String,
+    port: Option<u16>,
+    password: Option<meta_whatsapp_rs::client::calling::settings::SipPassword>,
+}
+
+impl fmt::Debug for SipCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SipCredential").finish_non_exhaustive()
+    }
+}
+
+impl SipCredential {
+    /// The server's host name.
+    pub fn hostname(&self) -> &str {
+        &self.hostname
+    }
+
+    /// Its port, when Meta reports one.
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// The password Meta generated, when it sent one. Never log it, store
+    /// it or put it in an error; the answer to the caller is the only
+    /// place it goes.
+    pub fn password(&self) -> Option<&str> {
+        self.password
+            .as_ref()
+            .map(meta_whatsapp_rs::client::calling::settings::SipPassword::expose_secret)
+    }
+}
+
+/// The SIP servers of a number's calling settings, with their passwords
+/// (D410). No `Debug` output of its own beyond a count.
+#[derive(Clone)]
+pub struct SipCredentials {
+    /// `ENABLED` or `DISABLED`, as Meta writes it (none when SIP was never
+    /// configured).
+    pub status: Option<String>,
+    /// The servers, each with its password.
+    pub servers: Vec<SipCredential>,
+}
+
+impl fmt::Debug for SipCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SipCredentials")
+            .field("servers", &self.servers.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The largest voicemail announcement taken: Meta's audio limit (16 MiB),
+/// far above what an announcement under 60 seconds needs.
+pub const VOICEMAIL_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A voicemail announcement's file, checked before any request: not empty,
+/// at most [`VOICEMAIL_MAX_BYTES`], and Ogg with the Opus codec by its own
+/// first bytes (`OggS` and, in the first page, `OpusHead`), the format
+/// `calling/call-settings` requires. The part's claimed type is never
+/// trusted. Its length (under 60 seconds) is Meta's to check: the service
+/// decodes no audio. `Debug` shows no byte.
+#[derive(Clone)]
+pub struct VoicemailAudio {
+    data: bytes::Bytes,
+}
+
+impl fmt::Debug for VoicemailAudio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoicemailAudio")
+            .field("len", &self.data.len())
+            .finish()
+    }
+}
+
+impl VoicemailAudio {
+    /// The file.
+    pub fn data(&self) -> &bytes::Bytes {
+        &self.data
+    }
+
+    /// Check `data`.
+    ///
+    /// # Errors
+    ///
+    /// `413 media_too_large` over [`VOICEMAIL_MAX_BYTES`]; `422
+    /// invalid_request` on `file` when it is empty or is not Ogg with
+    /// Opus.
+    pub fn new(data: bytes::Bytes) -> Result<Self, ServiceError> {
+        if u64::try_from(data.len()).unwrap_or(u64::MAX) > VOICEMAIL_MAX_BYTES {
+            return Err(ServiceError::new(crate::error::ErrorCode::MEDIA_TOO_LARGE));
+        }
+        let head = &data[..data.len().min(128)];
+        if !data.starts_with(b"OggS") || !head.windows(8).any(|w| w == b"OpusHead") {
+            return Err(ServiceError::invalid("file"));
+        }
+        Ok(Self { data })
+    }
+}
+
+/// A voicemail announcement that was uploaded: its media id, which the
+/// settings' `voicemail.audio.default.announcement_media_id` takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnouncementUploaded {
+    /// The media id.
+    pub media_id: String,
+}
+
 // ─── The operations ──────────────────────────────────────────────────────
 
 /// The calling operations on a number of the caller's tenant: an
@@ -729,6 +850,8 @@ pub struct Calls<'a> {
     number: &'a OwnedNumber,
     records: &'a CallRecords,
     observer: &'a dyn Observer,
+    /// [`Self::with_sip_credentials`].
+    sip_credentials: bool,
     /// [`Self::naming_the_account`].
     names_account: bool,
 }
@@ -771,8 +894,19 @@ impl<'a> Calls<'a> {
             number,
             records,
             observer: &(),
+            sip_credentials: false,
             names_account: false,
         })
+    }
+
+    /// Whether [`Self::sip_credentials`] answers (the deployment's
+    /// `WA_SERVER_CALL_SIP_CREDENTIALS`, design D410). Off until called:
+    /// the read is `403 feature_not_available` and nothing is asked of
+    /// Meta. The route's scope is checked by the adapter before this.
+    #[must_use]
+    pub fn with_sip_credentials(mut self, enabled: bool) -> Self {
+        self.sip_credentials = enabled;
+        self
     }
 
     /// Whether every action of a call (`connect`, `pre_accept`, `accept`,
@@ -948,6 +1082,117 @@ impl<'a> Calls<'a> {
         match self.client().permissions(user).await {
             Ok(permissions) => Ok(Permissions::from(permissions)),
             Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// The number's SIP servers **with their passwords** (design D410,
+    /// roadmap M5e2): `GET /{pn}/settings?include_sip_credentials=true`,
+    /// the one place the service sends that parameter. The password is
+    /// returned to the caller and nowhere else: not cached, not logged, in
+    /// no audit event, no error and no idempotency record (a `GET` has
+    /// none). The caller's audit event `call_sip_credentials_read` says
+    /// who read which number's, never a host or a password. A failure
+    /// answers Meta's code and the service's kind, never Meta's text.
+    ///
+    /// The adapter calls this only for a key holding the scope
+    /// `call_credentials` ([`crate::model::Scope::CallCredentials`]); the
+    /// deployment's setting is checked here, **before the token is opened**.
+    ///
+    /// # Errors
+    ///
+    /// `403 feature_not_available` unless [`Self::with_sip_credentials`]
+    /// (nothing is asked of Meta); Meta's refusal or failure.
+    pub async fn sip_credentials(&self) -> Result<SipCredentials, ServiceError> {
+        if !self.sip_credentials {
+            return Err(ServiceError::new(
+                crate::error::ErrorCode::FEATURE_NOT_AVAILABLE,
+            ));
+        }
+        match self.client().settings(true).await {
+            Ok(settings) => {
+                let sip = settings.unwrap_or_default().sip;
+                let credentials = SipCredentials {
+                    status: sip
+                        .as_ref()
+                        .and_then(|s| s.status.as_ref())
+                        .map(|s| s.as_str().to_owned()),
+                    servers: sip
+                        .into_iter()
+                        .flat_map(|s| s.servers.unwrap_or_default())
+                        .map(|server| SipCredential {
+                            hostname: server.hostname,
+                            port: server.port,
+                            password: server.sip_user_password,
+                        })
+                        .collect(),
+                };
+                self.audit(
+                    SIP_CREDENTIALS_READ,
+                    CallFacts {
+                        sections: Some("sip"),
+                        ..CallFacts::default()
+                    },
+                    Outcome::Answered,
+                );
+                Ok(credentials)
+            }
+            Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// A transfer slot of the number's tenant's share of `transfers` (the
+    /// adapter's media pool), to be taken **before the announcement's body
+    /// is read**: the body is held in memory, at most
+    /// [`VOICEMAIL_MAX_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// `429 too_many_requests` (`Retry-After: 1`): the tenant's share, or
+    /// the pool, is taken.
+    pub fn transfer_slot(&self, transfers: &Slots) -> Result<Slot, ServiceError> {
+        transfers
+            .try_acquire(self.number.tenant())
+            .ok_or_else(|| ServiceError::too_many_requests(1))
+    }
+
+    /// Upload `audio` as a voicemail announcement
+    /// (`POST /{pn}/media` with `use_case=call_voicemail_announcement`,
+    /// Ogg/Opus). The media is the number's own; its id is what the
+    /// settings' `announcement_media_id` takes. Not replayed on a timeout
+    /// (a replay would upload twice): the adapter takes an
+    /// `Idempotency-Key`. The caller's audit event
+    /// `call_voicemail_announcement_uploaded` holds no byte of the file.
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure (its code, never its text); a timeout is
+    /// audited as unknown.
+    pub async fn upload_voicemail_announcement(
+        &self,
+        audio: &VoicemailAudio,
+    ) -> Result<AnnouncementUploaded, ServiceError> {
+        let media = self
+            .number
+            .client()
+            .media(self.number.phone_number_id().clone());
+        let uploaded = media
+            .upload_with(
+                audio.data.clone(),
+                "audio/ogg",
+                "announcement.ogg",
+                &UploadOptions::voicemail_announcement(),
+            )
+            .await;
+        match uploaded {
+            Ok(id) => {
+                self.audit(VOICEMAIL_UPLOADED, CallFacts::default(), Outcome::Answered);
+                Ok(AnnouncementUploaded {
+                    media_id: id.into_inner(),
+                })
+            }
+            Err(error) => Err(self
+                .change_failed(VOICEMAIL_UPLOADED, CallFacts::default(), &error)
+                .await),
         }
     }
 
@@ -1287,6 +1532,72 @@ mod tests {
         // A change with no SIP section is untouched.
         let plain = without_sip_passwords(CallingSettings::default());
         assert!(plain.sip.is_none());
+    }
+
+    /// A SIP server read with its password prints neither the host nor the
+    /// password in `Debug`, whether alone or in the set (roadmap M5e2,
+    /// D410): a stray `{:?}` of the credentials in a log line leaks
+    /// nothing. Decisive: the manual `Debug` impls (derive them and the
+    /// password, redacted by the library, still hides, but the host shows).
+    #[test]
+    fn sip_credentials_print_nothing_of_the_server_or_its_password() {
+        let settings: CallingSettings = serde_json::from_value(json!({
+            "sip": {"status": "ENABLED", "servers": [
+                {"hostname": "sip.secret-host.example", "sip_user_password": "hunter2-secret"}]}
+        }))
+        .unwrap();
+        let server = settings.sip.unwrap().servers.unwrap().remove(0);
+        let credential = SipCredential {
+            hostname: server.hostname,
+            port: server.port,
+            password: server.sip_user_password,
+        };
+        assert_eq!(credential.password(), Some("hunter2-secret"));
+        let set = SipCredentials {
+            status: Some("ENABLED".into()),
+            servers: vec![credential.clone()],
+        };
+        for shown in [format!("{credential:?}"), format!("{set:?}")] {
+            assert!(!shown.contains("hunter2"), "{shown}");
+            assert!(!shown.contains("secret-host"), "{shown}");
+        }
+    }
+
+    /// A voicemail announcement is Ogg with Opus by its own first bytes, not
+    /// empty and at most 16 MiB: each clause refused with the field named
+    /// (`file`) and `Debug` shows no byte (roadmap M5e2, D411).
+    #[test]
+    fn a_voicemail_announcement_is_ogg_opus_by_its_bytes() {
+        let ogg = |tail: &[u8]| {
+            let mut data = b"OggS\x00\x02".to_vec();
+            data.extend([0u8; 20]);
+            data.extend(b"\x01\x13OpusHead");
+            data.extend(tail);
+            bytes::Bytes::from(data)
+        };
+        let good = VoicemailAudio::new(ogg(b"audio-bytes-9Q")).unwrap();
+        assert!(!format!("{good:?}").contains("audio-bytes"));
+        assert_eq!(good.data().len(), 6 + 20 + 10 + 14);
+        for (what, data) in [
+            ("empty", bytes::Bytes::new()),
+            ("mp3", bytes::Bytes::from_static(b"ID3\x04")),
+            ("vorbis", bytes::Bytes::from_static(b"OggS\x00\x02vorbis")),
+            ("opus without ogg", bytes::Bytes::from_static(b"OpusHead")),
+        ] {
+            let error = VoicemailAudio::new(data).unwrap_err();
+            assert_eq!(field(&error), "file", "{what}");
+        }
+        let mut far = b"OggS".to_vec();
+        far.extend([0u8; 200]);
+        far.extend(b"OpusHead");
+        assert!(VoicemailAudio::new(bytes::Bytes::from(far)).is_err());
+        let mut big = ogg(b"").to_vec();
+        big.resize(usize::try_from(VOICEMAIL_MAX_BYTES).unwrap() + 1, 0);
+        let error = VoicemailAudio::new(bytes::Bytes::from(big)).unwrap_err();
+        assert_eq!(
+            error.code(),
+            crate::error::ErrorCode::MEDIA_TOO_LARGE.as_str()
+        );
     }
 
     /// The record key is pinned (a stored name: a change orphans the

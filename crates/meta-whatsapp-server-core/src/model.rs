@@ -188,6 +188,14 @@ pub enum Scope {
     /// stored name, pending the owner's confirmation before the first
     /// release).
     Calls,
+    /// Reading the SIP password of a number's calling settings (roadmap
+    /// M5e2, design D410): the one route that answers a secret Meta
+    /// generates. A scope of its own, which `calls` does not grant and no
+    /// key holds until an operator gives it, and the route answers only
+    /// when the deployment enables it (`WA_SERVER_CALL_SIP_CREDENTIALS`,
+    /// off by default) (a stored name, pending the owner's confirmation
+    /// before the first release).
+    CallCredentials,
     /// Partner acts on a tenant's own WABA (roadmap M5j): the read of its
     /// business verification status, a migration intent to a
     /// Multi-Partner Solution, and a billing currency or payment method
@@ -199,7 +207,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 22] = [
+    pub const ALL: [Scope; 23] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -220,6 +228,7 @@ impl Scope {
         Self::Marketing,
         Self::Routing,
         Self::Calls,
+        Self::CallCredentials,
         Self::Partners,
         Self::Broadcasts,
     ];
@@ -247,6 +256,7 @@ impl Scope {
             Self::Marketing => "marketing",
             Self::Routing => "routing",
             Self::Calls => "calls",
+            Self::CallCredentials => "call_credentials",
             Self::Partners => "partners",
             Self::Broadcasts => "broadcasts",
         }

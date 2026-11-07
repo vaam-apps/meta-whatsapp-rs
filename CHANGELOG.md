@@ -14,7 +14,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M5k, slice 1)
 
-- **The broadcast API over HTTP** (roadmap M5k; D420 to D427, implementer's proposals): a new scope `broadcasts` and
+- **The broadcast API over HTTP** (roadmap M5k; D420 to D427, the coordinator's decisions of 2026-11-07, swappable): a new scope `broadcasts` and
   `POST /v1/numbers/{pn}/broadcasts` (a template for up to 1,000 people
   named by phone and/or BSUID, with parameters of their own, checked as a
   send is; `202`; an `Idempotency-Key` for the whole broadcast),
@@ -31,6 +31,30 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `wa.server.broadcast.progress`, pending the owner's confirmation before
   the first release. The OpenAPI document gains 3 operations, 3 schemas, the
   scope and the tag (additive).
+
+### Added (roadmap M5e2)
+
+- Calling, what M5e did not route (design D410 to D416, decided by the
+  coordinator on 2026-11-07 under the owner's delegation, each swappable). The library: `Media::upload_with`
+  takes `UploadOptions` (a `use_case`, a description) and
+  `UploadOptions::voicemail_announcement()` sends Meta's
+  `use_case=call_voicemail_announcement`; `Media::upload` is unchanged and
+  sends neither. The service: `GET
+  /v1/numbers/{pn}/call-settings/sip-credentials` reads a SIP server's
+  password behind a new scope, `call_credentials` (no key holds it unless
+  given) **and** `WA_SERVER_CALL_SIP_CREDENTIALS=on` (off by default: `403
+  feature_not_available`, Meta not asked); `Cache-Control: no-store`, its own
+  audit event `call_sip_credentials_read`, the password in no log, audit
+  event, error or idempotency record. `POST
+  /v1/numbers/{pn}/call-settings/voicemail-announcement` uploads an
+  Ogg/Opus file (`201 {media_id}`, an `Idempotency-Key`, audited as
+  `call_voicemail_announcement_uploaded`). The permission request message is
+  the send route's and was routed already; a call's recording and
+  transcript download through the media route, whether Meta serves them to
+  `?phone_number_id=` being open (D414). The scope, the setting, the two
+  routes and the two audit actions are pending the owner's confirmation
+  before the first release. The OpenAPI document is additive only. No legal
+  act.
 
 ### Changed (breaking, roadmap L20b)
 
@@ -351,9 +375,9 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   scope, namespace, operation ids and audit actions are pending the owner's
   confirmation before the first release. The OpenAPI document is additive
   only. No legal act and no consent decision in code.
-  - Not offered (M5e2): the SIP password, a voicemail announcement upload
-    with Meta's `use_case`, classifying Meta's calling error codes, the
-    permission request message (a send).
+  - Not offered (M5e2 routes the first two, the permission request message
+    and the recording media; see that entry): the SIP password, a voicemail
+    announcement upload with Meta's `use_case`.
 
 ### Added (roadmap M5l2)
 
