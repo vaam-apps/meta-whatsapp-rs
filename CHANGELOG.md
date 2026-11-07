@@ -38,7 +38,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   /v1/admin/businesses/{business_id}/max-price-agreement/state` reads the
   max price agreement's state with the operator's `token` in the body and
   answers `{status}`: Meta's answer names the signer, the service's never
-  does, and the signer and the token are in no log or error. `POST
+  does, and the signer and the token are in no log or error, and an answered read is audited (`max_price_agreement_read`). `POST
   /v1/admin/partners/businesses/{business_id}/marketing-onboarding` is the
   partner Intent API (an invitation to a business's admins to accept the
   Marketing Messages API's terms, not the acceptance): gated as a legal act

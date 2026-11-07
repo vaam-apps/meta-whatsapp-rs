@@ -1218,7 +1218,7 @@ pub struct AgreementStateView {
 /// portfolio. A read made with `POST` because the operator's `token`
 /// travels in the body. Meta's answer names the signer (name and email);
 /// the answer here, the logs and the errors never do. It signs nothing, so
-/// `WA_SERVER_LEGAL_ACTS` does not gate it; admin key only.
+/// `WA_SERVER_LEGAL_ACTS` does not gate it; admin key only; an answered read is audited (`max_price_agreement_read`).
 #[utoipa::path(
     post,
     path = "/v1/admin/businesses/{business_id}/max-price-agreement/state",
@@ -1227,7 +1227,7 @@ pub struct AgreementStateView {
     params(("business_id" = String, Path, description = "Business portfolio id")),
     request_body = ReadMaxPriceAgreementBody,
     responses(
-        (status = 200, description = "The agreement's state, without the signer", body = AgreementStateView),
+        (status = 200, description = "The agreement's state, without the signer; audited `max_price_agreement_read`", body = AgreementStateView),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden` (not an admin key), or Meta's refusal (the token's holder has no access to the business)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `business_id`, `token` or `body`; Meta's `invalid_parameter`", body = ErrorBody),

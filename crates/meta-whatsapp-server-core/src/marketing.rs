@@ -100,6 +100,9 @@ pub const SEQUENCE_UPDATED: &str = "welcome_sequence_updated";
 pub const SEQUENCE_DELETED: &str = "welcome_sequence_deleted";
 /// The audit action of [`MaxPriceAgreements::sign`].
 pub const MAX_PRICE_AGREEMENT_SIGNED: &str = "max_price_agreement_signed";
+/// The audit action of [`MaxPriceAgreements::state`] (roadmap M5h2, design
+/// D430): every successful `POST` under `/v1/admin` leaves an audit event.
+pub const MAX_PRICE_AGREEMENT_READ: &str = "max_price_agreement_read";
 
 /// The most countries a reach estimate may name: the service's own, the
 /// number of countries a max price may carry multipliers for
@@ -1353,8 +1356,12 @@ impl MaxPriceAgreements<'_> {
     /// portfolio `business_id` (`GET /{business}/max_price_agreements`),
     /// with `token` (a system token or a business token of the business:
     /// used for this call only, never stored). A read: it signs nothing,
-    /// so the legal acts setting does not gate it (design D430), and it is
-    /// not audited (it changes nothing). Meta's answer names the signer;
+    /// so the legal acts setting does not gate it (design D430). Audited as
+    /// [`MAX_PRICE_AGREEMENT_READ`] when Meta answered (the admin key, the
+    /// business and the outcome, never the token or the signer): the
+    /// service's rule that a successful `POST` under `/v1/admin` leaves an
+    /// audit event, and a trail of who read a business's agreement. Meta's
+    /// answer names the signer;
     /// only the status is kept, and Meta's texts, which quote the signer,
     /// are withheld from errors.
     ///
@@ -1381,17 +1388,25 @@ impl MaxPriceAgreements<'_> {
             .max_price_agreement()
             .await
         {
-            Ok(agreement) => Ok(AgreementState {
-                // Only the three values the page spells: the field is
-                // Meta's, an open value could hold anything (a signer
-                // among it), and the signer is in no answer.
-                status: match agreement.status {
-                    AgreementStatus::NoAgreement
-                    | AgreementStatus::Pending
-                    | AgreementStatus::Accepted => wire(Some(&agreement.status)),
-                    _ => None,
-                },
-            }),
+            Ok(agreement) => {
+                max_price_agreement_audit(
+                    MAX_PRICE_AGREEMENT_READ,
+                    self.admin.key_id(),
+                    business_id,
+                    Outcome::Answered,
+                );
+                Ok(AgreementState {
+                    // Only the three values the page spells: the field is
+                    // Meta's, an open value could hold anything (a signer
+                    // among it), and the signer is in no answer.
+                    status: match agreement.status {
+                        AgreementStatus::NoAgreement
+                        | AgreementStatus::Pending
+                        | AgreementStatus::Accepted => wire(Some(&agreement.status)),
+                        _ => None,
+                    },
+                })
+            }
             Err(error) => {
                 let api = ServiceError::from_library_withholding_texts(&error);
                 if error.graph().is_some() {

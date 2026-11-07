@@ -2220,8 +2220,9 @@ lookup sent.
   `{token}` (a read made with `POST` so that the token is in no URL):
   `{status}` (`none`, `pending` or `accepted`). Meta's own answer names the
   signer; the service's never does, and the signer is in no log or error.
-  Reading signs nothing, so the setting does not gate it and no audit
-  event is written.
+  Reading signs nothing, so the setting does not gate it; an answered read
+  is audited (`max_price_agreement_read`, the admin key and the business,
+  never the token).
   The signer's name and email are in no log, error or answer. Accepting
   the Marketing Messages API's Terms of Service is not a call: a person
   with full control of the portfolio does it in WhatsApp Manager.

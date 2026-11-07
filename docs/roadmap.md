@@ -7397,7 +7397,7 @@ or WABA fails the family's own cross-tenant test).
     `{status}`: Meta's answer names the signer, so the service keeps only
     the status (`server_core::marketing::MaxPriceAgreements::state`), and
     the signer and the token are in no log, error, audit event or answer.
-    Not a legal act, so not gated, and not audited (D430). `POST
+    Not a legal act, so not gated; audited `max_price_agreement_read` (D430). `POST
     /v1/admin/partners/businesses/{business_id}/marketing-onboarding` is
     the partner Intent API (`Partners::request_marketing_onboarding`, the
     deployment's partner credentials, optional `solution_id`): the
@@ -7421,8 +7421,8 @@ or WABA fails the family's own cross-tenant test).
     coordinator decides under the owner's delegation. Names pending the
     owner's confirmation before the first release: the three paths, the
     operation ids `read_max_price_agreement`, `request_marketing_onboarding`
-    and `list_client_wabas`, and the audit action
-    `marketing_onboarding_requested`.
+    and `list_client_wabas`, and the audit actions
+    `marketing_onboarding_requested` and `max_price_agreement_read`.
   - **Not done here:** a GIF header's send-time parameter: no page of
     Meta's shows it (re-read 2026-11-07, D435), so nothing is typed and row
     154 stays partial; the WhatsApp Manager visibility switch. No call of

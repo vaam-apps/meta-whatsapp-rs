@@ -238,7 +238,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "`POST /v1/admin/businesses/{business_id}/max-price-agreement/state`:\nread the state of Meta's max price beta agreement for a business\nportfolio. A read made with `POST` because the operator's `token`\ntravels in the body. Meta's answer names the signer (name and email);\nthe answer here, the logs and the errors never do. It signs nothing, so\n`WA_SERVER_LEGAL_ACTS` does not gate it; admin key only.",
+        "summary": "`POST /v1/admin/businesses/{business_id}/max-price-agreement/state`:\nread the state of Meta's max price beta agreement for a business\nportfolio. A read made with `POST` because the operator's `token`\ntravels in the body. Meta's answer names the signer (name and email);\nthe answer here, the logs and the errors never do. It signs nothing, so\n`WA_SERVER_LEGAL_ACTS` does not gate it; admin key only; an answered read is audited (`max_price_agreement_read`).",
         "operationId": "read_max_price_agreement",
         "parameters": [
           {
@@ -263,7 +263,7 @@
         },
         "responses": {
           "200": {
-            "description": "The agreement's state, without the signer",
+            "description": "The agreement's state, without the signer; audited `max_price_agreement_read`",
             "content": {
               "application/json": {
                 "schema": {

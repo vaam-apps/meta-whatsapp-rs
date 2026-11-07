@@ -1,7 +1,8 @@
 //! Roadmap M5h2's audit events and logs (docs/design/server.md, D433): the
 //! partner Intent API's invitation is an admin audit event, by the admin
-//! key's id and the business, with an outcome; the agreement's state read
-//! and the client WABAs listing are reads and write none. A signer planted
+//! key's id and the business, with an outcome; so is the agreement's state
+//! read when Meta answered it; the client WABAs listing is a `GET` and
+//! writes none. A signer planted
 //! in Meta's answers, the operator's token in the request's body and
 //! Meta's texts are in no line. Its own test binary: the `tracing`
 //! callsites' interest is cached per process, and a test in a binary of
@@ -186,12 +187,22 @@ async fn the_invitation_is_audited_and_the_signer_is_in_no_line() {
             );
         }
     }
-    // Nothing else of this item is an audit event: the reads change
-    // nothing.
+    // The agreement's state read is an audit event when Meta answered (the
+    // service's rule for a successful `POST` under `/v1/admin`): the admin
+    // key and the business, never the token or the signer; a failed read
+    // and the client WABAs listing write none.
+    let reads: Vec<&Value> = events
+        .iter()
+        .filter(|f| f["action"] == "max_price_agreement_read")
+        .collect();
+    assert_eq!(reads.len(), 1, "{events:?}");
+    assert_eq!(reads[0]["outcome"], "answered", "{}", reads[0]);
+    assert_eq!(reads[0]["business_id"], BUSINESS, "{}", reads[0]);
+    assert!(reads[0]["admin_key_id"].is_string(), "{}", reads[0]);
     for fields in &events {
         let action = fields["action"].as_str().unwrap_or_default();
         assert!(
-            !action.contains("agreement") && !action.contains("client_waba"),
+            !action.contains("client_waba"),
             "a read was audited: {fields}"
         );
     }
