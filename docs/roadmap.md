@@ -7507,7 +7507,7 @@ or WABA fails the family's own cross-tenant test).
     M5.1 by construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`),
     `tests/broadcasts_logs.rs` (no person, parameter or Meta text in any
     line, the bot crate's included).
-  - **Proposed** (implementer's, not decided): D420 to D427 in the design's
+  - **Decided** (coordinator, 2026-11-07, under the owner's delegation, swappable): D420 to D427 in the design's
     section 10: where the sends are kept (the bot crate's jobs on the
     bundle's `KvStore`), the rate, the at-most-once windows, the scope and
     audit, what is stored and echoed, the bounds and workers, the marketing

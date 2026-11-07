@@ -7,7 +7,7 @@ description: "Broadcasts through meta-whatsapp-server, the meta-whatsapp-rs HTTP
 
 > **Verified against meta-whatsapp-rs 62671eb1251b3e70909a630e8cf8916083759fde (2026-11-07).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/broadcast.ts](examples/broadcast.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#broadcasts). The decisions are the design's D420 to D427, the implementer's proposals: not decided, so the names below can change before the first release.
+Reference code: [examples/broadcast.ts](examples/broadcast.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#broadcasts). The decisions are the design's D420 to D427, the coordinator's decisions of 2026-11-07, each swappable; the names below are pending the owner's confirmation and can change before the first release.
 
 ## When to use
 

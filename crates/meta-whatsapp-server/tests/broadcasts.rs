@@ -570,3 +570,102 @@ async fn a_number_rebound_to_another_tenant_keeps_nothing_of_the_first() {
     assert!(w.h.graph.requests().is_empty(), "sent as the new holder");
     assert_eq!(w.h.graph.remaining(), 3);
 }
+
+/// Meta's throttles (`131056`, the pair rate limit; `130429`, throughput)
+/// are waited out, never hammered and never a person marked failed: the
+/// pair limit is resent after 1 s, then 4 s (Meta's `4^X` schedule), and
+/// five throttles in a row leave the person queued for the job's retry,
+/// not failed, then sent. Decisive: `TenantOutbound::send` leaving a
+/// `may_resend` error uncounted and the runner unmarking it.
+#[tokio::test]
+async fn a_throttled_person_waits_and_is_never_marked_failed() {
+    let throttle = |code: u32, text: &str| {
+        json!({"error": {"message": format!("({code}) {text}"), "type": "OAuthException",
+                         "code": code, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}})
+    };
+    let w = world(rate(20)).await;
+    let id = queued(&w, PN, &broadcast(people(1))).await;
+    w.h.graph
+        .push_json(400, throttle(131_056, "pair rate limit"));
+    w.h.graph
+        .push_json(400, throttle(131_056, "pair rate limit"));
+    w.h.graph.push_json(200, accepted(0));
+    work(&w.h).await;
+    let view = status(&w, &id).await;
+    assert_eq!(view["state"], "completed", "{view}");
+    assert_eq!((view["sent"].clone(), view["failed"].clone()), (json!(1), json!(0)));
+    assert_eq!(view["failures"], json!({}));
+    let times = w.controls.times();
+    assert_eq!(times.len(), 3);
+    assert!(times[1] - times[0] >= time::Duration::SECOND, "{times:?}");
+    assert!(times[2] - times[1] >= time::Duration::seconds(4), "{times:?}");
+
+    // Throughput (130429): five refusals in a row; the person is given
+    // back to the job, not failed, and sent at its retry.
+    let id = queued(&w, PN, &broadcast(people(1))).await;
+    for _ in 0..5 {
+        w.h.graph
+            .push_json(400, throttle(130_429, "throughput limit"));
+    }
+    w.h.graph.push_json(200, accepted(0));
+    let before = w.h.graph.requests().len();
+    work(&w.h).await;
+    assert_eq!(w.h.graph.requests().len() - before, 5, "five tries, no more");
+    let view = status(&w, &id).await;
+    assert_eq!(view["failed"], 0, "{view}");
+    assert_eq!(view["failures"], json!({}), "{view}");
+    assert_eq!(view["queued"], 1, "{view}");
+    assert_ne!(view["state"], "completed");
+    assert_eq!(w.h.graph.requests().len() - before, 5, "no hammering");
+    w.clock.advance(Duration::from_secs(120));
+    work(&w.h).await;
+    let view = status(&w, &id).await;
+    assert_eq!(view["state"], "completed", "{view}");
+    assert_eq!(view["sent"], 1);
+    assert_eq!(w.h.graph.remaining(), 0);
+}
+
+/// The tenant's limit holds under concurrent creates: with room for two,
+/// six creates at once queue exactly two. Decisive: `reserve`'s
+/// compare-and-swap (a plain read-then-write admits more).
+#[tokio::test]
+async fn concurrent_creates_never_pass_the_limit() {
+    let w = world(BroadcastSettings {
+        max_concurrent: 2,
+        ..rate(20)
+    })
+    .await;
+    let body = broadcast(people(1));
+    let replies = futures::future::join_all(
+        (0..6).map(|_| w.h.call(create(&w.key, PN, &body))),
+    )
+    .await;
+    let accepted = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::ACCEPTED)
+        .count();
+    let busy = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!((accepted, busy), (2, 4), "{:?}", replies.iter().map(|r| &r.text).collect::<Vec<_>>());
+}
+
+/// An `Idempotency-Key` is for one number's broadcast: the same key and
+/// body on another of the tenant's numbers is a reuse (`422`), never the
+/// first number's broadcast replayed, and queues nothing. Decisive: the
+/// number in `Fingerprint::create_broadcast`.
+#[tokio::test]
+async fn a_key_is_not_replayed_on_another_number() {
+    let w = world(rate(20)).await;
+    let body = broadcast(people(1));
+    let on = |pn: &str| create(&w.key, pn, &body).header("idempotency-key", "spring-2");
+    let first = w.h.call(on(PN)).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.text);
+    let other = w.h.call(on(PN2)).await;
+    assert_eq!(other.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", other.text);
+    assert_eq!(other.code(), "idempotency_key_reused");
+    script(&w.h, 2);
+    work(&w.h).await;
+    assert_eq!(w.h.graph.requests().len(), 1);
+}

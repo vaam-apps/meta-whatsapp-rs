@@ -1468,8 +1468,8 @@ the user. Standby copies and handovers reach you as events either way.
 
 ## Broadcasts
 
-One scope, `broadcasts` (roadmap M5k, slice 1; design D420–D427, the implementer's
-proposals, **not decided**; the name is **pending the owner's confirmation
+One scope, `broadcasts` (roadmap M5k, slice 1; design D420–D427, the coordinator's
+decisions of 2026-11-07, each swappable; the name is **pending the owner's confirmation
 before the first release**). A key minted before it does not carry it, and
 `send` does not grant it: one call sends to up to a thousand people, so
 mint a key for these routes on purpose. A broadcast is a **template** sent
