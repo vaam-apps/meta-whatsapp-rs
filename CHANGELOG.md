@@ -12,6 +12,15 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Fixed
+
+- The service sends every legal act exactly once: the compliance
+  information declaration (which the library marks idempotent, so the
+  default retry policy could replay it after a timeout), the partner and
+  billing acts and the max price agreement now go through
+  `number_settings::legal_client`, a client with `RetryPolicy::NONE`
+  (design D192, D231, D250). The library's markings are unchanged.
+
 ### Added (roadmap M2k)
 
 - The webhooks-out backlog on `/metrics`: the gauges

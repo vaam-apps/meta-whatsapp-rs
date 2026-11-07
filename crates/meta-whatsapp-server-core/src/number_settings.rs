@@ -61,6 +61,7 @@ use meta_whatsapp_rs::client::phone_numbers::{
     ConversationalAutomationConfig, DataLocalizationRegion, ObaApplication, SearchVisibility,
     TransferAction, validate_username,
 };
+use meta_whatsapp_rs::client::{Client, RetryPolicy};
 use meta_whatsapp_rs::core::ids::UserId;
 
 use crate::audit::{Outcome, Subject, number_setting_audit};
@@ -102,6 +103,22 @@ pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
             | AdminOperation::RejectPartnerSolution
             | AdminOperation::AcceptPartnerSolutionDeactivation
     )
+}
+
+/// The client every legal act is sent through: `client` with
+/// [`RetryPolicy::NONE`], so that a legal act reaches Meta exactly once.
+/// The library's policy replays what it deems safe (an `idempotent`
+/// request after a timeout or a `5xx`, any request after a `429`); that is
+/// right for a library user and wrong for an act that cannot be undone,
+/// so the guarantee is the service's, here, not a marking in the library
+/// (design D192). Every path gated by [`is_legal_act`] or
+/// [`is_legal_admin_act`] sends through this; the walk
+/// `every_legal_act_reaches_meta_once_whatever_the_client_would_retry`
+/// (`tests/legal_acts_once.rs`) walks both predicates and fails a path that
+/// does not.
+#[must_use]
+pub(crate) fn legal_client(client: &Client) -> Client {
+    client.clone().with_retry(RetryPolicy::NONE)
 }
 
 /// The audit action of [`NumberSettings::change`]: a stored name in the
@@ -780,7 +797,10 @@ impl<'a> NumberSettings<'a> {
     ) -> Result<(), ServiceError> {
         self.gate(Operation::SetComplianceInfo)?;
         check_compliance(update)?;
-        let result = self.phone().set_business_compliance_info(update).await;
+        let result = legal_client(self.number.client())
+            .phone_number(self.number.phone_number_id().clone())
+            .set_business_compliance_info(update)
+            .await;
         self.changed(COMPLIANCE_INFO_SET, None, false, result).await
     }
 

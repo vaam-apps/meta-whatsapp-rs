@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit::Outcome;
 use crate::authz::{AdminCaller, Authorizer, Caller, OwnedWaba, object_failed};
 use crate::error::{ErrorCode, ServiceError};
-use crate::number_settings::{is_legal_act, is_legal_admin_act};
+use crate::number_settings::{is_legal_act, is_legal_admin_act, legal_client};
 use crate::observe::Observer;
 use crate::operation::{AdminOperation, Operation};
 use crate::signup::Signups;
@@ -618,7 +618,15 @@ impl<'a> Partners<'a> {
             .partner_pool()
             .ok_or_else(|| ServiceError::new(ErrorCode::SIGNUP_NOT_CONFIGURED))?;
         Ok(Session {
-            client: authz.client().with_token(pool.token().clone()),
+            client: {
+                let client = authz.client().with_token(pool.token().clone());
+                // A legal act is sent exactly once (design D192).
+                if admin_act(action).is_some_and(is_legal_admin_act) {
+                    legal_client(&client)
+                } else {
+                    client
+                }
+            },
             business: pool.business_id().clone(),
             app: deployment.app_id().clone(),
         })
@@ -1141,6 +1149,11 @@ fn migration_key(id: &str) -> Option<&str> {
 }
 
 impl<'a> WabaPartners<'a> {
+    /// The WABA's client for a legal act: never retried ([`legal_client`]).
+    fn legal(&self) -> Client {
+        legal_client(self.waba.client())
+    }
+
     /// Report failed Graph calls to `observer` (the adapter's metrics).
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
@@ -1207,8 +1220,7 @@ impl<'a> WabaPartners<'a> {
         let solution =
             SolutionId::new(solution).map_err(|_| ServiceError::invalid("solution_id"))?;
         match self
-            .waba
-            .client()
+            .legal()
             .migration_intents()
             .create(self.waba_id(), &solution)
             .await
@@ -1327,8 +1339,7 @@ impl<'a> WabaPartners<'a> {
             .validate()
             .map_err(|error| ServiceError::invalid(error.field))?;
         let started = match self
-            .waba
-            .client()
+            .legal()
             .waba(self.waba_id().clone())
             .set_payment_method_migration_intent(&intent)
             .await
@@ -1432,8 +1443,7 @@ impl<'a> WabaPartners<'a> {
         gate_operation(Operation::ResumeBillingMigration, self.legal_acts)?;
         let id = self.own_migration(id).await?;
         match self
-            .waba
-            .client()
+            .legal()
             .payment_method_migration(id)
             .resume_migration()
             .await
