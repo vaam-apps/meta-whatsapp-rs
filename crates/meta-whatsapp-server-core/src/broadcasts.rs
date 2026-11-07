@@ -119,6 +119,11 @@ const CAS_ATTEMPTS: usize = 8;
 /// The `Retry-After` of a refusal for too many broadcasts at once.
 const BUSY_RETRY_AFTER_SECS: u64 = 30;
 
+/// How many times a booking of the shared budget reads again after losing
+/// the swap to another sender, before it fails closed (the library's default
+/// is 8; see [`BroadcastRecords::with_jobs`]).
+const CONTENTION_ATTEMPTS: u32 = 48;
+
 /// How often an idle worker looks for a broadcast due.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -454,7 +459,17 @@ impl BroadcastRecords {
             .timer
             .clone()
             .unwrap_or_else(|| Arc::new(meta_whatsapp_rs::core::clock::SystemClock));
-        let limiter = KvRateLimiter::new(kv.clone(), rate).with_timer(timer.clone());
+        // The runner books from up to the runner's 8 sends at once,
+        // and every replica's workers book from the same record: a booking
+        // that loses the compare-and-swap reads again (jittered), and the
+        // library's 8 attempts are too few for that many contenders on a
+        // database a millisecond away (a broadcast would end `LimiterFailed`
+        // and wait for its retry). Failing closed stays: past the bound
+        // nothing is sent.
+        let limiter = KvRateLimiter::new(kv.clone(), rate)
+            .with_timer(timer.clone())
+            .contention(CONTENTION_ATTEMPTS, Duration::from_millis(2))
+            .map_err(|_| ServiceError::internal())?;
         let pacer = Pacer::new(limiter).with_timer(timer);
         Ok(Self {
             records: JsonStore::new(kv.clone(), RECORD_NAMESPACE),

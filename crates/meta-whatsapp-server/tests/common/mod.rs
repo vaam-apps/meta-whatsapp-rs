@@ -3,6 +3,7 @@
 //! `ScriptedTransport`.
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod broadcasts;
 pub mod capture;
 pub mod erasure;
 pub mod failing_conversations;
