@@ -5897,7 +5897,7 @@ design's (§9).
     of their data (a counting outbox asserts it), and the conformance
     suite's fan-out cases pass on every backend.
 
-- [ ] **M2m. `tenants` on a platform key's webhook endpoint** (design
+- [x] **M2m. `tenants` on a platform key's webhook endpoint** (design
   §4.4's `{url, types, tenants?}`; D112; added by M2c): an endpoint made
   with a platform key may name several tenants, whose events it
   receives, each delivery read in its own tenant's stream.
@@ -5905,6 +5905,14 @@ design's (§9).
   - **Decisive:** a platform key's endpoint naming tenants A and B
     receives A's and B's events and none of C's; `tenants` from a tenant
     key is `422`; dropping the tenant filter from its fan-out fails it.
+  - **Landed:** `tenants` (one to ten ids) on the create and update
+    bodies and the endpoint answer; a platform key's only; the endpoint
+    holds a cursor per tenant (migration 11, D340–D348), each delivery
+    its own tenant's event. Decisive: the conformance cases
+    `a_platform_endpoint_receives_its_named_tenants_only`,
+    `tenants_are_a_platform_keys_and_checked`, and three more on every
+    backend, and `a_platform_keys_endpoint_receives_the_tenants_it_names`
+    over HTTP. Not built: `"*"`.
 
 ### M3. Embedded Signup, OTP, coexistence
 
