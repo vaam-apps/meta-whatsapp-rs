@@ -63,7 +63,9 @@ use crate::model::{
     AllowedTenants, DeleteTenantOutcome, KeyOwner, MAX_PAGE_SIZE, PageRequest, Scope, TenantId,
     TenantStatus,
 };
-use crate::outbox::NewEvent;
+use crate::outbox::{
+    EventPage, EventQuery, HeaderPage, HeaderQuery, NewEvent, Outbox, ReceivedMedia, StoredEvent,
+};
 use crate::webhooks_out::destination::{DestinationPolicy, ResolveError, Resolver};
 use crate::webhooks_out::dispatch::{
     DispatchSettings, Dispatcher, SendError, SendRequest, Sender, WebhooksOut,
@@ -96,6 +98,8 @@ pub async fn run(backend: &dyn Backend) {
     a_destination_is_refused_at_creation_and_at_delivery(backend).await;
     a_rotation_signs_twice_for_24_hours(backend).await;
     a_large_event_is_delivered_truncated(backend).await;
+    a_fan_out_reads_no_event_data(backend).await;
+    a_fan_out_pages_over_headers(backend).await;
     two_dispatchers_send_each_event_once(backend).await;
     a_slow_endpoint_does_not_starve_another(backend).await;
     a_platform_endpoint_receives_its_named_tenants_only(backend).await;
@@ -4181,4 +4185,328 @@ pub async fn the_listing_survives_changes_between_pages(backend: &dyn Backend) {
         .filter(|id| *id > cursor)
         .collect();
     assert_eq!(rest, now, "exactly what is there after the cursor");
+}
+
+/// An outbox that counts the reads of events' data: full pages, and
+/// lookups by id; the id-only read has its own count.
+struct CountingOutbox {
+    inner: Arc<dyn Outbox>,
+    pages: AtomicUsize,
+    gets: AtomicUsize,
+    headers: AtomicUsize,
+}
+
+#[async_trait]
+impl Outbox for CountingOutbox {
+    async fn insert(&self, event: &NewEvent) -> crate::store::StoreResult<Option<i64>> {
+        self.inner.insert(event).await
+    }
+
+    async fn page(&self, query: &EventQuery) -> crate::store::StoreResult<EventPage> {
+        self.pages.fetch_add(1, Ordering::SeqCst);
+        self.inner.page(query).await
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> crate::store::StoreResult<HeaderPage> {
+        self.headers.fetch_add(1, Ordering::SeqCst);
+        self.inner.headers_after(query).await
+    }
+
+    async fn get(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+    ) -> crate::store::StoreResult<Option<StoredEvent>> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        self.inner.get(tenant, id).await
+    }
+
+    async fn purge(&self, older_than: Duration) -> crate::store::StoreResult<u64> {
+        self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> crate::store::StoreResult<Vec<ReceivedMedia>> {
+        self.inner.received_media(media_id).await
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        contacts: &[String],
+    ) -> crate::store::StoreResult<u64> {
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
+    }
+}
+
+/// A backend whose outbox is a [`CountingOutbox`] over `inner`'s, its
+/// other ports `inner`'s own.
+struct CountedReads {
+    outbox: Arc<CountingOutbox>,
+    records: Arc<dyn crate::store::RecordStore>,
+    idempotency: Arc<dyn crate::store::IdempotencyRecords>,
+    notifier: Arc<dyn crate::notify::EventNotifier>,
+    webhooks: Arc<dyn WebhookStore>,
+    leader_lock: Arc<dyn crate::store::LeaderLock>,
+    janitor: Arc<dyn crate::store::Janitor>,
+    migrator: Arc<dyn crate::store::SchemaMigrator>,
+    kv: Arc<dyn meta_whatsapp_rs::core::store::KvStore>,
+    conversations: Arc<dyn meta_whatsapp_rs::core::store::ConversationStore>,
+}
+
+impl CountedReads {
+    fn over(inner: &dyn Backend) -> Self {
+        Self {
+            outbox: Arc::new(CountingOutbox {
+                inner: inner.outbox(),
+                pages: AtomicUsize::new(0),
+                gets: AtomicUsize::new(0),
+                headers: AtomicUsize::new(0),
+            }),
+            records: inner.records(),
+            idempotency: inner.idempotency(),
+            notifier: inner.notifier(),
+            webhooks: inner.webhooks(),
+            leader_lock: inner.leader_lock(),
+            janitor: inner.janitor(),
+            migrator: inner.migrator(),
+            kv: inner.kv(),
+            conversations: inner.conversations(),
+        }
+    }
+}
+
+#[async_trait]
+impl Backend for CountedReads {
+    fn kind(&self) -> crate::backend::BackendKind {
+        crate::backend::BackendKind::Other("conformance-counted-reads")
+    }
+    fn records(&self) -> Arc<dyn crate::store::RecordStore> {
+        self.records.clone()
+    }
+    fn idempotency(&self) -> Arc<dyn crate::store::IdempotencyRecords> {
+        self.idempotency.clone()
+    }
+    fn outbox(&self) -> Arc<dyn Outbox> {
+        self.outbox.clone()
+    }
+    fn notifier(&self) -> Arc<dyn crate::notify::EventNotifier> {
+        self.notifier.clone()
+    }
+    fn webhooks(&self) -> Arc<dyn WebhookStore> {
+        self.webhooks.clone()
+    }
+    fn leader_lock(&self) -> Arc<dyn crate::store::LeaderLock> {
+        self.leader_lock.clone()
+    }
+    fn janitor(&self) -> Arc<dyn crate::store::Janitor> {
+        self.janitor.clone()
+    }
+    fn migrator(&self) -> Arc<dyn crate::store::SchemaMigrator> {
+        self.migrator.clone()
+    }
+    fn kv(&self) -> Arc<dyn meta_whatsapp_rs::core::store::KvStore> {
+        self.kv.clone()
+    }
+    fn conversations(&self) -> Arc<dyn meta_whatsapp_rs::core::store::ConversationStore> {
+        self.conversations.clone()
+    }
+    async fn close(&self) {}
+}
+
+/// Roadmap M2l (D106): a fan-out over 100 events of 256 KiB each reads
+/// none of their data. The outbox counts full pages and lookups by id:
+/// the fan-out makes none (it reads headers), the 100 deliveries then
+/// read their events whole by id, one each, and still no page.
+pub async fn a_fan_out_reads_no_event_data(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let counted = CountedReads::over(backend);
+    let settings = DispatchSettings {
+        fan_out_page: 100,
+        ..fast_settings()
+    };
+    let rig = rig(&counted, RetrySchedule::default(), settings);
+    let a = unique_tenant("wh-hdr");
+    let ca = caller(&counted, &rig.authz, &a).await;
+    rig.endpoints
+        .open(&rig.authz, &ca)
+        .unwrap()
+        .create(create(
+            "https://hooks.example.com/wa",
+            &["message_received"],
+        ))
+        .await
+        .unwrap();
+    let pn = super::unique_digits();
+    bind(counted.records().as_ref(), &a, &pn).await;
+    // Creating the endpoint read the stream's high water: count from here.
+    for count in [
+        &counted.outbox.pages,
+        &counted.outbox.gets,
+        &counted.outbox.headers,
+    ] {
+        count.store(0, Ordering::SeqCst);
+    }
+    let mut ids = Vec::new();
+    for _ in 0..100 {
+        let mut event = row(
+            Some(a.as_str()),
+            "message_received",
+            &pn,
+            Some(&super::unique()),
+        );
+        let head = "{\"event\":\"message_received\",\"pad\":\"";
+        let tail = "\"}";
+        let size = 256 * 1024;
+        event.data = format!("{head}{}{tail}", "x".repeat(size - head.len() - tail.len()));
+        assert_eq!(event.data.len(), size);
+        counted.outbox().insert(&event).await.unwrap().unwrap();
+        ids.push(event.id);
+    }
+    let reads = |what: &AtomicUsize| what.load(Ordering::SeqCst);
+
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(reads(&counted.outbox.pages), 0, "no full page in a fan-out");
+    assert_eq!(
+        reads(&counted.outbox.gets),
+        0,
+        "no event read whole in a fan-out"
+    );
+    assert!(reads(&counted.outbox.headers) > 0, "the headers were read");
+
+    // Every event became a delivery (the same ids, once each), attempted
+    // by reading the event whole by its id.
+    for _ in 0..200 {
+        if rig.sender.sent().len() >= ids.len() {
+            break;
+        }
+        round(&rig).await;
+    }
+    let mut sent: Vec<String> = rig
+        .sender
+        .sent()
+        .iter()
+        .filter_map(|r| r.header("webhook-id").map(str::to_owned))
+        .collect();
+    sent.sort();
+    ids.sort();
+    assert_eq!(sent, ids, "each event delivered once");
+    assert!(reads(&counted.outbox.gets) >= ids.len());
+    assert_eq!(reads(&counted.outbox.pages), 0, "no full page at all");
+}
+
+/// Roadmap M2l: a fan-out over headers records the same deliveries as one
+/// over pages did. With a page of 2, an endpoint of one type, and a stream
+/// of its own and another tenant's events of several types: a full round
+/// moves the cursor to its last delivery (not past events it has not
+/// read), the round that fills no page moves it to the stream's high
+/// water (past the trailing events of other types), another tenant's and
+/// other types' events are never a delivery, and a round with nothing new
+/// moves nothing. Decisive: the cursor after each round, the delivered
+/// sequences.
+pub async fn a_fan_out_pages_over_headers(backend: &dyn Backend) {
+    drain(backend.webhooks().as_ref()).await;
+    let settings = DispatchSettings {
+        fan_out_page: 2,
+        ..fast_settings()
+    };
+    let rig = rig(backend, RetrySchedule::default(), settings);
+    let (a, b) = (unique_tenant("wh-pg-a"), unique_tenant("wh-pg-b"));
+    let (pa, pb) = (super::unique_digits(), super::unique_digits());
+    let ca = caller(backend, &rig.authz, &a).await;
+    let _ = caller(backend, &rig.authz, &b).await;
+    let (endpoint, _) = rig
+        .endpoints
+        .open(&rig.authz, &ca)
+        .unwrap()
+        .create(create(
+            "https://hooks.example.com/wa",
+            &["message_received"],
+        ))
+        .await
+        .unwrap();
+    bind(backend.records().as_ref(), &a, &pa).await;
+    bind(backend.records().as_ref(), &b, &pb).await;
+    let outbox = backend.outbox();
+    let start = endpoint.cursor;
+    let mut mine = Vec::new();
+    // a: msg, status, (b: msg), msg, msg, status, status.
+    for (owner, event_type) in [
+        (&a, "message_received"),
+        (&a, "status_updated"),
+        (&b, "message_received"),
+        (&a, "message_received"),
+        (&a, "message_received"),
+        (&a, "status_updated"),
+        (&a, "status_updated"),
+    ] {
+        let pn = if owner == &a { &pa } else { &pb };
+        let event = row(Some(owner.as_str()), event_type, pn, Some(&super::unique()));
+        let sequence = outbox.insert(&event).await.unwrap().unwrap();
+        if owner == &a && event_type == "message_received" {
+            mine.push((event.id.clone(), sequence));
+        }
+    }
+    let cursor = || async {
+        backend
+            .webhooks()
+            .endpoint(&tenant(&a), &endpoint.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .cursor
+    };
+    let delivered = || async {
+        let mut got: Vec<_> = backend
+            .webhooks()
+            .deliveries(
+                &tenant(&a),
+                &endpoint.id,
+                &PageRequest {
+                    after: None,
+                    limit: 100,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|d| (d.event_id.unwrap(), d.sequence.unwrap()))
+            .collect::<Vec<_>>();
+        got.sort_by_key(|(_, sequence)| *sequence);
+        got
+    };
+    assert_eq!(start, 0, "a fresh tenant's stream starts empty");
+    // Round 1: the first two matching events, a third follows.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine[..2], "the first page");
+    assert_eq!(cursor().await, mine[1].1, "the page's last delivery");
+    // Round 2: the last match fills no page; on to the stream's end.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine, "every match, once");
+    assert_eq!(cursor().await, 6, "the tenant's high water, past the rest");
+    // Nothing new: nothing moves.
+    rig.dispatcher.fan_out().await.unwrap();
+    assert_eq!(delivered().await, mine);
+    assert_eq!(cursor().await, 6);
+    // A later event is picked up from there.
+    let later = row(
+        Some(a.as_str()),
+        "message_received",
+        &pa,
+        Some(&super::unique()),
+    );
+    let sequence = outbox.insert(&later).await.unwrap().unwrap();
+    assert_eq!(sequence, 7);
+    rig.dispatcher.fan_out().await.unwrap();
+    let mut all = mine.clone();
+    all.push((later.id, 7));
+    assert_eq!(delivered().await, all);
+    assert_eq!(cursor().await, 7);
 }

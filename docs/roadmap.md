@@ -5377,8 +5377,8 @@ design's (§9).
     new data key (a previous key keeps opening them; M2i); a connection
     pool to the receivers (each attempt connects to the address it
     checked; M2j); the pending webhooks-out metric of design §7.3 (M2k);
-    a fan-out reads each page's event data (up to 8 MiB) to learn ids,
-    which an id-only outbox read would spare (a port change; M2l);
+    a fan-out read each page's event data (up to 8 MiB) to learn ids
+    (an id-only outbox read, since M2l);
     replicas' clocks must agree within the lease (D107); a suspended
     tenant's deliveries are still recorded, and wait (D111).
 - [x] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
@@ -5888,7 +5888,7 @@ design's (§9).
     (`tests/webhooks_out.rs`), `a_hung_or_failing_store_never_holds_the_scrape`,
     `a_retry_in_backoff_does_not_age_the_backlog` and the conformance case.
 
-- [ ] **M2l. An id-only outbox read for the fan-out** (D106; added by
+- [x] **M2l. An id-only outbox read for the fan-out** (D106; added by
   M2c): an `Outbox` method answering the sequences, ids and types after
   a cursor without their data, which `Dispatcher::fan_out` uses (a port
   change: memory, Postgres and MongoDB implement it).
@@ -5896,6 +5896,39 @@ design's (§9).
   - **Decisive:** a fan-out over 100 events of 256 KiB each reads none
     of their data (a counting outbox asserts it), and the conformance
     suite's fan-out cases pass on every backend.
+  - **Landed:** `Outbox::headers_after(&HeaderQuery) -> HeaderPage` (a
+    tenant, a cursor, types, a limit; answers `EventHeader`s: sequence,
+    id, tenant and type, with the stream's `purged_through` and
+    `high_water` and `more`, never the data), a new required method of
+    the port, implemented by memory, Postgres (one statement of the
+    narrow columns by the primary key's order, `LIMIT` one past the
+    page: `data` is never selected, so its TOAST pages are not read;
+    EXPLAIN (ANALYZE, BUFFERS) on Postgres 16, a 100-event stream of
+    256 KiB rows: 4 shared buffers, the heap's 2 pages, where selecting
+    `data` read 3531; a 50 000-event stream from the cursor 20 000: an
+    index scan of `wa_server_events_pkey`, 101 rows, 7 buffers) and the
+    MongoDB spike (a projection of `_id`, sequence, tenant and type).
+    `Dispatcher::fan_out` uses it, with no byte budget (the page is its
+    `fan_out_page` rows); the delivery attempt reads the whole event by
+    id as before. No migration, no API change. Conformance: the outbox
+    case `headers` (the rows of a page without their data, the limit and
+    `more`, the cursor, types, bounds, tenant isolation, a 256 KiB row)
+    and `a_fan_out_reads_no_event_data` in the webhooks-out suite (a
+    counting outbox: 100 events of 256 KiB, a fan-out makes no `page`
+    and no `get`, the 100 deliveries then read their event by id, one
+    each, and no page) and `a_fan_out_pages_over_headers` (a page of 2,
+    one type, another tenant's events: the cursor after each round, the
+    delivered sequences, the high water past trailing events of other
+    types; the `purge` cases also check the header read's bounds).
+    Mutation: a fan-out that reads an event whole fails the first
+    (`no event read whole in a fan-out`); a cursor that ignores `more`
+    or the high water, a header read that reports no `purged_through`,
+    or one that drops the types, the tenant, or the limit's extra row,
+    fails the others. **Breaking** for an
+    `Outbox` implemented outside this repository, before the first
+    release: the method is required (`HeaderPage::from_page` and
+    `HeaderQuery::as_event_query` build it from `page`, for a double,
+    reading the data it exists to spare).
 
 - [x] **M2m. `tenants` on a platform key's webhook endpoint** (design
   §4.4's `{url, types, tenants?}`; D112; added by M2c): an endpoint made

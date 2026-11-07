@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId};
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
-    RouteGuard, StoredEvent,
+    EventHeader, EventPage, EventQuery, GuardedBinding, HeaderPage, HeaderQuery, NewEvent, Outbox,
+    RECEIVED_MEDIA_ROWS, ReceivedMedia, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 use time::OffsetDateTime;
@@ -253,6 +253,49 @@ impl Outbox for MemoryEventStore {
         }
         Ok(EventPage {
             events,
+            more,
+            purged_through: stream.purged_through,
+            high_water: stream.last,
+        })
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        let state = self.lock();
+        let Some(stream) = state.streams.get(query.tenant.as_str()) else {
+            return Ok(HeaderPage {
+                headers: Vec::new(),
+                more: false,
+                purged_through: 0,
+                high_water: 0,
+            });
+        };
+        let after = query.after.unwrap_or(stream.purged_through);
+        let mut matching = stream
+            .rows
+            .range(after.saturating_add(1)..)
+            .map(|(_, row)| &row.event)
+            .filter(|row| {
+                query
+                    .types
+                    .as_ref()
+                    .is_none_or(|types| types.contains(&row.event_type))
+            });
+        let mut headers = Vec::new();
+        let mut more = false;
+        for row in matching.by_ref() {
+            if headers.len() == query.limit {
+                more = true;
+                break;
+            }
+            headers.push(EventHeader {
+                sequence: row.sequence,
+                id: row.id.clone(),
+                tenant: row.tenant.clone(),
+                event_type: row.event_type.clone(),
+            });
+        }
+        Ok(HeaderPage {
+            headers,
             more,
             purged_through: stream.purged_through,
             high_water: stream.last,

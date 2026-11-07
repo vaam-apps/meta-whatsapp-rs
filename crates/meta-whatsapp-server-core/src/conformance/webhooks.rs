@@ -54,7 +54,9 @@ use crate::inbound::{
 };
 use crate::model::{BindOutcome, TenantId};
 use crate::notify::EventNotifier;
-use crate::outbox::{EventPage, EventQuery, NewEvent, Outbox, StoredEvent};
+use crate::outbox::{
+    EventPage, EventQuery, HeaderPage, HeaderQuery, NewEvent, Outbox, StoredEvent,
+};
 use crate::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
 };
@@ -2057,6 +2059,10 @@ impl Outbox for WatchedOutbox {
             .unwrap_or_else(PoisonError::into_inner)
             .push((event.clone(), answer));
         Ok(answer)
+    }
+
+    async fn headers_after(&self, query: &HeaderQuery) -> StoreResult<HeaderPage> {
+        self.inner.headers_after(query).await
     }
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {

@@ -1385,6 +1385,12 @@ impl crate::outbox::Outbox for FailsOneErasure {
     ) -> crate::store::StoreResult<Option<i64>> {
         self.inner.insert(event).await
     }
+    async fn headers_after(
+        &self,
+        query: &crate::outbox::HeaderQuery,
+    ) -> crate::store::StoreResult<crate::outbox::HeaderPage> {
+        self.inner.headers_after(query).await
+    }
     async fn page(
         &self,
         query: &crate::outbox::EventQuery,
