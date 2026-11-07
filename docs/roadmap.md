@@ -7353,13 +7353,30 @@ or WABA fails the family's own cross-tenant test).
     refuses to change twice), the deactivation calls, the max-price
     agreement (its body carries a token); the hosted claim and the pool's
     `request-code` are M5j3.
-- [ ] **M5j3. Idempotency on the hosted claim and the pool's `request-code`** (design D292).
+- [x] **M5j3. Idempotency on the hosted claim and the pool's `request-code`** (design D292).
   - **After:** M5j2.
   - **Decisive:** the same `Idempotency-Key` and body on the pool's
     `request-code`, after a `504`, is one request to Meta (a second code is
     a second message); a different body with the key is
     `idempotency_key_reused`. Through `Grant::idempotent_admin`, with a
     `Fingerprint` of its own for each route.
+  - **Landed** (*PR number to be added when it lands*): the pool's
+    `request-code`, its `add` and the hosted claim take an optional
+    `Idempotency-Key`, scoped to the admin key as M5j2's (`Grant::idempotent_admin`,
+    a fingerprint of its own each: `request_pre_verified_code`, which also
+    holds the pool number's id, `add_pre_verified_number`,
+    `complete_hosted_signup`, which holds the `pin` only as present: D350).
+    The claim composes with its one-claim CAS: a failure that proves nothing
+    was sent puts the arrival back and releases the key, one Meta may have
+    received (also a `503` after Meta onboarded the WABA) puts it back and keeps
+    the answer (D351); `verify` takes none.
+    No new stored name, no migration. Decisive:
+    `a_code_request_retried_after_a_504_is_one_request_to_meta`,
+    `a_hosted_claim_retried_after_a_failure_meta_may_have_seen_runs_once`,
+    `a_claim_that_stopped_before_the_store_puts_the_arrival_back_and_releases_the_key`,
+    `a_claim_that_failed_after_meta_onboarded_keeps_its_key`,
+    `two_admin_keys_do_not_share_a_key_string`,
+    and the core's `the_pool_and_hosted_fingerprints_are_per_route_body_and_number`.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its

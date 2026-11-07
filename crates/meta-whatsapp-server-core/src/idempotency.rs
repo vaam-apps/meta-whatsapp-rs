@@ -93,6 +93,7 @@ use crate::uploads::NewUpload;
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 /// | `submit_business_verification`, `create_partner_solution` ([`Self::submit_business_verification`], [`Self::create_partner_solution`]; roadmap M5j2) | the JSON body, canonical as above; the operator's, so under [`run_admin`]: the admin key's id is the records' scope, not an input |
+/// | `add_pre_verified_number`, `request_pre_verified_code`, `complete_hosted_signup` ([`Self::add_pre_verified_number`], [`Self::request_pre_verified_code`], [`Self::complete_hosted_signup`]; roadmap M5j3) | the JSON body, canonical as above (the hosted claim's `pin` only as present); the pool number's id for the code request; the operator's, as above |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -502,6 +503,49 @@ impl Fingerprint {
     /// [`AdminOperation`]: the id is the route's `operationId`.
     pub fn create_partner_solution(body: &serde_json::Value) -> Self {
         Self::admin_json("create_partner_solution", body)
+    }
+
+    /// `add_pre_verified_number` with the JSON body the request carried
+    /// (roadmap M5j3; no legacy fingerprint): the number added to the
+    /// pool, so a retry does not add it twice.
+    pub fn add_pre_verified_number(body: &serde_json::Value) -> Self {
+        Self::admin_json("add_pre_verified_number", body)
+    }
+
+    /// `request_pre_verified_code` for the pool's number `id` (as the path
+    /// spelled it, decoded) with the JSON body the request carried
+    /// (roadmap M5j3; no legacy fingerprint): each request sends the
+    /// number a message. The number is an input: the same body for
+    /// another number is another request.
+    pub fn request_pre_verified_code(id: &str, body: &serde_json::Value) -> Self {
+        Self::admin_json_for("request_pre_verified_code", id, body)
+    }
+
+    /// `complete_hosted_signup` with the JSON body the request carried
+    /// (roadmap M5j3; no legacy fingerprint). The body's `pin` is a
+    /// secret of six digits, so its value is not hashed (a digest of a
+    /// million values is a guess away, and the record outlives the
+    /// request): only its presence is. A repeat with another PIN under the
+    /// same key replays the first answer.
+    pub fn complete_hosted_signup(body: &serde_json::Value) -> Self {
+        let mut body = body.clone();
+        if let Some(pin) = body.get_mut("pin")
+            && pin.is_string()
+        {
+            *pin = serde_json::Value::Bool(true);
+        }
+        Self::admin_json("complete_hosted_signup", &body)
+    }
+
+    /// An operator's operation by id and one named target, with a JSON
+    /// body: the kind `admin-json-for`, apart from [`Self::admin_json`].
+    fn admin_json_for(operation: &str, target: &str, body: &serde_json::Value) -> Self {
+        let mut hasher = Sha256::new();
+        framed(&mut hasher, b"admin-json-for");
+        framed(&mut hasher, operation.as_bytes());
+        framed(&mut hasher, target.as_bytes());
+        canonical(&mut hasher, body);
+        Self::of(hasher.finalize().into())
     }
 
     /// An operator's operation by id, with a JSON body. Another kind than
@@ -2041,6 +2085,77 @@ mod tests {
         assert_eq!(
             hex::encode(Fingerprint::submit_business_verification(&pinned).as_bytes()),
             "25f1ffc279026c81159aff939cd6fdf2466aa85a8c719d195b60c61c9e84a53a"
+        );
+    }
+
+    /// Roadmap M5j3's fingerprints, one per route: the operation (shared
+    /// between two routes, one body replays the other's answer), the body,
+    /// the pool number of a code request, and the hosted claim's PIN,
+    /// which is in the digest only as present. Pinned as above.
+    #[test]
+    fn the_pool_and_hosted_fingerprints_are_per_route_body_and_number() {
+        let code = serde_json::json!({"method": "SMS", "language": "en_US"});
+        let other = serde_json::json!({"method": "VOICE", "language": "en_US"});
+        assert_eq!(
+            Fingerprint::request_pre_verified_code("1", &code),
+            Fingerprint::request_pre_verified_code("1", &code)
+        );
+        assert_ne!(
+            Fingerprint::request_pre_verified_code("1", &code),
+            Fingerprint::request_pre_verified_code("1", &other)
+        );
+        assert_ne!(
+            Fingerprint::request_pre_verified_code("1", &code),
+            Fingerprint::request_pre_verified_code("2", &code)
+        );
+        assert_ne!(
+            Fingerprint::request_pre_verified_code("1", &code),
+            Fingerprint::add_pre_verified_number(&code)
+        );
+        assert_ne!(
+            Fingerprint::add_pre_verified_number(&code),
+            Fingerprint::complete_hosted_signup(&code)
+        );
+        let claim = |pin: Option<&str>, tenant: &str| {
+            let mut body = serde_json::json!({
+                "tenant_id": tenant,
+                "waba_id": "102290129340398",
+                "owner_business_id": "2729063490586005",
+            });
+            if let Some(pin) = pin {
+                body["pin"] = pin.into();
+            }
+            Fingerprint::complete_hosted_signup(&body)
+        };
+        assert_ne!(claim(None, "merchant-a"), claim(None, "merchant-b"));
+        // The PIN is not hashed: another PIN is the same request; no PIN is
+        // another.
+        assert_eq!(
+            claim(Some("123456"), "merchant-a"),
+            claim(Some("654321"), "merchant-a")
+        );
+        assert_ne!(
+            claim(Some("123456"), "merchant-a"),
+            claim(None, "merchant-a")
+        );
+        assert_eq!(
+            hex::encode(
+                Fingerprint::add_pre_verified_number(
+                    &serde_json::json!({"phone_number": "+1 555 078 3881"})
+                )
+                .as_bytes()
+            ),
+            "37bae751f17a79ec3c70dc60898fa8023265e05067f94cae092c2e0bf8d870dc"
+        );
+        assert_eq!(
+            hex::encode(
+                Fingerprint::request_pre_verified_code("1972385232742999", &code).as_bytes()
+            ),
+            "84034253ad4f9392363edfd5dc7f86656dca23c45c046f0f7168d874bf00b472"
+        );
+        assert_eq!(
+            hex::encode(claim(Some("123456"), "merchant-a").as_bytes()),
+            "8049abea2b852eef5268ca18e72cace7a3a138303a7956f8bc8fbbafdf6112c1"
         );
     }
 

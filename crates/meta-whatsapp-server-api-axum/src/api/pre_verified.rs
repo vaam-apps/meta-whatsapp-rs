@@ -23,14 +23,17 @@ use meta_whatsapp_rs::client::waba::PreVerifiedNumber;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::signup::{PreVerifiedAdd, PreVerifiedCode, PreVerifiedList};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use utoipa::ToSchema;
 
 use super::common::ApiJson;
 use super::templates::ApiQuery;
 use crate::auth::AdminCaller;
 use crate::error::{ApiError, ErrorBody};
+use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::model::TenantId;
 use crate::state::Grant;
 
@@ -157,44 +160,66 @@ pub struct PreVerifiedQuery {
     pub cursor: Option<String>,
 }
 
-/// `POST /v1/admin/pre-verified-numbers`: add a number to the pool.
-#[utoipa::path(
-    post,
-    path = "/v1/admin/pre-verified-numbers",
-    tag = "pre_verified",
-    security(("api_key" = [])),
-    request_body = AddPreVerifiedBody,
-    responses(
-        (status = 201, description = "The number is in the pool (not yet verified): request its code", body = CreatedView),
-        (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key", body = ErrorBody),
-        (status = 409, description = "`signup_not_configured`: no pool (`WA_PARTNER_BUSINESS_ID`)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`phone_number`, `body`)", body = ErrorBody),
-        (status = 502, description = "`graph_error` and its kin: Meta refused", body = ErrorBody),
-    )
-)]
-pub(crate) async fn add_pre_verified_number(
-    State(state): State<Grant>,
-    admin: AdminCaller,
-    ApiJson(body): ApiJson<AddPreVerifiedBody>,
-) -> Result<(StatusCode, Json<CreatedView>), ApiError> {
+/// The addition as the operation a key keeps: the new number's id.
+async fn add_number(
+    state: &Grant,
+    admin: &AdminCaller,
+    body: AddPreVerifiedBody,
+) -> Result<Success, ApiError> {
     let created = state
         .signups()
         .pre_verified_add(
             state.authz(),
-            &admin,
+            admin,
             PreVerifiedAdd {
                 phone_number: body.phone_number,
             },
             state.metrics(),
         )
         .await?;
-    Ok((
+    Success::json(
         StatusCode::CREATED,
-        Json(CreatedView {
+        &CreatedView {
             id: created.id.as_str().to_owned(),
-        }),
-    ))
+        },
+    )
+}
+
+/// `POST /v1/admin/pre-verified-numbers`: add a number to the pool. It
+/// takes an `Idempotency-Key`, scoped to the admin key (roadmap M5j3), so
+/// that a retry after a `504` does not add the number twice.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/pre-verified-numbers",
+    tag = "pre_verified",
+    security(("api_key" = [])),
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never add twice"),
+    ),
+    request_body = AddPreVerifiedBody,
+    responses(
+        (status = 201, description = "The number is in the pool (not yet verified): request its code", body = CreatedView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`: no pool (`WA_PARTNER_BUSINESS_ID`); `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`phone_number`, `body`, `Idempotency-Key`); `idempotency_key_reused`", body = ErrorBody),
+        (status = 502, description = "`graph_error` and its kin: Meta refused", body = ErrorBody),
+        (status = 504, description = "`timeout`: list the pool before adding again, or repeat the request with the same `Idempotency-Key` for this answer", body = ErrorBody),
+    )
+)]
+pub(crate) async fn add_pre_verified_number(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::add_pre_verified_number(&body);
+    let Ok(body) = serde_json::from_value::<AddPreVerifiedBody>(body) else {
+        return ApiError::invalid("body").into_response();
+    };
+    state
+        .idempotent_admin(&admin, key, fingerprint, add_number(&state, &admin, body))
+        .await
 }
 
 /// `GET /v1/admin/pre-verified-numbers`: one page of the pool.
@@ -288,31 +313,13 @@ pub(crate) async fn get_pre_verified_number(
     Ok(Json(number.into()))
 }
 
-/// `POST /v1/admin/pre-verified-numbers/{id}/code`: have Meta send the
-/// one-time code (not replayed after a timeout: each request sends a
-/// message).
-#[utoipa::path(
-    post,
-    path = "/v1/admin/pre-verified-numbers/{id}/code",
-    tag = "pre_verified",
-    security(("api_key" = [])),
-    params(("id" = String, Path, description = "The pre-verified number's id (digits)")),
-    request_body = RequestCodeBody,
-    responses(
-        (status = 204, description = "The code was requested"),
-        (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "Not an admin key", body = ErrorBody),
-        (status = 409, description = "`signup_not_configured`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`id`, `language`, `body`)", body = ErrorBody),
-        (status = 502, description = "Meta refused", body = ErrorBody),
-    )
-)]
-pub(crate) async fn request_pre_verified_code(
-    State(state): State<Grant>,
-    admin: AdminCaller,
-    Path(id): Path<String>,
-    ApiJson(body): ApiJson<RequestCodeBody>,
-) -> Result<StatusCode, ApiError> {
+/// The code request as the operation a key keeps: no body.
+async fn request_code(
+    state: &Grant,
+    admin: &AdminCaller,
+    id: &str,
+    body: RequestCodeBody,
+) -> Result<Success, ApiError> {
     let method = match body.method {
         CodeMethodName::Sms => CodeMethod::Sms,
         CodeMethodName::Voice => CodeMethod::Voice,
@@ -321,8 +328,8 @@ pub(crate) async fn request_pre_verified_code(
         .signups()
         .pre_verified_request_code(
             state.authz(),
-            &admin,
-            &id,
+            admin,
+            id,
             PreVerifiedCode {
                 method,
                 language: body.language,
@@ -330,7 +337,53 @@ pub(crate) async fn request_pre_verified_code(
             state.metrics(),
         )
         .await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Success::no_content())
+}
+
+/// `POST /v1/admin/pre-verified-numbers/{id}/code`: have Meta send the
+/// one-time code (not replayed after a timeout: each request sends a
+/// message). It takes an `Idempotency-Key`, scoped to the admin key
+/// (roadmap M5j3), so that a client's retry after a `504` is not a second
+/// message to the number.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/pre-verified-numbers/{id}/code",
+    tag = "pre_verified",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "The pre-verified number's id (digits)"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key, number and body never send a second code"),
+    ),
+    request_body = RequestCodeBody,
+    responses(
+        (status = 204, description = "The code was requested"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`; `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`id`, `language`, `body`, `Idempotency-Key`); `idempotency_key_reused`", body = ErrorBody),
+        (status = 502, description = "Meta refused", body = ErrorBody),
+        (status = 504, description = "`timeout`: the code may have been sent; repeat the request with the same `Idempotency-Key` for this answer", body = ErrorBody),
+    )
+)]
+pub(crate) async fn request_pre_verified_code(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(id): Path<String>,
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::request_pre_verified_code(&id, &body);
+    let Ok(body) = serde_json::from_value::<RequestCodeBody>(body) else {
+        return ApiError::invalid("body").into_response();
+    };
+    state
+        .idempotent_admin(
+            &admin,
+            key,
+            fingerprint,
+            request_code(&state, &admin, &id, body),
+        )
+        .await
 }
 
 /// `POST /v1/admin/pre-verified-numbers/{id}/verify`: check the code.
