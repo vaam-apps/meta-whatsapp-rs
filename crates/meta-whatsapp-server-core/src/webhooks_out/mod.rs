@@ -23,7 +23,7 @@
 //! ([`crate::outbox::Outbox::get`]), so no delivery carries another
 //! tenant's event, and none survives its event's purge.
 //!
-//! **Several tenants** (roadmap M2m, D340–D349): an endpoint made with a
+//! **Several tenants** (roadmap M2m, D340–D348): an endpoint made with a
 //! platform key may name `tenants`, whose events it receives and no
 //! other's. It then holds a cursor per named tenant ([`TenantCursor`]),
 //! each delivery names its own tenant and is built from that tenant's

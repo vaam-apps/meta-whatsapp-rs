@@ -5892,7 +5892,7 @@ design's (§9).
     key is `422`; dropping the tenant filter from its fan-out fails it.
   - **Landed:** `tenants` (one to ten ids) on the create and update
     bodies and the endpoint answer; a platform key's only; the endpoint
-    holds a cursor per tenant (migration 11, D340–D349), each delivery
+    holds a cursor per tenant (migration 11, D340–D348), each delivery
     its own tenant's event. Decisive: the conformance cases
     `a_platform_endpoint_receives_its_named_tenants_only`,
     `tenants_are_a_platform_keys_and_checked`, and three more on every

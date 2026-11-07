@@ -3,7 +3,7 @@
 //! ([`WebhookEndpoints::open`]), on the caller's tenant: another tenant's
 //! endpoint or delivery is `404 not_found`, the answer for a missing one,
 //! before anything of it is read or written. An endpoint made with
-//! `tenants` (roadmap M2m, D340–D349) is reached only through a platform
+//! `tenants` (roadmap M2m, D340–D348) is reached only through a platform
 //! key that may name every tenant it receives: any other key, a tenant
 //! key among them, finds it missing (`404`), since to change its URL is to
 //! read those tenants' events.
