@@ -91,8 +91,7 @@ fn meta_sip_answer() -> Value {
 async fn the_password_is_asked_with_metas_parameter_and_answered_only_here() {
     let w = world(true).await;
     w.h.graph.push_json(200, meta_sip_answer());
-    let reply =
-        w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     assert_eq!(reply.headers["cache-control"], "no-store");
     assert_eq!(
@@ -112,8 +111,7 @@ async fn the_password_is_asked_with_metas_parameter_and_answered_only_here() {
     // A number whose SIP was never configured: no servers, no status.
     w.h.graph
         .push_json(200, json!({"calling": {"status": "ENABLED"}}));
-    let reply =
-        w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     assert_eq!(reply.json(), json!({"status": null, "servers": []}));
 
@@ -173,8 +171,7 @@ async fn with_the_setting_off_the_read_is_refused_and_nothing_is_sent() {
     );
     let w = world(false).await;
     w.h.graph.push_json(200, meta_sip_answer());
-    let reply =
-        w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
     assert_eq!(
         (reply.status, reply.code().as_str()),
         (StatusCode::FORBIDDEN, "feature_not_available"),
@@ -214,15 +211,13 @@ async fn the_read_is_the_numbers_and_its_failures_carry_no_secret() {
                          "code": 138_000, "error_data": {"messaging_product": "whatsapp",
                                                           "details": PASSWORD}}}),
     );
-    let reply =
-        w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
     assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.text);
     assert_eq!(reply.code(), "calling_not_enabled");
     assert!(!reply.text.contains(PASSWORD), "{}", reply.text);
 
     w.h.graph.push_error(|| TransportError::Timeout);
-    let reply =
-        w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
+    let reply = w.h.call(Call::get(sip_path(PN)).key(&w.credentials)).await;
     assert_eq!(reply.status, StatusCode::GATEWAY_TIMEOUT, "{}", reply.text);
     assert!(!reply.text.contains(PASSWORD), "{}", reply.text);
     assert_eq!(w.h.graph.remaining(), 0);
@@ -280,13 +275,16 @@ async fn an_announcement_is_uploaded_with_the_use_case_and_named_in_the_settings
                "mime_type": "audio/ogg", "sha256": "abc", "file_size": 1, "id": "1037543291543636"}),
     );
     w.h.graph.push_json(200, json!({"success": true}));
-    let reply = w.h.call(
-        Call::new(Method::PATCH, format!("/v1/numbers/{PN}/call-settings"))
-            .key(&w.calls)
-            .json(&json!({"voicemail": {"status": "ENABLED", "triggers": ["REJECT"],
-                "audio": {"default": {"announcement_media_id": "1037543291543636"}}}})),
-    )
-    .await;
+    let reply =
+        w.h.call(
+            Call::new(Method::PATCH, format!("/v1/numbers/{PN}/call-settings"))
+                .key(&w.calls)
+                .json(
+                    &json!({"voicemail": {"status": "ENABLED", "triggers": ["REJECT"],
+                "audio": {"default": {"announcement_media_id": "1037543291543636"}}}}),
+                ),
+        )
+        .await;
     assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
     let requests = w.h.graph.requests();
     assert_eq!(requests.len(), 3);
@@ -326,34 +324,45 @@ async fn a_file_that_is_not_ogg_opus_is_refused_with_no_request() {
                 reply.code().as_str(),
                 reply.json()["error"]["field"].as_str()
             ),
-            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request", Some("file")),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request",
+                Some("file")
+            ),
             "{what}: {}",
             reply.text
         );
     }
     // Another field, and no file.
-    let reply = w.h.call(
-        Call::new(Method::POST, announcement_path(PN))
-            .key(&w.calls)
-            .multipart(&[
-                ("use_case", None, b"call_voicemail_announcement"),
-                ("file", Some("a.ogg"), &ogg_opus(b"")),
-            ]),
-    )
-    .await;
+    let reply =
+        w.h.call(
+            Call::new(Method::POST, announcement_path(PN))
+                .key(&w.calls)
+                .multipart(&[
+                    ("use_case", None, b"call_voicemail_announcement"),
+                    ("file", Some("a.ogg"), &ogg_opus(b"")),
+                ]),
+        )
+        .await;
     assert_eq!(
         (reply.status, reply.json()["error"]["field"].as_str()),
         (StatusCode::UNPROCESSABLE_ENTITY, Some("body")),
         "{}",
         reply.text
     );
-    let reply = w.h.call(
-        Call::new(Method::POST, announcement_path(PN))
-            .key(&w.calls)
-            .multipart(&[]),
-    )
-    .await;
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", reply.text);
+    let reply =
+        w.h.call(
+            Call::new(Method::POST, announcement_path(PN))
+                .key(&w.calls)
+                .multipart(&[]),
+        )
+        .await;
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        reply.text
+    );
     // Past 16 MiB.
     let mut big = ogg_opus(b"");
     big.resize(16 * 1024 * 1024 + 1, 0);
@@ -392,7 +401,12 @@ async fn an_announcement_key_never_uploads_twice_and_a_timeout_is_not_repeated()
     let cut = w.h.call(keyed("vm-2", &file)).await;
     assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
     let replay = w.h.call(keyed("vm-2", &file)).await;
-    assert_eq!(replay.status, StatusCode::GATEWAY_TIMEOUT, "{}", replay.text);
+    assert_eq!(
+        replay.status,
+        StatusCode::GATEWAY_TIMEOUT,
+        "{}",
+        replay.text
+    );
     assert_eq!(w.h.graph.requests().len(), 2, "not repeated");
     assert_eq!(w.h.graph.remaining(), 0);
 
@@ -419,12 +433,13 @@ async fn an_announcement_key_never_uploads_twice_and_a_timeout_is_not_repeated()
 async fn an_announcement_on_another_tenants_number_is_not_found_with_zero_vault_reads() {
     let w = world(false).await;
     let reads = w.h.kv.vault_reads();
-    let reply = w.h.call(
-        Call::new(Method::POST, announcement_path(OTHER_PN))
-            .key(&w.calls)
-            .multipart(&[("file", Some("a.ogg"), &ogg_opus(b"x"))]),
-    )
-    .await;
+    let reply =
+        w.h.call(
+            Call::new(Method::POST, announcement_path(OTHER_PN))
+                .key(&w.calls)
+                .multipart(&[("file", Some("a.ogg"), &ogg_opus(b"x"))]),
+        )
+        .await;
     assert_eq!(
         (reply.status, reply.code().as_str()),
         (StatusCode::NOT_FOUND, "not_found"),
@@ -462,8 +477,9 @@ async fn a_recordings_media_is_looked_up_on_the_number_and_another_numbers_is_no
                "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1002764438271669"}),
     );
     w.h.graph.push_bytes(200, "audio/ogg", recording.clone());
-    let reply = w.h.call(Call::get(format!("/v1/numbers/{PN}/media/{id}")).key(&key))
-        .await;
+    let reply =
+        w.h.call(Call::get(format!("/v1/numbers/{PN}/media/{id}")).key(&key))
+            .await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     let requests = w.h.graph.requests();
     let [lookup, bytes] = &requests[..] else {
@@ -481,8 +497,9 @@ async fn a_recordings_media_is_looked_up_on_the_number_and_another_numbers_is_no
         json!({"error": {"message": "(#100) Unsupported get request", "type": "OAuthException",
                          "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
-    let reply = w.h.call(Call::get(format!("/v1/numbers/{PN}/media/{id}")).key(&key))
-        .await;
+    let reply =
+        w.h.call(Call::get(format!("/v1/numbers/{PN}/media/{id}")).key(&key))
+            .await;
     assert_eq!(
         (reply.status, reply.code().as_str()),
         (StatusCode::NOT_FOUND, "not_found"),
@@ -491,7 +508,11 @@ async fn a_recordings_media_is_looked_up_on_the_number_and_another_numbers_is_no
     );
     assert_eq!(w.h.graph.requests().len(), asked + 1, "the lookup only");
     assert_eq!(
-        w.h.graph.last_request().unwrap().query("phone_number_id").as_deref(),
+        w.h.graph
+            .last_request()
+            .unwrap()
+            .query("phone_number_id")
+            .as_deref(),
         Some(PN)
     );
     assert_eq!(w.h.graph.remaining(), 0);
@@ -536,12 +557,13 @@ async fn the_permission_request_is_the_send_routes_message_with_metas_exact_body
                    "contacts": [{"input": "+1-408-555-1234", "wa_id": "14085551234"}],
                    "messages": [{"id": "wamid.gBGGFlaCmZ9plHrf2Mh-o"}]}),
         );
-        let reply = w.h.call(
-            Call::new(Method::POST, format!("/v1/numbers/{PN}/messages"))
-                .key(&key)
-                .json(&body),
-        )
-        .await;
+        let reply =
+            w.h.call(
+                Call::new(Method::POST, format!("/v1/numbers/{PN}/messages"))
+                    .key(&key)
+                    .json(&body),
+            )
+            .await;
         assert_eq!(reply.status, StatusCode::ACCEPTED, "{body}: {}", reply.text);
         let sent = w.h.graph.last_request().unwrap();
         assert_eq!(sent.method, Method::POST);

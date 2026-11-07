@@ -35,9 +35,9 @@ use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::calls::{
     self as domain, AcceptRequest, Announcement, Callee, Calls, ConnectRequest,
 };
+use meta_whatsapp_server_http::api::media::read_file_form;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use meta_whatsapp_server_http::api::media::read_file_form;
 use utoipa::ToSchema;
 
 use super::common::{ApiJson, rfc3339};
@@ -780,7 +780,8 @@ pub(crate) async fn upload_call_voicemail_announcement(
         Ok(audio) => audio,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    let fingerprint = Fingerprint::upload_call_voicemail_announcement(owned.phone_number_id(), &audio);
+    let fingerprint =
+        Fingerprint::upload_call_voicemail_announcement(owned.phone_number_id(), &audio);
     let response = state
         .idempotent(
             &caller,

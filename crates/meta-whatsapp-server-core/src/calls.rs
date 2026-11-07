@@ -56,13 +56,13 @@ use std::fmt;
 use std::sync::Arc;
 
 use meta_whatsapp_rs::Error;
-use meta_whatsapp_rs::client::media::UploadOptions;
 use meta_whatsapp_rs::client::calling::settings::{
     AudioCodec, CallIconVisibility, CallingSettings, DayOfWeek, FeatureStatus, VoicemailTrigger,
 };
 use meta_whatsapp_rs::client::calling::{
     AcceptOptions, CallPermissions, CallRecording, CallTranscription, ConnectCall,
 };
+use meta_whatsapp_rs::client::media::UploadOptions;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{CallId, MediaId, PhoneNumberId, UserId};
 use meta_whatsapp_rs::core::recipient::Recipient;
@@ -1180,11 +1180,7 @@ impl<'a> Calls<'a> {
             .await;
         match uploaded {
             Ok(id) => {
-                self.audit(
-                    VOICEMAIL_UPLOADED,
-                    CallFacts::default(),
-                    Outcome::Answered,
-                );
+                self.audit(VOICEMAIL_UPLOADED, CallFacts::default(), Outcome::Answered);
                 Ok(AnnouncementUploaded {
                     media_id: id.into_inner(),
                 })

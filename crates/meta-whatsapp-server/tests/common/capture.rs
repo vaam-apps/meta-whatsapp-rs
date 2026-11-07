@@ -2992,7 +2992,11 @@ async fn calling(h: &Harness, admin: &str) -> Vec<String> {
                 Method::POST,
                 &format!("/v1/numbers/{PN}/call-settings/voicemail-announcement"),
             )
-            .multipart(&[("file", Some("announcement.ogg"), &super::ogg_opus(CALL_AUDIO))]),
+            .multipart(&[(
+                "file",
+                Some("announcement.ogg"),
+                &super::ogg_opus(CALL_AUDIO),
+            )]),
         )
         .await;
     assert_eq!(uploaded.status.as_u16(), 201, "{}", uploaded.text);
