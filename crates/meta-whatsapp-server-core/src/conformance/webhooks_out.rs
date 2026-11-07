@@ -4152,11 +4152,22 @@ pub async fn the_listing_survives_changes_between_pages(backend: &dyn Backend) {
     let last = first.items.last().unwrap();
     assert_eq!(last.id.as_str(), cursor);
     // Between the pages: the cursor's own row goes, three are created.
+    // The listing is every tenant's, so the row may be an earlier case's,
+    // a platform endpoint naming tenants (about one run in sixteen, by the
+    // random ids): its deletion states the set it was checked against
+    // (D342), or it deletes nothing.
+    let through: Option<Vec<TenantId>> = last
+        .tenants
+        .as_ref()
+        .map(|named| named.iter().map(|c| c.tenant.clone()).collect());
     assert!(
         store
-            .delete_endpoint(&last.tenant, &last.id, None)
+            .delete_endpoint(&last.tenant, &last.id, through.as_deref())
             .await
-            .unwrap()
+            .unwrap(),
+        "the cursor's row ({:?}, named tenants {:?}) was not deleted",
+        last.tenant,
+        last.tenants,
     );
     for _ in 0..3 {
         created(store.as_ref(), &new_endpoint(&t, 0)).await;
