@@ -6916,6 +6916,30 @@ or WABA fails the family's own cross-tenant test).
     the request's key; with no callback configured it is `503` as in
     M5d; the callback's destination is refused as a webhook endpoint's
     is.
+  - **First slice, a Flow key per tenant (decisions D370 to
+    D374, 2026-11-07):** the library's
+    `TokenVault::{store_flow_key, flow_key, delete_flow_key,
+    holds_flow_key}` (a sealed vault record `flow-key/<WABA_ID>` naming
+    its owner, rotated with the vault's keys); the core's
+    `flow_key::FlowKey` (set, read as its public half, delete; audited
+    as `flow_key_set` and `flow_key_deleted`) and
+    `flows_endpoint::{VaultFlowKeys, TenantFirst}` (the tenant's own key
+    first; the deployment's only if `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK`
+    allows it; a record that cannot be opened is `503`, never another
+    key); `PUT`, `GET` and `DELETE /v1/wabas/{waba_id}/flow-key` (scope
+    `flows`, an `Idempotency-Key` on the `PUT` over the public half's
+    digest). Decisive: `tests/flow_key.rs`
+    (`one_tenants_key_never_decrypts_another_tenants_request`,
+    `a_tenant_with_no_key_is_not_found_whatever_another_tenant_set`,
+    `a_waba_that_changed_hands_does_not_serve_the_previous_holders_key`),
+    `tests/flow_key_logs.rs`. Names pending the owner's confirmation:
+    the store key `flow-key/<WABA_ID>`, the setting, the route, the
+    operation ids and the two audit actions. No migration.
+    **Still open in M5d2:** the integrating app over HTTP, the business
+    public key of a number, an uploaded media's download and
+    decryption, the `427` answer, the library's `application_id`,
+    `health_status` and assets, the request-IV replay guard and the
+    limits as settings.
 - [x] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.

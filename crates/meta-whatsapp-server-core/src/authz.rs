@@ -97,13 +97,16 @@ use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TokenExpiry, TokenVault, TokenVersion,
 };
+use meta_whatsapp_rs::client::flows::endpoint::FlowEndpointKey;
 use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
-use meta_whatsapp_rs::core::error::{ConfigError, StorageError};
+use meta_whatsapp_rs::core::error::{ConfigError, CryptoError, StorageError};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::secret::SecretBytes;
 use meta_whatsapp_rs::{Error, ErrorKind};
 use time::OffsetDateTime;
 
 use crate::error::{ErrorCode, ServiceError};
+use crate::flows_endpoint::VaultFlowKeys;
 use crate::groups::GroupRecords;
 use crate::keys::PresentedKey;
 use crate::model::{
@@ -184,9 +187,27 @@ impl Tokens {
         self.vault.store_versioned(token).await
     }
 
-    /// Delete a WABA's token and its phone index.
+    /// Delete a WABA's token and its phone index, and the Flow key a
+    /// tenant set for it (roadmap M5d2: best effort, see
+    /// [`Self::forget_flow_key`]).
     async fn delete(&self, waba_id: &WabaId) -> Result<bool, Error> {
-        self.vault.delete(waba_id).await
+        let removed = self.vault.delete(waba_id).await?;
+        self.forget_flow_key(waba_id).await;
+        Ok(removed)
+    }
+
+    /// Delete the Flow key record of a WABA that is being disconnected.
+    /// Best effort: a record left behind is harmless (the vault gives a
+    /// key only to the tenant that stored it, so the WABA's next holder
+    /// never reads it), and a disconnection must not stop on it.
+    async fn forget_flow_key(&self, waba_id: &WabaId) {
+        if let Err(error) = self.vault.delete_flow_key(waba_id).await {
+            tracing::warn!(
+                waba_id = waba_id.as_str(),
+                kind = error.kind().as_str(),
+                "a disconnected WABA's Flow key could not be deleted"
+            );
+        }
     }
 
     /// Delete a WABA's token and its phone index, if its record is still
@@ -196,7 +217,11 @@ impl Tokens {
         waba_id: &WabaId,
         version: TokenVersion,
     ) -> Result<bool, Error> {
-        self.vault.delete_if_unchanged(waba_id, version).await
+        let removed = self.vault.delete_if_unchanged(waba_id, version).await?;
+        if removed {
+            self.forget_flow_key(waba_id).await;
+        }
+        Ok(removed)
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
@@ -1188,6 +1213,96 @@ impl Authorizer {
              stored: the token this attach stored was taken back"
         );
         Err(ServiceError::from(StorageError::Busy))
+    }
+
+    /// The tenants' own Flow keys, read-only: what the Flows data endpoint
+    /// reads first (roadmap M5d2, [`crate::flows_endpoint::VaultFlowKeys`]).
+    /// It gives a key to the tenant that stored it only, and writes
+    /// nothing.
+    pub fn flow_keys(&self) -> VaultFlowKeys {
+        VaultFlowKeys::new(self.tokens.vault.clone())
+    }
+
+    /// Store `pem` as the Flow key of `waba`, owned by `caller`'s tenant
+    /// (replacing the previous one: a rotation). Both are checked as the
+    /// services check them: this [`Authorizer`]'s, and the WABA the
+    /// caller's tenant's own. Crate-private: [`crate::flow_key`] calls it.
+    ///
+    /// # Errors
+    ///
+    /// A capability another [`Authorizer`] made: `403 forbidden`; a WABA
+    /// of another tenant: `404 not_found`. A key that is not an
+    /// unencrypted 2048-bit RSA private key in PEM: `422 invalid_request`
+    /// on `private_key`, never quoting it. The vault failing.
+    pub(crate) async fn store_flow_key(
+        &self,
+        caller: &Caller,
+        waba: &OwnedWaba,
+        pem: &SecretBytes,
+    ) -> Result<(), ServiceError> {
+        self.check_flow_key_access(caller, waba)?;
+        match self
+            .tokens
+            .vault
+            .store_flow_key(&waba.waba_id, caller.tenant.as_str(), pem)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(Error::Crypto(CryptoError::InvalidKey(_))) => {
+                // The key was parsed before anything was sealed: what the
+                // library refuses of it is the request's.
+                Err(ServiceError::invalid("private_key"))
+            }
+            Err(error) => Err(ServiceError::from_library(&error)),
+        }
+    }
+
+    /// The Flow key `caller`'s tenant set for `waba`, if any (`None` too
+    /// when another tenant's record sits there). Crate-private.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::store_flow_key`], and a record that cannot be opened.
+    pub(crate) async fn read_flow_key(
+        &self,
+        caller: &Caller,
+        waba: &OwnedWaba,
+    ) -> Result<Option<FlowEndpointKey>, ServiceError> {
+        self.check_flow_key_access(caller, waba)?;
+        self.tokens
+            .vault
+            .flow_key(&waba.waba_id, caller.tenant.as_str())
+            .await
+            .map_err(|error| ServiceError::from_library(&error))
+    }
+
+    /// Delete the Flow key record of `waba`, whoever set it: whether there
+    /// was one. Crate-private.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::store_flow_key`].
+    pub(crate) async fn delete_flow_key(
+        &self,
+        caller: &Caller,
+        waba: &OwnedWaba,
+    ) -> Result<bool, ServiceError> {
+        self.check_flow_key_access(caller, waba)?;
+        self.tokens
+            .vault
+            .delete_flow_key(&waba.waba_id)
+            .await
+            .map_err(|error| ServiceError::from_library(&error))
+    }
+
+    fn check_flow_key_access(&self, caller: &Caller, waba: &OwnedWaba) -> Result<(), ServiceError> {
+        self.check(&caller.issuer, "flow_key")?;
+        self.check(&waba.issuer, "flow_key")?;
+        if waba.tenant() != &caller.tenant {
+            tracing::warn!("refused a Flow key operation on another tenant's WABA");
+            return Err(ServiceError::not_found());
+        }
+        Ok(())
     }
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
