@@ -4,7 +4,7 @@
 //!
 //! | Route | Does |
 //! | --- | --- |
-//! | `POST /v1/webhook-endpoints` | an endpoint: `{url, types}` → `201` with its `secret` (`whsec_…`), shown once; the URL checked against the allow-list (its host looked up, every address checked) |
+//! | `POST /v1/webhook-endpoints` | an endpoint: `{url, types, tenants?}` → `201` with its `secret` (`whsec_…`), shown once; the URL checked against the allow-list (its host looked up, every address checked); `tenants` (a platform key's only) names the tenants whose events it receives |
 //! | `GET /v1/webhook-endpoints` | the tenant's endpoints, paged |
 //! | `GET`, `PATCH`, `DELETE /v1/webhook-endpoints/{id}` | one; a change of its URL (checked again), types or `enabled`; its deletion, with its deliveries |
 //! | `POST /v1/webhook-endpoints/{id}/rotate-secret` | a new secret, shown once; the old one signs too for 24 h |
@@ -16,13 +16,15 @@
 //! an endpoint is the caller's tenant's, another tenant's is `404` like a
 //! missing one, before anything of it is read; a deployment without a
 //! data key answers `409 webhooks_not_configured`. No answer shows a
-//! secret but the creation's and the rotation's.
+//! secret but the creation's and the rotation's. An endpoint made with
+//! `tenants` (roadmap M2m) is still its `WA-Tenant`'s, listed and changed
+//! there, through a platform key that may name all of its tenants (any
+//! other key finds it missing).
 
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
-use meta_whatsapp_server_core::webhooks_out::endpoints::CreateEndpoint;
-use meta_whatsapp_server_core::webhooks_out::store::EndpointChange;
+use meta_whatsapp_server_core::webhooks_out::endpoints::{CreateEndpoint, UpdateEndpoint};
 use meta_whatsapp_server_core::webhooks_out::{Delivery, Endpoint};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -48,6 +50,16 @@ pub struct CreateWebhookEndpointBody {
     /// once.
     #[schema(value_type = Vec<KnownEventType>)]
     pub types: Vec<String>,
+    /// The tenants whose events it receives, instead of the `WA-Tenant`'s
+    /// own: a **platform key's** only (`422` on `tenants` from a tenant
+    /// key), one to ten tenant ids, each once, each one the key may name
+    /// and that exists (`403 forbidden` otherwise, alike for both). Every
+    /// delivery carries one tenant's event, read in that tenant's own
+    /// stream; a tenant deleted later leaves the endpoint (its events
+    /// stop), and the endpoint does not receive the `WA-Tenant`'s unless
+    /// it is named. Absent: the `WA-Tenant`'s own events.
+    #[serde(default)]
+    pub tenants: Option<Vec<String>>,
 }
 
 /// `PATCH /v1/webhook-endpoints/{id}`: what is absent is left.
@@ -64,6 +76,13 @@ pub struct UpdateWebhookEndpointBody {
     /// endpoint stopped, within the outbox's retention, and clears the
     /// service's `disabled_reason`.
     pub enabled: Option<bool>,
+    /// New tenants, replacing those of an endpoint made with `tenants`
+    /// (same rules as on a creation; `422` on `tenants` for an endpoint
+    /// made without): one kept keeps its place in its stream, one added
+    /// receives from now on, one left out stops at once, its pending
+    /// deliveries deleted.
+    #[serde(default)]
+    pub tenants: Option<Vec<String>>,
 }
 
 // ─── Answers ─────────────────────────────────────────────────────────────
@@ -81,6 +100,10 @@ pub struct WebhookEndpointView {
     pub types: Vec<String>,
     /// Whether deliveries are made.
     pub enabled: bool,
+    /// The tenants whose events it receives, when it was made with
+    /// `tenants`; absent otherwise (it receives the `WA-Tenant`'s own).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenants: Option<Vec<String>>,
     /// Why the service turned it off: `failing` (its deliveries failed for
     /// the whole retry window); `null` otherwise.
     #[schema(required = true)]
@@ -104,6 +127,9 @@ impl From<Endpoint> for WebhookEndpointView {
             url: endpoint.url,
             types: endpoint.types,
             enabled: endpoint.enabled,
+            tenants: endpoint
+                .tenants
+                .map(|named| named.into_iter().map(|t| t.tenant.to_string()).collect()),
             disabled_reason: endpoint.disabled_reason.map(|r| r.as_str().to_owned()),
             previous_secret_expires_at: endpoint
                 .previous_secret
@@ -238,6 +264,7 @@ impl std::fmt::Debug for CreateWebhookEndpointBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreateWebhookEndpointBody")
             .field("types", &self.types)
+            .field("tenants", &self.tenants)
             .finish_non_exhaustive()
     }
 }
@@ -248,6 +275,7 @@ impl std::fmt::Debug for UpdateWebhookEndpointBody {
             .field("url", &self.url.as_ref().map(|_| ".."))
             .field("types", &self.types)
             .field("enabled", &self.enabled)
+            .field("tenants", &self.tenants)
             .finish()
     }
 }
@@ -258,6 +286,7 @@ impl std::fmt::Debug for WebhookEndpointView {
             .field("id", &self.id)
             .field("types", &self.types)
             .field("enabled", &self.enabled)
+            .field("tenants", &self.tenants)
             .finish_non_exhaustive()
     }
 }
@@ -271,15 +300,15 @@ impl std::fmt::Debug for WebhookEndpointView {
     tag = "webhooks",
     security(("api_key" = [])),
     params(
-        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as: the endpoint is that tenant's"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as: the endpoint is that tenant's (and receives its events, unless `tenants` names others)"),
     ),
     request_body = CreateWebhookEndpointBody,
     responses(
         (status = 201, description = "Created, its `secret` shown this once. It receives the tenant's events recorded from now on", body = WebhookEndpointCreatedView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden` (no `webhooks` scope), `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden` (no `webhooks` scope; or a tenant in `tenants` the platform key may not name, or that does not exist), `tenant_suspended`", body = ErrorBody),
         (status = 409, description = "`webhooks_not_configured` (no data key), `webhook_endpoint_limit_reached` (10 per tenant)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `url` (not `https`, credentials in it, not in the allow-list, or its host resolving to an address the list does not admit), `types` (none, or one a tenant never receives) or `body`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `url` (not `https`, credentials in it, not in the allow-list, or its host resolving to an address the list does not admit), `types` (none, or one a tenant never receives), `tenants` (from a tenant key; empty, over 10, or not a tenant id) or `body`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
@@ -294,6 +323,7 @@ pub(crate) async fn create_webhook_endpoint(
         .create(CreateEndpoint {
             url: body.url,
             types: body.types,
+            tenants: body.tenants,
         })
         .await?;
     Ok(json(
@@ -391,7 +421,7 @@ pub(crate) async fn get_webhook_endpoint(
         (status = 404, description = "`not_found`, as for a read, before the change is checked", body = ErrorBody),
         (status = 409, description = "`webhooks_not_configured`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`)", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `url`, `types` or `body`, as on a creation", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `url`, `types`, `tenants` (also for an endpoint made without) or `body`, as on a creation", body = ErrorBody),
     )
 )]
 pub(crate) async fn update_webhook_endpoint(
@@ -405,10 +435,11 @@ pub(crate) async fn update_webhook_endpoint(
         .open(state.authz(), &caller)?
         .update(
             &id,
-            EndpointChange {
+            UpdateEndpoint {
                 url: body.url,
                 types: body.types,
                 enabled: body.enabled,
+                tenants: body.tenants,
             },
         )
         .await?;

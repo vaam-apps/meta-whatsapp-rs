@@ -93,6 +93,12 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "webhooks out",
         include_str!("../migrations/0009_webhooks_out.sql"),
     ),
+    // Roadmap M2m, numbered 11 while M5j2 holds 10.
+    (
+        11,
+        "webhook endpoint tenants",
+        include_str!("../migrations/0011_webhook_endpoint_tenants.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -1446,7 +1452,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 9] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 10] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1483,6 +1489,10 @@ mod tests {
             9,
             "0d605fa295b385137f0d6fab20501615e8621c011abadb6dfc8a16608938232351950318861db7ad5fa7ee9094650a89",
         ),
+        (
+            11,
+            "0c85bb586dfcab13733981f8960de5922ce3885416df9152392576bce2b387166e46b772fe7cee50d2dbc63b422e92f3",
+        ),
     ];
 
     #[test]
@@ -1517,7 +1527,8 @@ mod tests {
                 "signup",
                 "received media",
                 "erasure",
-                "webhooks out"
+                "webhooks out",
+                "webhook endpoint tenants"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

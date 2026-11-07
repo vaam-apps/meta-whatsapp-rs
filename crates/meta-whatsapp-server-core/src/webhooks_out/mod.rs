@@ -23,12 +23,19 @@
 //! ([`crate::outbox::Outbox::get`]), so no delivery carries another
 //! tenant's event, and none survives its event's purge.
 //!
-//! **What is not built** (the design's §4.4 names them): `tenants` on an
-//! endpoint made with a platform key (an endpoint is its creator's tenant's,
-//! the `WA-Tenant` it acted as; roadmap M2m), a data key rotation walk (a
-//! previous key still opens what it sealed; M2i), and a connection pool to
-//! the receivers (each attempt opens its own connection to the address it
-//! checked; M2j).
+//! **Several tenants** (roadmap M2m, D340–D349): an endpoint made with a
+//! platform key may name `tenants`, whose events it receives and no
+//! other's. It then holds a cursor per named tenant ([`TenantCursor`]),
+//! each delivery names its own tenant and is built from that tenant's
+//! stream alone, and the endpoint stays the tenant's its creator acted as
+//! (the `WA-Tenant`): that tenant lists, changes and deletes it, through a
+//! platform key that may name all of its tenants only (a tenant key reads
+//! it as a missing one).
+//!
+//! **What is not built** (the design's §4.4 names them): `"*"` for
+//! `tenants`, a data key rotation walk (a previous key still opens what it
+//! sealed; M2i), and a connection pool to the receivers (each attempt
+//! opens its own connection to the address it checked; M2j).
 
 use std::fmt;
 use std::time::Duration;
@@ -69,6 +76,11 @@ pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_hours(72);
 /// How many endpoints one tenant may have (the service's default: the
 /// design states none).
 pub const MAX_ENDPOINTS_PER_TENANT: usize = 10;
+
+/// How many tenants one endpoint made with a platform key may name
+/// (roadmap M2m; design D340): the endpoint limit's spirit, ten tenants
+/// at most. A constant, one place to swap.
+pub const MAX_ENDPOINT_TENANTS: usize = 10;
 
 /// The longest URL an endpoint takes.
 pub const MAX_URL_LEN: usize = 2048;
@@ -217,13 +229,35 @@ impl DisabledReason {
     }
 }
 
+/// One of the tenants a platform key's endpoint names, and how far that
+/// tenant's stream was fanned out to it (roadmap M2m;
+/// `wa_server_webhook_endpoint_tenants` on Postgres).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantCursor {
+    /// The tenant.
+    pub tenant: TenantId,
+    /// The last sequence of that tenant's stream fanned out to the
+    /// endpoint: the events after it are delivered next.
+    pub cursor: i64,
+}
+
 /// A webhook endpoint (`wa_server_webhook_endpoints` on Postgres).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Endpoint {
     /// Its id.
     pub id: EndpointId,
-    /// The tenant whose events it receives, and who alone reads it.
+    /// The tenant it belongs to: whose endpoint it is (the tenant its
+    /// creator acted as), through which the routes reach it, and with
+    /// which it is deleted. It receives this tenant's events only when
+    /// [`Self::tenants`] is `None`.
     pub tenant: TenantId,
+    /// The tenants whose events it receives, each with its own cursor,
+    /// when a platform key made it with `tenants` (roadmap M2m, D340):
+    /// exactly these, not [`Self::tenant`] unless named. `None`: it
+    /// receives [`Self::tenant`]'s events, after [`Self::cursor`]. A
+    /// named tenant that is deleted leaves the list (its events stop; the
+    /// list never widens by itself, and an empty one receives nothing).
+    pub tenants: Option<Vec<TenantCursor>>,
     /// Where the events go: checked against the allow-list at creation,
     /// at each change, and at every attempt.
     pub url: String,
@@ -241,7 +275,8 @@ pub struct Endpoint {
     /// Until when [`Self::previous_secret`] signs.
     pub previous_secret_until: Option<OffsetDateTime>,
     /// The last sequence of its tenant's stream fanned out to it: the
-    /// events after it are delivered next.
+    /// events after it are delivered next. Unused (`0`) when
+    /// [`Self::tenants`] is set: each named tenant has its own.
     pub cursor: i64,
     /// Since when its attempts have failed without a success between.
     pub failing_since: Option<OffsetDateTime>,
@@ -252,6 +287,27 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// The streams it receives, each tenant with its cursor: its named
+    /// tenants', or its own tenant's.
+    pub fn streams(&self) -> Vec<TenantCursor> {
+        match &self.tenants {
+            Some(named) => named.clone(),
+            None => vec![TenantCursor {
+                tenant: self.tenant.clone(),
+                cursor: self.cursor,
+            }],
+        }
+    }
+
+    /// Whether an event of `tenant` may be delivered to it: the tenant is
+    /// one it names, or, without names, its own.
+    pub fn receives(&self, tenant: &TenantId) -> bool {
+        match &self.tenants {
+            Some(named) => named.iter().any(|t| &t.tenant == tenant),
+            None => &self.tenant == tenant,
+        }
+    }
+
     /// The secrets that sign an attempt at `now`: the current one, then
     /// the previous one while it overlaps.
     pub fn signing_secrets(&self, now: OffsetDateTime) -> Vec<&SealedSecret> {
@@ -271,6 +327,7 @@ impl fmt::Debug for Endpoint {
         f.debug_struct("Endpoint")
             .field("id", &self.id)
             .field("tenant", &self.tenant)
+            .field("tenants", &self.tenants.as_ref().map(Vec::len))
             .field("types", &self.types.len())
             .field("enabled", &self.enabled)
             .field("cursor", &self.cursor)

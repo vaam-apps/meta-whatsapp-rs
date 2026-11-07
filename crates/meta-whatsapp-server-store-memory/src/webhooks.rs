@@ -2,8 +2,10 @@
 //! core's [`WebhookStore`] for development and tests. It keeps the port's
 //! rules as the Postgres one does: an endpoint is its tenant's and goes
 //! with it (deleted under the records' lock, as Postgres cascades), a
-//! fan-out moves its endpoint's cursor only from the value it read, and a
-//! claim takes a delivery for one claimer until its lease ends.
+//! fan-out moves one of its endpoint's cursors (a tenant's stream's) only
+//! from the value it read, and a claim takes a delivery for one claimer
+//! until its lease ends. An endpoint of several tenants (roadmap M2m)
+//! loses a tenant that is deleted, as Postgres cascades its row.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -17,6 +19,7 @@ use meta_whatsapp_server_core::webhooks_out::store::{
 };
 use meta_whatsapp_server_core::webhooks_out::{
     Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId, SealedSecret,
+    TenantCursor,
 };
 use time::OffsetDateTime;
 
@@ -76,6 +79,11 @@ impl MemoryWebhookStore {
     pub(crate) fn forget_tenant(&self, tenant: &TenantId) {
         let mut state = self.lock();
         state.endpoints.retain(|_, e| &e.tenant != tenant);
+        for endpoint in state.endpoints.values_mut() {
+            if let Some(named) = &mut endpoint.tenants {
+                named.retain(|t| &t.tenant != tenant);
+            }
+        }
         state.deliveries.retain(|_, r| &r.delivery.tenant != tenant);
     }
 
@@ -91,12 +99,12 @@ impl MemoryWebhookStore {
     }
 }
 
-fn new_row(endpoint: &Endpoint, delivery: &NewDelivery) -> Row {
+fn new_row(endpoint: &Endpoint, tenant: &TenantId, delivery: &NewDelivery) -> Row {
     Row {
         delivery: Delivery {
             id: delivery.id.clone(),
             endpoint: endpoint.id.clone(),
-            tenant: endpoint.tenant.clone(),
+            tenant: tenant.clone(),
             event_id: delivery.event_id.clone(),
             sequence: delivery.sequence,
             event_type: delivery.event_type.clone(),
@@ -130,6 +138,13 @@ impl WebhookStore for MemoryWebhookStore {
         if !records.tenants.contains_key(endpoint.tenant.as_str()) {
             return Ok(CreateOutcome::NoSuchTenant);
         }
+        if endpoint.tenants.as_ref().is_some_and(|named| {
+            named
+                .iter()
+                .any(|t| !records.tenants.contains_key(t.tenant.as_str()))
+        }) {
+            return Ok(CreateOutcome::NamedTenantGone);
+        }
         let mut state = self.lock();
         let held = state
             .endpoints
@@ -142,6 +157,7 @@ impl WebhookStore for MemoryWebhookStore {
         let made = Endpoint {
             id: endpoint.id.clone(),
             tenant: endpoint.tenant.clone(),
+            tenants: endpoint.tenants.clone(),
             url: endpoint.url.clone(),
             types: endpoint.types.clone(),
             enabled: true,
@@ -193,9 +209,12 @@ impl WebhookStore for MemoryWebhookStore {
         change: &EndpointChange,
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
-        let mut state = self.lock();
-        let Some(endpoint) = state
-            .endpoints
+        let mut guard = self.lock();
+        let WebhookState {
+            endpoints,
+            deliveries,
+        } = &mut *guard;
+        let Some(endpoint) = endpoints
             .get_mut(id.as_str())
             .filter(|e| &e.tenant == tenant)
         else {
@@ -206,6 +225,30 @@ impl WebhookStore for MemoryWebhookStore {
         }
         if let Some(types) = &change.types {
             endpoint.types.clone_from(types);
+        }
+        if let (Some(named), Some(kept)) = (&change.tenants, endpoint.tenants.clone()) {
+            // A tenant kept keeps its cursor, a new one starts at the one
+            // given; one left out stops, its pending deliveries with it.
+            let set: Vec<TenantCursor> = named
+                .iter()
+                .map(|n| {
+                    kept.iter()
+                        .find(|k| k.tenant == n.tenant)
+                        .unwrap_or(n)
+                        .clone()
+                })
+                .collect();
+            let dropped: Vec<TenantId> = kept
+                .iter()
+                .filter(|k| !named.iter().any(|n| n.tenant == k.tenant))
+                .map(|k| k.tenant.clone())
+                .collect();
+            endpoint.tenants = Some(set);
+            deliveries.retain(|_, r| {
+                r.delivery.endpoint != endpoint.id
+                    || r.delivery.status != DeliveryStatus::Pending
+                    || !dropped.contains(&r.delivery.tenant)
+            });
         }
         if let Some(enabled) = change.enabled {
             endpoint.enabled = enabled;
@@ -263,6 +306,7 @@ impl WebhookStore for MemoryWebhookStore {
     async fn fan_out(
         &self,
         endpoint: &EndpointId,
+        tenant: &TenantId,
         from: i64,
         to: i64,
         deliveries: &[NewDelivery],
@@ -271,7 +315,11 @@ impl WebhookStore for MemoryWebhookStore {
         let Some(found) = state
             .endpoints
             .get(endpoint.as_str())
-            .filter(|e| e.cursor == from)
+            .filter(|e| {
+                e.streams()
+                    .iter()
+                    .any(|s| &s.tenant == tenant && s.cursor == from)
+            })
             .cloned()
         else {
             return Ok(false);
@@ -282,13 +330,21 @@ impl WebhookStore for MemoryWebhookStore {
                     &r.delivery.endpoint == endpoint && r.delivery.event_id == delivery.event_id
                 });
             if !duplicate {
-                state
-                    .deliveries
-                    .insert(delivery.id.as_str().to_owned(), new_row(&found, delivery));
+                state.deliveries.insert(
+                    delivery.id.as_str().to_owned(),
+                    new_row(&found, tenant, delivery),
+                );
             }
         }
         if let Some(e) = state.endpoints.get_mut(endpoint.as_str()) {
-            e.cursor = to;
+            match &mut e.tenants {
+                Some(named) => {
+                    if let Some(stream) = named.iter_mut().find(|t| &t.tenant == tenant) {
+                        stream.cursor = to;
+                    }
+                }
+                None => e.cursor = to,
+            }
         }
         Ok(true)
     }
@@ -303,7 +359,7 @@ impl WebhookStore for MemoryWebhookStore {
         let Some(found) = Self::owned(&state, tenant, endpoint).cloned() else {
             return Ok(None);
         };
-        let row = new_row(&found, delivery);
+        let row = new_row(&found, &found.tenant, delivery);
         let made = row.delivery.clone();
         state
             .deliveries

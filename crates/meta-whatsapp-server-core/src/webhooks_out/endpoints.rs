@@ -2,13 +2,17 @@
 //! `webhooks`; roadmap M2c), opened for an admitted caller only
 //! ([`WebhookEndpoints::open`]), on the caller's tenant: another tenant's
 //! endpoint or delivery is `404 not_found`, the answer for a missing one,
-//! before anything of it is read or written.
+//! before anything of it is read or written. An endpoint made with
+//! `tenants` (roadmap M2m, D340–D349) is reached only through a platform
+//! key that may name every tenant it receives: any other key, a tenant
+//! key among them, finds it missing (`404`), since to change its URL is to
+//! read those tenants' events.
 //!
 //! | Service | Route |
 //! | --- | --- |
-//! | [`OpenEndpoints::create`] | `POST /v1/webhook-endpoints`: the URL checked against the allow-list (its host looked up, every address checked), the types `KnownEventType`s; a secret made, shown once, sealed; the cursor at the tenant's newest event |
+//! | [`OpenEndpoints::create`] | `POST /v1/webhook-endpoints`: the URL checked against the allow-list (its host looked up, every address checked), the types `KnownEventType`s, the `tenants` of a platform key's (each one it may name); a secret made, shown once, sealed; the cursor at the tenant's newest event (each named tenant's) |
 //! | [`OpenEndpoints::list`], [`OpenEndpoints::get`] | `GET /v1/webhook-endpoints[/{id}]` |
-//! | [`OpenEndpoints::update`] | `PATCH /v1/webhook-endpoints/{id}`: URL (checked again), types, enabled |
+//! | [`OpenEndpoints::update`] | `PATCH /v1/webhook-endpoints/{id}`: URL (checked again), types, enabled, the `tenants` of an endpoint that has them |
 //! | [`OpenEndpoints::delete`] | `DELETE /v1/webhook-endpoints/{id}`, its deliveries with it |
 //! | [`OpenEndpoints::rotate_secret`] | `POST …/{id}/rotate-secret`: a new secret, shown once; the old one signs too for 24 h |
 //! | [`OpenEndpoints::test`] | `POST …/{id}/test`: a `ping` delivery, sent by the dispatcher once |
@@ -24,7 +28,8 @@ use super::dispatch::WebhooksOut;
 use super::signature::EndpointSecret;
 use super::store::{CreateOutcome, EndpointChange, NewDelivery, NewEndpoint, WebhookStore};
 use super::{
-    Delivery, DeliveryId, Endpoint, EndpointId, MAX_ENDPOINTS_PER_TENANT, PING, SECRET_OVERLAP,
+    Delivery, DeliveryId, Endpoint, EndpointId, MAX_ENDPOINT_TENANTS, MAX_ENDPOINTS_PER_TENANT,
+    PING, SECRET_OVERLAP, TenantCursor,
 };
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
@@ -70,24 +75,75 @@ pub struct Backlog {
 pub struct OpenEndpoints<'a> {
     endpoints: &'a WebhookEndpoints,
     out: &'a WebhooksOut,
+    authz: &'a Authorizer,
+    caller: &'a Caller,
     tenant: &'a TenantId,
 }
 
-/// What a creation asks: the URL and the types. `Debug` omits the URL.
+/// What a creation asks: the URL, the types and, for a platform key, the
+/// tenants. `Debug` omits the URL.
 #[derive(Clone, PartialEq, Eq)]
 pub struct CreateEndpoint {
     /// Where to deliver.
     pub url: String,
     /// The `KnownEventType`s to deliver.
     pub types: Vec<String>,
+    /// The tenants whose events it receives, instead of the caller's
+    /// tenant's own (roadmap M2m): a platform key's only, each tenant one
+    /// it may name; `None` for the caller's tenant's.
+    pub tenants: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for CreateEndpoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CreateEndpoint")
             .field("types", &self.types)
+            .field("tenants", &self.tenants)
             .finish_non_exhaustive()
     }
+}
+
+/// What a change asks (`PATCH`): `None` leaves a field. `Debug` says
+/// whether the URL changes, never what to.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct UpdateEndpoint {
+    /// A new URL, checked.
+    pub url: Option<String>,
+    /// New event types.
+    pub types: Option<Vec<String>>,
+    /// On or off.
+    pub enabled: Option<bool>,
+    /// New tenants, replacing the set of an endpoint that has one
+    /// (roadmap M2m); `422` on `tenants` for an endpoint that has none.
+    pub tenants: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for UpdateEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateEndpoint")
+            .field("url", &self.url.as_ref().map(|_| ".."))
+            .field("types", &self.types.as_ref().map(Vec::len))
+            .field("enabled", &self.enabled)
+            .field("tenants", &self.tenants)
+            .finish()
+    }
+}
+
+/// `tenants`, checked in shape: 1 to [`MAX_ENDPOINT_TENANTS`] valid tenant
+/// ids, each once (in the order given), else `422 invalid_request` on
+/// `tenants`. Whether the caller may name them is [`Authorizer::name_tenants`].
+pub fn checked_tenants(tenants: &[String]) -> Result<Vec<TenantId>, ServiceError> {
+    let mut checked: Vec<TenantId> = Vec::new();
+    for named in tenants {
+        let tenant = TenantId::parse(named).ok_or_else(|| ServiceError::invalid("tenants"))?;
+        if !checked.contains(&tenant) {
+            checked.push(tenant);
+        }
+    }
+    if checked.is_empty() || checked.len() > MAX_ENDPOINT_TENANTS {
+        return Err(ServiceError::invalid("tenants"));
+    }
+    Ok(checked)
 }
 
 /// An endpoint id from a path: one of another shape names nothing.
@@ -162,7 +218,7 @@ impl WebhookEndpoints {
     /// webhooks_not_configured` without a deployment.
     pub fn open<'a>(
         &'a self,
-        authz: &Authorizer,
+        authz: &'a Authorizer,
         caller: &'a Caller,
     ) -> Result<OpenEndpoints<'a>, ServiceError> {
         authz.admit(caller)?;
@@ -173,6 +229,8 @@ impl WebhookEndpoints {
         Ok(OpenEndpoints {
             endpoints: self,
             out,
+            authz,
+            caller,
             tenant: caller.tenant(),
         })
     }
@@ -203,6 +261,7 @@ impl OpenEndpoints<'_> {
         &self,
         request: CreateEndpoint,
     ) -> Result<(Endpoint, EndpointSecret), ServiceError> {
+        let tenants = self.named_tenants(request.tenants.as_deref()).await?;
         let types = checked_types(&request.types)?;
         let url = self.checked_url(&request.url).await?;
         let id = EndpointId::generate().ok_or_else(ServiceError::internal)?;
@@ -213,19 +272,8 @@ impl OpenEndpoints<'_> {
             .seal(&id, &secret)
             .ok_or_else(ServiceError::internal)?;
         // From the tenant's newest event on: what comes after it.
-        let cursor = self
-            .endpoints
-            .outbox
-            .page(&EventQuery {
-                tenant: self.tenant.clone(),
-                after: Some(i64::MAX),
-                types: None,
-                phone_number_id: None,
-                limit: 1,
-                max_bytes: 1,
-            })
-            .await?
-            .high_water;
+        let cursor = self.newest(self.tenant).await?;
+        let tenants = self.cursors(tenants, &[]).await?;
         let created = self
             .store()
             .create_endpoint(
@@ -236,6 +284,7 @@ impl OpenEndpoints<'_> {
                     types,
                     secret: sealed,
                     cursor,
+                    tenants,
                     now: self.endpoints.clock.now(),
                 },
                 MAX_ENDPOINTS_PER_TENANT,
@@ -250,7 +299,90 @@ impl OpenEndpoints<'_> {
                 Err(ServiceError::new(ErrorCode::WEBHOOK_ENDPOINT_LIMIT_REACHED))
             }
             CreateOutcome::NoSuchTenant => Err(ServiceError::not_found()),
+            // Deleted between the check and the insert: as a tenant that
+            // does not exist, to the key that may not tell.
+            CreateOutcome::NamedTenantGone => Err(ServiceError::forbidden()),
         }
+    }
+
+    /// `tenants`, from a request, checked: only a platform key names any
+    /// (`422` on `tenants` from another), in shape, then each one it may
+    /// name and that exists (`403`). `None` when the request names none.
+    async fn named_tenants(
+        &self,
+        tenants: Option<&[String]>,
+    ) -> Result<Option<Vec<TenantId>>, ServiceError> {
+        let Some(tenants) = tenants else {
+            return Ok(None);
+        };
+        if self.caller.platform_allowed().is_none() {
+            return Err(ServiceError::invalid("tenants"));
+        }
+        let tenants = checked_tenants(tenants)?;
+        self.authz.name_tenants(self.caller, &tenants).await?;
+        Ok(Some(tenants))
+    }
+
+    /// `tenant`'s newest sequence: where an endpoint starts in its stream.
+    async fn newest(&self, tenant: &TenantId) -> Result<i64, ServiceError> {
+        Ok(self
+            .endpoints
+            .outbox
+            .page(&EventQuery {
+                tenant: tenant.clone(),
+                after: Some(i64::MAX),
+                types: None,
+                phone_number_id: None,
+                limit: 1,
+                max_bytes: 1,
+            })
+            .await?
+            .high_water)
+    }
+
+    /// `tenants` with the newest sequence of each not in `kept`, where it
+    /// would start.
+    async fn cursors(
+        &self,
+        tenants: Option<Vec<TenantId>>,
+        kept: &[TenantCursor],
+    ) -> Result<Option<Vec<TenantCursor>>, ServiceError> {
+        let Some(tenants) = tenants else {
+            return Ok(None);
+        };
+        let mut cursors = Vec::with_capacity(tenants.len());
+        for tenant in tenants {
+            let cursor = match kept.iter().find(|k| k.tenant == tenant) {
+                Some(kept) => kept.cursor,
+                None => self.newest(&tenant).await?,
+            };
+            cursors.push(TenantCursor { tenant, cursor });
+        }
+        Ok(Some(cursors))
+    }
+
+    /// Whether the caller's key may reach `endpoint`: one of its tenant's
+    /// own events, always; one of several tenants, only through a
+    /// platform key that may name every one of them.
+    fn reaches(&self, endpoint: &Endpoint) -> bool {
+        match &endpoint.tenants {
+            None => true,
+            Some(named) => self
+                .caller
+                .platform_allowed()
+                .is_some_and(|allowed| named.iter().all(|t| allowed.allows(&t.tenant))),
+        }
+    }
+
+    /// The caller's tenant's endpoint `id`, if the key reaches it: `404`
+    /// otherwise, alike for another tenant's, a missing one and one the
+    /// key does not reach.
+    async fn reached(&self, id: &EndpointId) -> Result<Endpoint, ServiceError> {
+        self.store()
+            .endpoint(self.tenant, id)
+            .await?
+            .filter(|endpoint| self.reaches(endpoint))
+            .ok_or_else(ServiceError::not_found)
     }
 
     /// The tenant's endpoints.
@@ -259,7 +391,11 @@ impl OpenEndpoints<'_> {
     ///
     /// `503` from the store.
     pub async fn list(&self, page: &PageRequest) -> Result<Listing<Endpoint>, ServiceError> {
-        Ok(self.store().endpoints(self.tenant, page).await?)
+        let mut listing = self.store().endpoints(self.tenant, page).await?;
+        // What the key does not reach is left out (a page may be short;
+        // `next_after` still follows the store's last id).
+        listing.items.retain(|endpoint| self.reaches(endpoint));
+        Ok(listing)
     }
 
     /// One of the tenant's endpoints.
@@ -269,11 +405,7 @@ impl OpenEndpoints<'_> {
     /// `404` for another tenant's, a missing one or an id of no endpoint's
     /// shape.
     pub async fn get(&self, id: &str) -> Result<Endpoint, ServiceError> {
-        let id = endpoint_id(id)?;
-        self.store()
-            .endpoint(self.tenant, &id)
-            .await?
-            .ok_or_else(ServiceError::not_found)
+        self.reached(&endpoint_id(id)?).await
     }
 
     /// Change one of the tenant's endpoints: its URL (checked again), its
@@ -283,11 +415,18 @@ impl OpenEndpoints<'_> {
     ///
     /// `404` as [`Self::get`], before the change is checked; `422` on
     /// `url` or `types`.
-    pub async fn update(&self, id: &str, change: EndpointChange) -> Result<Endpoint, ServiceError> {
+    pub async fn update(&self, id: &str, change: UpdateEndpoint) -> Result<Endpoint, ServiceError> {
         let id = endpoint_id(id)?;
-        if self.store().endpoint(self.tenant, &id).await?.is_none() {
-            return Err(ServiceError::not_found());
-        }
+        let found = self.reached(&id).await?;
+        let tenants = match (&found.tenants, change.tenants.as_deref()) {
+            (_, None) => None,
+            // An endpoint of its tenant's own events never takes a set.
+            (None, Some(_)) => return Err(ServiceError::invalid("tenants")),
+            (Some(kept), Some(named)) => {
+                let named = self.named_tenants(Some(named)).await?;
+                self.cursors(named, kept).await?
+            }
+        };
         let types = change.types.as_deref().map(checked_types).transpose()?;
         let url = match change.url.as_deref() {
             Some(url) => Some(self.checked_url(url).await?),
@@ -297,6 +436,7 @@ impl OpenEndpoints<'_> {
             url,
             types,
             enabled: change.enabled,
+            tenants,
         };
         let updated = self
             .store()
@@ -314,6 +454,7 @@ impl OpenEndpoints<'_> {
     /// `404` as [`Self::get`].
     pub async fn delete(&self, id: &str) -> Result<(), ServiceError> {
         let id = endpoint_id(id)?;
+        self.reached(&id).await?;
         if !self.store().delete_endpoint(self.tenant, &id).await? {
             return Err(ServiceError::not_found());
         }
@@ -332,9 +473,7 @@ impl OpenEndpoints<'_> {
         id: &str,
     ) -> Result<(Endpoint, EndpointSecret), ServiceError> {
         let id = endpoint_id(id)?;
-        if self.store().endpoint(self.tenant, &id).await?.is_none() {
-            return Err(ServiceError::not_found());
-        }
+        self.reached(&id).await?;
         let secret = EndpointSecret::generate().ok_or_else(ServiceError::internal)?;
         let sealed = self
             .out
@@ -362,6 +501,7 @@ impl OpenEndpoints<'_> {
     /// `404` as [`Self::get`].
     pub async fn test(&self, id: &str) -> Result<Delivery, ServiceError> {
         let id = endpoint_id(id)?;
+        self.reached(&id).await?;
         let now = self.endpoints.clock.now();
         let delivery = NewDelivery {
             id: DeliveryId::generate(now).ok_or_else(ServiceError::internal)?,
@@ -388,6 +528,7 @@ impl OpenEndpoints<'_> {
         page: &PageRequest,
     ) -> Result<Listing<Delivery>, ServiceError> {
         let id = endpoint_id(id)?;
+        self.reached(&id).await?;
         self.store()
             .deliveries(self.tenant, &id, page)
             .await?
@@ -404,6 +545,7 @@ impl OpenEndpoints<'_> {
     pub async fn retry(&self, id: &str, delivery_id: &str) -> Result<Delivery, ServiceError> {
         let id = endpoint_id(id)?;
         let delivery_id = DeliveryId::parse(delivery_id).ok_or_else(ServiceError::not_found)?;
+        self.reached(&id).await?;
         let now = self.endpoints.clock.now();
         let give_up_at = self.out.schedule.give_up_at(now);
         self.store()

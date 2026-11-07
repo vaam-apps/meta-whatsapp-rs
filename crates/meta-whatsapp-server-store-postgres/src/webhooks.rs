@@ -1,6 +1,7 @@
 //! [`PgWebhookStore`]: webhooks out on Postgres (roadmap M2c;
 //! `wa_server_webhook_endpoints` and `wa_server_webhook_deliveries`,
-//! migration 9).
+//! migration 9; roadmap M2m: `wa_server_webhook_endpoint_tenants` and the
+//! endpoints' `named_tenants` flag, migration 11).
 //!
 //! - **An endpoint is its tenant's**: every statement names the tenant;
 //!   both tables reference the tenant `ON DELETE CASCADE`, and a delivery
@@ -8,10 +9,16 @@
 //!   creation counts the tenant's endpoints under a `FOR UPDATE` lock on
 //!   the tenant's row, which serializes creations (and the tenant's
 //!   deletion) with it.
-//! - **A fan-out is once**: it locks its endpoint's row while its cursor is
-//!   the value it read (`FOR UPDATE`, then re-checked by Postgres after a
-//!   wait), records the deliveries (`ON CONFLICT (endpoint_id, event_id)
-//!   DO NOTHING`) and moves the cursor in one transaction.
+//! - **A fan-out is once**: it locks the row holding the cursor, the
+//!   endpoint's or, for an endpoint of named tenants, that tenant's row,
+//!   while the cursor is the value it read (`FOR UPDATE`, then re-checked
+//!   by Postgres after a wait), records the deliveries (`ON CONFLICT
+//!   (endpoint_id, event_id) DO NOTHING`, each with the tenant of the
+//!   stream) and moves the cursor in one transaction.
+//! - **Named tenants** (roadmap M2m): an endpoint with `named_tenants`
+//!   receives its rows' tenants and no other's, a cursor each; a tenant's
+//!   deletion deletes its row and its deliveries (`ON DELETE CASCADE`),
+//!   so the endpoint is never widened by it.
 //! - **A claim is exclusive**: each tenant's oldest due delivery, locked
 //!   `FOR UPDATE SKIP LOCKED`, is leased and stamped with the claim's
 //!   token in one statement; a settlement names that token.
@@ -33,7 +40,7 @@ use meta_whatsapp_server_core::webhooks_out::store::{
 };
 use meta_whatsapp_server_core::webhooks_out::{
     AttemptError, Delivery, DeliveryId, DeliveryStatus, DisabledReason, Endpoint, EndpointId,
-    SealedSecret,
+    SealedSecret, TenantCursor,
 };
 
 /// Webhooks out on Postgres. Cheap to clone.
@@ -71,7 +78,8 @@ where
 }
 
 const ENDPOINT_COLUMNS: &str = "id, tenant_id, url, event_types, enabled, disabled_reason, \
-     secret, previous_secret, previous_secret_until, cursor, failing_since, created_at, updated_at";
+     secret, previous_secret, previous_secret_until, cursor, failing_since, created_at, updated_at, \
+     named_tenants";
 
 const DELIVERY_COLUMNS: &str = "id, endpoint_id, tenant_id, event_id, sequence, event_type, \
      status, attempts, next_attempt_at, give_up_at, last_attempt_at, last_status, last_error, \
@@ -82,6 +90,8 @@ fn endpoint_row(row: &PgRow) -> StoreResult<Endpoint> {
         id: EndpointId::parse(&get::<String>(row, "id")?).ok_or_else(|| corrupt("id"))?,
         tenant: TenantId::parse(&get::<String>(row, "tenant_id")?)
             .ok_or_else(|| corrupt("tenant_id"))?,
+        // Filled by `fill_tenants` for an endpoint of named tenants.
+        tenants: get::<bool>(row, "named_tenants")?.then(Vec::new),
         url: get(row, "url")?,
         types: get(row, "event_types")?,
         enabled: get(row, "enabled")?,
@@ -123,6 +133,57 @@ fn delivery_row(row: &PgRow) -> StoreResult<Delivery> {
             .and_then(|d| u32::try_from(d).ok()),
         created_at: get(row, "created_at")?,
     })
+}
+
+/// The named tenants of those of `endpoints` that have them, read on
+/// `executor` (the transaction that read the endpoints, or the pool).
+async fn fill_tenants<'e, E>(executor: E, endpoints: &mut [Endpoint]) -> StoreResult<()>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let ids: Vec<String> = endpoints
+        .iter()
+        .filter(|e| e.tenants.is_some())
+        .map(|e| e.id.as_str().to_owned())
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "SELECT endpoint_id, tenant_id, cursor FROM wa_server_webhook_endpoint_tenants \
+         WHERE endpoint_id = ANY($1) ORDER BY endpoint_id, tenant_id",
+    )
+    .bind(&ids)
+    .fetch_all(executor)
+    .await
+    .map_err(backend)?;
+    for row in &rows {
+        let endpoint: String = get(row, "endpoint_id")?;
+        let tenant = TenantId::parse(&get::<String>(row, "tenant_id")?)
+            .ok_or_else(|| corrupt("tenant_id"))?;
+        let cursor: i64 = get(row, "cursor")?;
+        if let Some(named) = endpoints
+            .iter_mut()
+            .find(|e| e.id.as_str() == endpoint)
+            .and_then(|e| e.tenants.as_mut())
+        {
+            named.push(TenantCursor { tenant, cursor });
+        }
+    }
+    Ok(())
+}
+
+/// `rows` as endpoints, their named tenants read on `executor`.
+async fn endpoints_of<'e, E>(executor: E, rows: &[PgRow]) -> StoreResult<Vec<Endpoint>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let mut endpoints = rows
+        .iter()
+        .map(endpoint_row)
+        .collect::<StoreResult<Vec<_>>>()?;
+    fill_tenants(executor, &mut endpoints).await?;
+    Ok(endpoints)
 }
 
 fn after(now: OffsetDateTime, by: Duration) -> OffsetDateTime {
@@ -169,10 +230,26 @@ impl WebhookStore for PgWebhookStore {
         if usize::try_from(held).unwrap_or(usize::MAX) >= max {
             return Ok(CreateOutcome::LimitReached);
         }
+        if let Some(named) = &endpoint.tenants {
+            // Shared locks: a named tenant is not deleted until this
+            // commits (its deletion would wait), and one gone already is
+            // refused, nothing created.
+            let names: Vec<String> = named.iter().map(|t| t.tenant.as_str().to_owned()).collect();
+            let found: Vec<String> =
+                sqlx::query_scalar("SELECT id FROM wa_server_tenants WHERE id = ANY($1) FOR SHARE")
+                    .bind(&names)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(backend)?;
+            if found.len() != names.len() {
+                return Ok(CreateOutcome::NamedTenantGone);
+            }
+        }
         let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO wa_server_webhook_endpoints \
-             (id, tenant_id, url, event_types, enabled, secret, cursor, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, true, $5, $6, $7, $7) RETURNING {ENDPOINT_COLUMNS}"
+             (id, tenant_id, url, event_types, enabled, secret, cursor, created_at, updated_at, \
+              named_tenants) \
+             VALUES ($1, $2, $3, $4, true, $5, $6, $7, $7, $8) RETURNING {ENDPOINT_COLUMNS}"
         )))
         .bind(endpoint.id.as_str())
         .bind(endpoint.tenant.as_str())
@@ -181,27 +258,39 @@ impl WebhookStore for PgWebhookStore {
         .bind(endpoint.secret.as_stored())
         .bind(endpoint.cursor)
         .bind(endpoint.now)
+        .bind(endpoint.tenants.is_some())
         .fetch_one(&mut *tx)
         .await
         .map_err(backend)?;
-        let made = endpoint_row(&row)?;
+        for named in endpoint.tenants.iter().flatten() {
+            sqlx::query(
+                "INSERT INTO wa_server_webhook_endpoint_tenants (endpoint_id, tenant_id, cursor) \
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(endpoint.id.as_str())
+            .bind(named.tenant.as_str())
+            .bind(named.cursor)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        }
+        let mut made = endpoint_row(&row)?;
+        fill_tenants(&mut *tx, std::slice::from_mut(&mut made)).await?;
         tx.commit().await.map_err(backend)?;
         Ok(CreateOutcome::Created(Box::new(made)))
     }
 
     async fn endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<Option<Endpoint>> {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {ENDPOINT_COLUMNS} FROM wa_server_webhook_endpoints \
              WHERE id = $1 AND tenant_id = $2"
         )))
         .bind(id.as_str())
         .bind(tenant.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await
-        .map_err(backend)?
-        .as_ref()
-        .map(endpoint_row)
-        .transpose()
+        .map_err(backend)?;
+        Ok(endpoints_of(&self.pool, &rows).await?.pop())
     }
 
     async fn endpoints(
@@ -219,10 +308,7 @@ impl WebhookStore for PgWebhookStore {
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
-        let items = rows
-            .iter()
-            .map(endpoint_row)
-            .collect::<StoreResult<Vec<_>>>()?;
+        let items = endpoints_of(&self.pool, &rows).await?;
         Ok(listing(items, page.limit, |e| e.id.as_str().to_owned()))
     }
 
@@ -233,7 +319,59 @@ impl WebhookStore for PgWebhookStore {
         change: &EndpointChange,
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let named: Option<bool> = sqlx::query_scalar(
+            "SELECT named_tenants FROM wa_server_webhook_endpoints \
+             WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+        )
+        .bind(id.as_str())
+        .bind(tenant.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(backend)?;
+        let Some(named) = named else {
+            return Ok(None);
+        };
+        if let (true, Some(set)) = (named, &change.tenants) {
+            let names: Vec<String> = set.iter().map(|t| t.tenant.as_str().to_owned()).collect();
+            // A tenant left out stops: its row first (a fan-out holding it
+            // finishes before this goes on), then its pending deliveries.
+            sqlx::query(
+                "DELETE FROM wa_server_webhook_endpoint_tenants \
+                 WHERE endpoint_id = $1 AND NOT (tenant_id = ANY($2))",
+            )
+            .bind(id.as_str())
+            .bind(&names)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+            sqlx::query(
+                "DELETE FROM wa_server_webhook_deliveries \
+                 WHERE endpoint_id = $1 AND status = 'pending' AND event_id IS NOT NULL \
+                   AND NOT (tenant_id = ANY($2))",
+            )
+            .bind(id.as_str())
+            .bind(&names)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+            // A tenant added starts at the cursor given; one that does not
+            // exist (deleted meanwhile) is left out, never created.
+            for added in set {
+                sqlx::query(
+                    "INSERT INTO wa_server_webhook_endpoint_tenants (endpoint_id, tenant_id, cursor) \
+                     SELECT $1, t.id, $3 FROM wa_server_tenants t WHERE t.id = $2 \
+                     ON CONFLICT (endpoint_id, tenant_id) DO NOTHING",
+                )
+                .bind(id.as_str())
+                .bind(added.tenant.as_str())
+                .bind(added.cursor)
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
+            }
+        }
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE wa_server_webhook_endpoints SET \
                url = COALESCE($3, url), \
                event_types = COALESCE($4, event_types), \
@@ -249,12 +387,12 @@ impl WebhookStore for PgWebhookStore {
         .bind(change.types.as_deref())
         .bind(change.enabled)
         .bind(now)
-        .fetch_optional(&self.pool)
+        .fetch_all(&mut *tx)
         .await
-        .map_err(backend)?
-        .as_ref()
-        .map(endpoint_row)
-        .transpose()
+        .map_err(backend)?;
+        let updated = endpoints_of(&mut *tx, &rows).await?.pop();
+        tx.commit().await.map_err(backend)?;
+        Ok(updated)
     }
 
     async fn rotate_secret(
@@ -265,7 +403,7 @@ impl WebhookStore for PgWebhookStore {
         previous_until: OffsetDateTime,
         now: OffsetDateTime,
     ) -> StoreResult<Option<Endpoint>> {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE wa_server_webhook_endpoints SET \
                previous_secret = secret, previous_secret_until = $4, secret = $3, updated_at = $5 \
              WHERE id = $1 AND tenant_id = $2 RETURNING {ENDPOINT_COLUMNS}"
@@ -275,12 +413,10 @@ impl WebhookStore for PgWebhookStore {
         .bind(secret.as_stored())
         .bind(previous_until)
         .bind(now)
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await
-        .map_err(backend)?
-        .as_ref()
-        .map(endpoint_row)
-        .transpose()
+        .map_err(backend)?;
+        Ok(endpoints_of(&self.pool, &rows).await?.pop())
     }
 
     async fn delete_endpoint(&self, tenant: &TenantId, id: &EndpointId) -> StoreResult<bool> {
@@ -301,29 +437,48 @@ impl WebhookStore for PgWebhookStore {
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
-        rows.iter().map(endpoint_row).collect()
+        endpoints_of(&self.pool, &rows).await
     }
 
     async fn fan_out(
         &self,
         endpoint: &EndpointId,
+        tenant: &TenantId,
         from: i64,
         to: i64,
         deliveries: &[NewDelivery],
     ) -> StoreResult<bool> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let tenant: Option<String> = sqlx::query_scalar(
-            "SELECT tenant_id FROM wa_server_webhook_endpoints \
-             WHERE id = $1 AND cursor = $2 FOR UPDATE",
+        // The row holding the stream's cursor, locked while it is `from`:
+        // the endpoint's own (an endpoint of its tenant's own events), or
+        // the tenant's row of an endpoint of named tenants.
+        let own = sqlx::query(
+            "SELECT 1 FROM wa_server_webhook_endpoints \
+             WHERE id = $1 AND tenant_id = $2 AND cursor = $3 AND NOT named_tenants FOR UPDATE",
         )
         .bind(endpoint.as_str())
+        .bind(tenant.as_str())
         .bind(from)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(backend)?;
-        let Some(tenant) = tenant else {
-            return Ok(false);
-        };
+        .map_err(backend)?
+        .is_some();
+        if !own {
+            let named = sqlx::query(
+                "SELECT 1 FROM wa_server_webhook_endpoint_tenants \
+                 WHERE endpoint_id = $1 AND tenant_id = $2 AND cursor = $3 FOR UPDATE",
+            )
+            .bind(endpoint.as_str())
+            .bind(tenant.as_str())
+            .bind(from)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+            .is_some();
+            if !named {
+                return Ok(false);
+            }
+        }
         for delivery in deliveries {
             sqlx::query(
                 "INSERT INTO wa_server_webhook_deliveries \
@@ -334,7 +489,7 @@ impl WebhookStore for PgWebhookStore {
             )
             .bind(delivery.id.as_str())
             .bind(endpoint.as_str())
-            .bind(&tenant)
+            .bind(tenant.as_str())
             .bind(delivery.event_id.as_deref())
             .bind(delivery.sequence)
             .bind(&delivery.event_type)
@@ -344,12 +499,25 @@ impl WebhookStore for PgWebhookStore {
             .await
             .map_err(backend)?;
         }
-        sqlx::query("UPDATE wa_server_webhook_endpoints SET cursor = $2 WHERE id = $1")
+        if own {
+            sqlx::query("UPDATE wa_server_webhook_endpoints SET cursor = $2 WHERE id = $1")
+                .bind(endpoint.as_str())
+                .bind(to)
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
+        } else {
+            sqlx::query(
+                "UPDATE wa_server_webhook_endpoint_tenants SET cursor = $3 \
+                 WHERE endpoint_id = $1 AND tenant_id = $2",
+            )
             .bind(endpoint.as_str())
+            .bind(tenant.as_str())
             .bind(to)
             .execute(&mut *tx)
             .await
             .map_err(backend)?;
+        }
         tx.commit().await.map_err(backend)?;
         Ok(true)
     }
@@ -400,9 +568,13 @@ impl WebhookStore for PgWebhookStore {
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "WITH picked AS ( \
                SELECT d.id FROM ( \
-                 SELECT DISTINCT e.tenant_id FROM wa_server_webhook_endpoints e \
-                 JOIN wa_server_tenants t ON t.id = e.tenant_id \
-                 WHERE e.enabled AND t.status = 'active' AND NOT (e.tenant_id = ANY($3)) \
+                 SELECT u.tenant_id FROM ( \
+                   SELECT e.tenant_id FROM wa_server_webhook_endpoints e WHERE e.enabled \
+                   UNION \
+                   SELECT c.tenant_id FROM wa_server_webhook_endpoint_tenants c \
+                   JOIN wa_server_webhook_endpoints e ON e.id = c.endpoint_id WHERE e.enabled \
+                 ) u JOIN wa_server_tenants t ON t.id = u.tenant_id \
+                 WHERE t.status = 'active' AND NOT (u.tenant_id = ANY($3)) \
                ) tn \
                CROSS JOIN LATERAL ( \
                  SELECT d.id, d.next_attempt_at FROM wa_server_webhook_deliveries d \
@@ -442,16 +614,14 @@ impl WebhookStore for PgWebhookStore {
             .iter()
             .map(|d| d.endpoint.as_str().to_owned())
             .collect();
-        let endpoints = sqlx::query(sqlx::AssertSqlSafe(format!(
+        let endpoint_rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {ENDPOINT_COLUMNS} FROM wa_server_webhook_endpoints WHERE id = ANY($1)"
         )))
         .bind(&ids)
         .fetch_all(&mut *tx)
         .await
-        .map_err(backend)?
-        .iter()
-        .map(endpoint_row)
-        .collect::<StoreResult<Vec<_>>>()?;
+        .map_err(backend)?;
+        let endpoints = endpoints_of(&mut *tx, &endpoint_rows).await?;
         tx.commit().await.map_err(backend)?;
         Ok(deliveries
             .into_iter()
@@ -547,11 +717,10 @@ impl WebhookStore for PgWebhookStore {
         }
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {DELIVERY_COLUMNS} FROM wa_server_webhook_deliveries \
-             WHERE endpoint_id = $1 AND tenant_id = $2 AND ($3::text IS NULL OR id < $3) \
-             ORDER BY id DESC LIMIT $4"
+             WHERE endpoint_id = $1 AND ($2::text IS NULL OR id < $2) \
+             ORDER BY id DESC LIMIT $3"
         )))
         .bind(endpoint.as_str())
-        .bind(tenant.as_str())
         .bind(page.after.as_deref())
         .bind(i64::try_from(page.limit + 1).unwrap_or(i64::MAX))
         .fetch_all(&self.pool)
@@ -578,13 +747,12 @@ impl WebhookStore for PgWebhookStore {
             return Ok(None);
         }
         sqlx::query(
-            "UPDATE wa_server_webhook_deliveries SET status = 'pending', next_attempt_at = $4, \
-               give_up_at = $5, lease_until = NULL, claim = NULL \
-             WHERE id = $1 AND endpoint_id = $2 AND tenant_id = $3 AND status <> 'pending'",
+            "UPDATE wa_server_webhook_deliveries SET status = 'pending', next_attempt_at = $3, \
+               give_up_at = $4, lease_until = NULL, claim = NULL \
+             WHERE id = $1 AND endpoint_id = $2 AND status <> 'pending'",
         )
         .bind(id.as_str())
         .bind(endpoint.as_str())
-        .bind(tenant.as_str())
         .bind(now)
         .bind(give_up_at)
         .execute(&self.pool)
@@ -592,11 +760,10 @@ impl WebhookStore for PgWebhookStore {
         .map_err(backend)?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT {DELIVERY_COLUMNS} FROM wa_server_webhook_deliveries \
-             WHERE id = $1 AND endpoint_id = $2 AND tenant_id = $3"
+             WHERE id = $1 AND endpoint_id = $2"
         )))
         .bind(id.as_str())
         .bind(endpoint.as_str())
-        .bind(tenant.as_str())
         .fetch_optional(&self.pool)
         .await
         .map_err(backend)?

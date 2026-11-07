@@ -13,10 +13,16 @@
 //!   deletion its deliveries. A tenant has at most the limit it is given
 //!   ([`CreateOutcome::LimitReached`]), counted atomically with the insert.
 //! - **A fan-out is once** ([`WebhookStore::fan_out`]): it moves the
-//!   endpoint's cursor from the value it read to the next, atomically
-//!   with recording the deliveries, and does neither when the cursor moved
-//!   meanwhile (another replica's fan-out); an event has one delivery per
-//!   endpoint, whatever races.
+//!   cursor of one of the endpoint's tenants' streams from the value it
+//!   read to the next, atomically with recording the deliveries (each
+//!   with that tenant), and does neither when the cursor moved meanwhile
+//!   (another replica's fan-out) or the tenant is not one the endpoint
+//!   receives; an event has one delivery per endpoint, whatever races.
+//! - **An endpoint's tenants** (roadmap M2m): one made with several
+//!   receives those tenants' events and no other's, each in a cursor of
+//!   its own; deleting one of them deletes its deliveries and takes it
+//!   out of the endpoint, which is never widened by that (nor does a
+//!   tenant created later under the same id join it).
 //! - **A claim is exclusive** ([`WebhookStore::claim`]): a delivery is
 //!   claimed by one claimer at a time, until its lease ends or its attempt
 //!   is settled; a claim never takes two deliveries of one endpoint, nor
@@ -34,7 +40,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use time::OffsetDateTime;
 
-use super::{AttemptError, Delivery, DeliveryId, Endpoint, EndpointId, SealedSecret};
+use super::{AttemptError, Delivery, DeliveryId, Endpoint, EndpointId, SealedSecret, TenantCursor};
 use crate::model::{Listing, PageRequest, TenantId};
 use crate::store::StoreResult;
 
@@ -53,8 +59,13 @@ pub struct NewEndpoint {
     /// Its secret, sealed.
     pub secret: SealedSecret,
     /// Its cursor: the tenant's newest sequence at its creation, so it
-    /// receives what comes after.
+    /// receives what comes after. Unused when [`Self::tenants`] is set.
     pub cursor: i64,
+    /// The tenants whose events it receives instead of its own tenant's
+    /// (roadmap M2m), each at its newest sequence at the creation; `None`
+    /// for an endpoint of its own tenant's events. Already checked: the
+    /// store records what it is given.
+    pub tenants: Option<Vec<TenantCursor>>,
     /// When it is made.
     pub now: OffsetDateTime,
 }
@@ -66,6 +77,7 @@ impl std::fmt::Debug for NewEndpoint {
             .field("tenant", &self.tenant)
             .field("types", &self.types.len())
             .field("cursor", &self.cursor)
+            .field("tenants", &self.tenants.as_ref().map(Vec::len))
             .finish_non_exhaustive()
     }
 }
@@ -77,6 +89,9 @@ pub enum CreateOutcome {
     Created(Box<Endpoint>),
     /// No such tenant (deleted meanwhile).
     NoSuchTenant,
+    /// A tenant it names does not exist (deleted meanwhile, roadmap M2m):
+    /// nothing is created.
+    NamedTenantGone,
     /// The tenant has its limit of endpoints already.
     LimitReached,
 }
@@ -92,6 +107,13 @@ pub struct EndpointChange {
     /// On or off. Turning it on clears the service's reason and the
     /// failure streak.
     pub enabled: Option<bool>,
+    /// The tenants an endpoint made with several receives (roadmap M2m),
+    /// replacing its set: a tenant already in it keeps its cursor (the one
+    /// given is ignored), a new one starts at the cursor given, and a
+    /// tenant left out stops at once, its pending deliveries deleted
+    /// (settled ones stay as the log). Ignored for an endpoint without a
+    /// set: an endpoint never gains or loses its set.
+    pub tenants: Option<Vec<TenantCursor>>,
 }
 
 impl std::fmt::Debug for EndpointChange {
@@ -100,6 +122,7 @@ impl std::fmt::Debug for EndpointChange {
             .field("url", &self.url.as_ref().map(|_| ".."))
             .field("types", &self.types.as_ref().map(Vec::len))
             .field("enabled", &self.enabled)
+            .field("tenants", &self.tenants.as_ref().map(Vec::len))
             .finish()
     }
 }
@@ -269,14 +292,16 @@ pub trait WebhookStore: Send + Sync + 'static {
     /// ids: what the dispatcher fans out to.
     async fn active_endpoints(&self) -> StoreResult<Vec<Endpoint>>;
 
-    /// Record `deliveries` for `endpoint` (each with its tenant, the
-    /// endpoint's) and move its cursor from `from` to `to`, atomically;
-    /// `false`, nothing done, when its cursor is not `from` any more (or
-    /// it is gone). A delivery of an event the endpoint has one for
-    /// already is skipped.
+    /// Record `deliveries` for `endpoint`, each of `tenant`'s stream (its
+    /// tenant: the endpoint's own, or one of those it names), and move
+    /// that stream's cursor from `from` to `to`, atomically; `false`,
+    /// nothing done, when the cursor is not `from` any more, the endpoint
+    /// is gone or `tenant` is not one it receives. A delivery of an event
+    /// the endpoint has one for already is skipped.
     async fn fan_out(
         &self,
         endpoint: &EndpointId,
+        tenant: &TenantId,
         from: i64,
         to: i64,
         deliveries: &[NewDelivery],

@@ -662,11 +662,14 @@ impl meta_whatsapp_server::store::WebhookStore for Gate {
     async fn fan_out(
         &self,
         endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        tenant: &meta_whatsapp_server::model::TenantId,
         from: i64,
         to: i64,
         deliveries: &[meta_whatsapp_server_core::webhooks_out::store::NewDelivery],
     ) -> meta_whatsapp_server::store::StoreResult<bool> {
-        self.inner.fan_out(endpoint, from, to, deliveries).await
+        self.inner
+            .fan_out(endpoint, tenant, from, to, deliveries)
+            .await
     }
     async fn insert_delivery(
         &self,
