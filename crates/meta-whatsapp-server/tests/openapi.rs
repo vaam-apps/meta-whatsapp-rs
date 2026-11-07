@@ -423,7 +423,8 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// business places; since roadmap M5l a thread's pass, take and release;
 /// since roadmap M5j a solution migration intent and a billing migration;
 /// since roadmap M5j2 the operator's business verification submission and
-/// solution creation, scoped to the admin key),
+/// solution creation, scoped to the admin key; since roadmap M5j3 the pool's
+/// addition and code request and the hosted claim, the same),
 /// and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
@@ -445,6 +446,9 @@ fn idempotent_operations_declare_their_key() {
         [
             "POST /v1/admin/partners/business-verifications",
             "POST /v1/admin/partners/solutions",
+            "POST /v1/admin/pre-verified-numbers",
+            "POST /v1/admin/pre-verified-numbers/{id}/code",
+            "POST /v1/admin/signup/hosted",
             "POST /v1/numbers/{pn}/blocked-users",
             "POST /v1/numbers/{pn}/blocked-users/unblock",
             "POST /v1/numbers/{pn}/calls",

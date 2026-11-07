@@ -1,6 +1,6 @@
 # Hosted signup, several WABAs per signup and pre-verified numbers
 
-> **Verified against meta-whatsapp-rs 93691cb49b9867a76f02c9ed44bf5d2d424c946f (2026-11-06).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
+> **Verified against meta-whatsapp-rs d5b9444ed2f6b0c3dd75e33bbed6530bcd939425 (2026-11-07).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
 
 The code is in [examples/onboarding.ts](../examples/onboarding.ts) (the
 functions below, plus one that adds a number to the pool), type-checked
@@ -65,6 +65,15 @@ merchant's tenant resumes. The claim is the operator's, never a tenant's, becaus
 ids are no secrets: a route open to merchants would let one take
 another's arrival. A tenant key gets `forbidden` (403). Off, the route
 answers `signup_not_configured` (409).
+
+Send an `Idempotency-Key` header with the claim (and with the pool's add and
+code requests below): the same key and body after a `504` is one request to
+Meta and gets the first answer back, marked as a replay; another
+body is `idempotency_key_reused` (422). A claim Meta refused (nothing sent)
+puts the arrival back and frees the key; one Meta may have received puts the
+arrival back and keeps the `onboarding_failed` for that key, so claim again
+under a new key. The PIN is not compared: another PIN under the same key
+gets the first answer.
 
 ## Pre-verified numbers
 
