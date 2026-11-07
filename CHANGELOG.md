@@ -27,8 +27,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added
 
-- **A Flow key per tenant** (roadmap M5d2, first slice; proposals D370 to
-  D374, to be decided by the coordinator): the library's
+- **A Flow key per tenant** (roadmap M5d2, first slice; decisions D370 to
+  D374, 2026-11-07): the library's
   `TokenVault::store_flow_key`, `flow_key`, `delete_flow_key` and
   `holds_flow_key` (a sealed vault record `flow-key/<WABA_ID>` naming its
   owner, re-sealed by `TokenVault::rotate`); `PUT`, `GET` and `DELETE

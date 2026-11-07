@@ -6900,8 +6900,8 @@ or WABA fails the family's own cross-tenant test).
     the request's key; with no callback configured it is `503` as in
     M5d; the callback's destination is refused as a webhook endpoint's
     is.
-  - **First slice, a Flow key per tenant (draft; proposals D370 to
-    D374, the coordinator decides):** the library's
+  - **First slice, a Flow key per tenant (decisions D370 to
+    D374, 2026-11-07):** the library's
     `TokenVault::{store_flow_key, flow_key, delete_flow_key,
     holds_flow_key}` (a sealed vault record `flow-key/<WABA_ID>` naming
     its owner, rotated with the vault's keys); the core's
