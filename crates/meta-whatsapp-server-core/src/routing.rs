@@ -86,6 +86,9 @@ use crate::error::ServiceError;
 use crate::messages::is_e164;
 use crate::observe::Observer;
 
+/// The target of this module's log lines.
+const LOG_TARGET: &str = "meta_whatsapp_server::api::routing";
+
 /// The audit actions (docs/design/server.md, D58 and D221).
 const PASSED: &str = "thread_passed";
 const TAKEN: &str = "thread_taken";
@@ -283,7 +286,7 @@ impl<'a> Routing<'a> {
         authz.admit(caller)?;
         authz.admit_number(number)?;
         if number.tenant() != caller.tenant() {
-            tracing::warn!("refused the routing services on another tenant's number");
+            tracing::warn!(target: LOG_TARGET, "refused the routing services on another tenant's number");
             return Err(ServiceError::not_found());
         }
         Ok(Self {
@@ -373,6 +376,7 @@ impl<'a> Routing<'a> {
         let role = role.map(str::to_owned);
         if let Err(error) = self.inbox.record_thread_owner_of(user, owner, role).await {
             tracing::warn!(
+                target: LOG_TARGET,
                 action,
                 kind = ?error.kind(),
                 "the thread action went through, but the inbox's thread owner was not recorded"

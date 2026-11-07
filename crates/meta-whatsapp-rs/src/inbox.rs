@@ -2441,9 +2441,10 @@ impl Inbox {
     ///
     /// - [`Recipient::Phone`]: [`handover_key`] (the identity links, else
     ///   a synced contact's BSUID, else the phone number);
-    /// - [`Recipient::User`] and [`Recipient::PhoneAndUser`] (Meta uses the
-    ///   phone number and ignores the BSUID, but the inbox keys by the
-    ///   BSUID first): the BSUID, followed along the identity links to the
+    /// - [`Recipient::User`] and [`Recipient::PhoneAndUser`] (which the
+    ///   thread control client refuses to send, so no action of the
+    ///   client's reaches this with one; the inbox keys by the BSUID
+    ///   first): the BSUID, followed along the identity links to the
     ///   latest one (a BSUID change);
     /// - [`Recipient::Group`], and a phone number or BSUID that names no
     ///   one: refused (the thread control pages describe one customer's

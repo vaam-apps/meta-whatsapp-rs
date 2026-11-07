@@ -276,7 +276,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5l2)
 
 - The service records its own thread actions in the inbox (design D390 to
-  D393, an implementer's proposals, not decided): after Meta answers a pass,
+  D393, the coordinator's decisions of 2026-11-07, swappable): after Meta answers a pass,
   a take or a release, `Routing` writes the owner (`another_app` with the
   target role, `this_app` with `escalation`, `idle`) to the bundle's
   conversation store, so a free-form reply after a pass is `409
@@ -288,6 +288,10 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   (dated to the second, so a handover webhook of the same second or later
   wins). `Routing::new` takes the conversation store and the clock. OpenAPI
   unchanged. Names pending the owner's confirmation before the first release.
+  `ThreadControl::pass`, `take` and `release` now read a 200 whose body says
+  `"success": false` as an error (as every call that answers `success`
+  does), so it is never recorded; a failed record is logged at `warn` on
+  `meta_whatsapp_server::api::routing` by action and kind, never the user.
 
 ### Added (roadmap M5l)
 

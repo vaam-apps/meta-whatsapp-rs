@@ -70,6 +70,7 @@ use meta_whatsapp_core::recipient::Recipient;
 use serde::{Deserialize, Serialize};
 
 use crate::Client;
+use crate::request::send_checked;
 
 /// Longest `metadata`, in characters (`conversation-routing/thread-control`
 /// § Parameters: "maximum 2,000 characters").
@@ -217,12 +218,14 @@ impl ThreadControl {
 
     /// Not idempotent, see the [module docs](self).
     async fn send(&self, body: &Body<'_>, context: &'static str) -> Result<ThreadControlResponse> {
-        self.client
+        // A 200 with `{"success": false}` is no answer of success: the page
+        // documents none, but a caller that records the action (the
+        // service's inbox) must never record one Meta did not take.
+        let request = self
+            .client
             .post_at(&[self.phone_number_id.as_str(), "thread_control"])
-            .json(body)
-            .context(context)
-            .send()
-            .await
+            .json(body);
+        send_checked(request, context).await
     }
 }
 

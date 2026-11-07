@@ -15,6 +15,8 @@ mod common;
 
 use common::{Call, Harness};
 use meta_whatsapp_rs::core::error::TransportError;
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
+use meta_whatsapp_rs::core::store::{ConversationKey, ThreadOwner};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
 use pretty_assertions::assert_eq;
@@ -732,4 +734,179 @@ async fn a_later_handover_webhook_wins_over_the_service_record() {
     let answered = h.call(reply_to_customer(&key, "Hello again")).await;
     assert_eq!(answered.status, StatusCode::ACCEPTED, "{}", answered.text);
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The inbox's record of a thread the service acted on: owner and role.
+async fn recorded(h: &Harness, contact: &str) -> Option<(ThreadOwner, Option<String>)> {
+    let key = ConversationKey::new(PhoneNumberId::new(PN).unwrap(), contact);
+    h.conversations
+        .thread_owner(&key)
+        .await
+        .unwrap()
+        .map(|o| (o.owner, o.role))
+}
+
+/// What each action leaves in the store, under the BSUID's conversation
+/// however the request named the user: a targeted pass `another_app` with
+/// that role, an untargeted one the `escalation`, a take `this_app` with
+/// `escalation`, a release `idle` with no role; the phone number's own key
+/// is never written. Decisive: the owner and the role each arm of
+/// `Routing::pass`, `take` and `release` hands to `record` (swap `ThisApp`
+/// and `AnotherApp`, record `AnotherApp` on a release, or a wrong role,
+/// and this fails).
+#[tokio::test]
+async fn each_action_leaves_its_owner_and_role_under_the_bsuids_conversation() {
+    let (h, key) = with_a_bsuid_conversation().await;
+    let owner = |o: ThreadOwner, r: Option<&str>| Some((o, r.map(str::to_owned)));
+    for (action, user, body_extra, expected) in [
+        (
+            "pass",
+            json!({"phone": PHONE}),
+            json!({"target_role": "ai_agent"}),
+            owner(ThreadOwner::AnotherApp, Some("ai_agent")),
+        ),
+        (
+            "release",
+            json!({"wa_id": WA_ID}),
+            json!({}),
+            owner(ThreadOwner::Idle, None),
+        ),
+        (
+            "pass",
+            json!({"user_id": BSUID}),
+            json!({}),
+            owner(ThreadOwner::AnotherApp, Some("escalation")),
+        ),
+        (
+            "take",
+            json!({"phone": PHONE}),
+            json!({}),
+            owner(ThreadOwner::ThisApp, Some("escalation")),
+        ),
+    ] {
+        let mut body = json!({ "user": user });
+        body.as_object_mut()
+            .unwrap()
+            .extend(body_extra.as_object().unwrap().clone());
+        h.graph.push_json(200, accepted());
+        let done = h.call(post(action, &key).json(&body)).await;
+        assert_eq!(done.status, StatusCode::OK, "{action}: {}", done.text);
+        assert_eq!(recorded(&h, BSUID).await, expected, "{action} {body}");
+        assert_eq!(recorded(&h, WA_ID).await, None, "never the phone alone");
+        assert_eq!(recorded(&h, PHONE).await, None);
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A 200 that does not say success records nothing, for the three actions:
+/// the service answers an error, and the guard keeps believing what it
+/// believed. Decisive: the client's `send_checked` in `ThreadControl::send`
+/// (reading only the HTTP status records a thread Meta did not move).
+#[tokio::test]
+async fn a_200_that_says_success_false_records_nothing() {
+    let (h, key) = with_a_bsuid_conversation().await;
+    for (action, body) in [
+        ("pass", json!({"user": {"user_id": BSUID}})),
+        ("take", json!({"user": {"user_id": BSUID}})),
+        ("release", json!({"user": {"user_id": BSUID}})),
+    ] {
+        h.graph.push_json(200, json!({"success": false}));
+        let reply = h.call(post(action, &key).json(&body)).await;
+        assert!(!reply.status.is_success(), "{action}: {}", reply.text);
+        assert_eq!(recorded(&h, BSUID).await, None, "{action}");
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// D393: a record that cannot be stored does not fail the action. All three
+/// still answer `200 {request_id}` (nothing panics, nothing invites a
+/// retry), the `warn` line is on the module's explicit target and carries
+/// the action and the error's kind, and no line holds the user (phone
+/// number, `wa_id` or BSUID), the `metadata` or the store's own message.
+/// Decisive: the `Err` arm of `Routing::record` (propagating the error, or
+/// logging the user, fails it).
+#[tokio::test]
+async fn a_record_that_cannot_be_stored_does_not_fail_the_action_or_name_the_user() {
+    use common::capture::{Captured, Secrets, subscriber};
+    use common::failing_conversations::FailingOwnerWrites;
+    use common::meta::{EXAMPLE_BSUID, EXAMPLE_WAMID, bytes, text};
+
+    let store = std::sync::Arc::new(FailingOwnerWrites::default());
+    let h = Harness::with(common::Stores {
+        conversations: store.clone(),
+        ..common::Stores::memory()
+    });
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let mut payload = text(WABA, PN, EXAMPLE_WAMID);
+    let value = &mut payload["entry"][0]["changes"][0]["value"];
+    value["contacts"][0]["user_id"] = json!(EXAMPLE_BSUID);
+    value["messages"][0]["from_user_id"] = json!(EXAMPLE_BSUID);
+    assert_eq!(h.webhook(&bytes(&payload)).await.status, StatusCode::OK);
+    h.clock
+        .set(time::OffsetDateTime::now_utc() + time::Duration::seconds(2));
+    let key = h.tenant_key(TENANT, &[Scope::Routing, Scope::Inbox]).await;
+    store.fail_owner_writes(true);
+
+    let captured = Captured::default();
+    let _guard = tracing::subscriber::set_default(subscriber(&captured));
+    let note = "the customer's own words, METADATA-PLANT";
+    for (action, body) in [
+        (
+            "pass",
+            json!({"user": {"phone": PHONE}, "target_role": "marketing", "metadata": note}),
+        ),
+        ("take", json!({"user": {"user_id": BSUID}, "metadata": note})),
+        ("release", json!({"user": {"wa_id": WA_ID}})),
+    ] {
+        h.graph.push_json(200, accepted());
+        let done = h.call(post(action, &key).json(&body)).await;
+        assert_eq!(done.status, StatusCode::OK, "{action}: {}", done.text);
+        assert_eq!(done.json(), json!({"request_id": "REQ-1"}), "{action}");
+    }
+    assert_eq!(h.graph.remaining(), 0);
+    assert_eq!(recorded(&h, BSUID).await, None, "nothing was stored");
+
+    let logs = captured.text();
+    let lines: Vec<Value> = logs
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|e| e["level"] == "WARN" && e["fields"]["action"].is_string())
+        .collect();
+    let actions: Vec<&str> = lines
+        .iter()
+        .map(|e| e["fields"]["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actions,
+        ["thread_passed", "thread_taken", "thread_released"],
+        "{logs}"
+    );
+    for line in &lines {
+        assert_eq!(line["target"], "meta_whatsapp_server::api::routing", "{line}");
+        assert!(line["fields"]["kind"].is_string(), "{line}");
+    }
+    let mut secrets = Secrets::new(
+        "the user and the note",
+        vec![
+            PHONE.to_owned(),
+            WA_ID.to_owned(),
+            BSUID.to_owned(),
+            "METADATA-PLANT".to_owned(),
+            "the store is down".to_owned(),
+        ],
+    );
+    secrets.section("the token");
+    secrets.push(TOKEN.to_owned());
+    assert_eq!(secrets.leaks(&logs), None);
+
+    // Writes work again: the next action is recorded.
+    store.fail_owner_writes(false);
+    h.graph.push_json(200, accepted());
+    h.call(post("pass", &key).json(&json!({"user": {"user_id": BSUID}})))
+        .await;
+    assert_eq!(
+        recorded(&h, BSUID).await,
+        Some((ThreadOwner::AnotherApp, Some("escalation".to_owned())))
+    );
 }
