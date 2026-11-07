@@ -2985,8 +2985,9 @@ pub async fn the_walk_follows_every_page(backend: &dyn Backend) {
     let report = reseal_secrets(store.as_ref(), &rotating_keys())
         .await
         .unwrap();
-    assert!(report.endpoints as usize >= made.len(), "{report:?}");
-    assert!(report.resealed as usize >= made.len(), "{report:?}");
+    let made_count = u64::try_from(made.len()).unwrap();
+    assert!(report.endpoints >= made_count, "{report:?}");
+    assert!(report.resealed >= made_count, "{report:?}");
     let keys = new_keys_alone();
     for (t, id, secret) in &made {
         let row = store.endpoint(&tenant(t), id).await.unwrap().unwrap();
