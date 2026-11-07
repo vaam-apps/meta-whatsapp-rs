@@ -12,6 +12,12 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added
+
+- A webhook endpoint made with a platform key may name `tenants` (one to
+  ten): it receives those tenants' events, each delivery read in its own
+  tenant's stream (roadmap M2m; migration 11).
+
 ### Fixed
 
 - The service sends every legal act exactly once: the compliance
