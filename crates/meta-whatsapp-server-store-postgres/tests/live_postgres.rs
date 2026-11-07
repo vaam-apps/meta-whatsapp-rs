@@ -1360,6 +1360,67 @@ async fn live_postgres_two_hundred_streams_at_a_hundred_events_a_second_hold_bou
     backend.close().await;
 }
 
+/// One of `live_postgres_a_set_changed_under_the_row_lock_refuses_the_call_that_waited`'s
+/// calls, made with `through` as the set it was checked against: whether
+/// it went through.
+async fn call_through_set(
+    store: &meta_whatsapp_server_store_postgres::PgWebhookStore,
+    op: &str,
+    owner: &meta_whatsapp_server_core::model::TenantId,
+    id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+    through: &[meta_whatsapp_server_core::model::TenantId],
+    new_secret: &meta_whatsapp_server_core::webhooks_out::SealedSecret,
+    now: time::OffsetDateTime,
+) -> meta_whatsapp_server_core::store::StoreResult<bool> {
+    use meta_whatsapp_server_core::webhooks_out::DeliveryId;
+    use meta_whatsapp_server_core::webhooks_out::store::{
+        EndpointChange, NewDelivery, WebhookStore as _,
+    };
+    match op {
+        "change" => store
+            .update_endpoint(
+                owner,
+                id,
+                &EndpointChange {
+                    enabled: Some(false),
+                    reached_through: Some(through.to_vec()),
+                    ..EndpointChange::default()
+                },
+                now,
+            )
+            .await
+            .map(|done| done.is_some()),
+        "rotation" => store
+            .rotate_secret(
+                owner,
+                id,
+                new_secret,
+                now + time::Duration::hours(24),
+                now,
+                Some(through),
+            )
+            .await
+            .map(|done| done.is_some()),
+        "ping" => store
+            .insert_delivery(
+                owner,
+                id,
+                &NewDelivery {
+                    id: DeliveryId::generate(now).unwrap(),
+                    event_id: None,
+                    sequence: None,
+                    event_type: "ping".to_owned(),
+                    created_at: now,
+                    give_up_at: now,
+                },
+                Some(through),
+            )
+            .await
+            .map(|done| done.is_some()),
+        _ => store.delete_endpoint(owner, id, Some(through)).await,
+    }
+}
+
 /// Roadmap M2m, D342: a change, a rotation, a ping and a deletion of a
 /// platform endpoint read its set of named tenants under the endpoint's
 /// row lock, so a set changed by a session that holds the row (and commits
@@ -1373,11 +1434,9 @@ async fn live_postgres_two_hundred_streams_at_a_hundred_events_a_second_hold_bou
 async fn live_postgres_a_set_changed_under_the_row_lock_refuses_the_call_that_waited() {
     use meta_whatsapp_server_core::store::RecordStore as _;
     use meta_whatsapp_server_core::webhooks_out::store::{
-        CreateOutcome, EndpointChange, NewDelivery, NewEndpoint, WebhookStore as _,
+        CreateOutcome, NewEndpoint, WebhookStore as _,
     };
-    use meta_whatsapp_server_core::webhooks_out::{
-        DeliveryId, EndpointId, SealedSecret, TenantCursor,
-    };
+    use meta_whatsapp_server_core::webhooks_out::{EndpointId, SealedSecret, TenantCursor};
     use meta_whatsapp_server_store_postgres::PgWebhookStore;
     use std::time::Duration;
     use time::OffsetDateTime;
@@ -1440,50 +1499,7 @@ async fn live_postgres_a_set_changed_under_the_row_lock_refuses_the_call_that_wa
             let (store, owner, id, both) = (store.clone(), owner.clone(), id.clone(), both.clone());
             let new_secret = sealed(2);
             tokio::spawn(async move {
-                // Whether the call went through.
-                match op {
-                    "change" => store
-                        .update_endpoint(
-                            &owner,
-                            &id,
-                            &EndpointChange {
-                                enabled: Some(false),
-                                reached_through: Some(both),
-                                ..EndpointChange::default()
-                            },
-                            now,
-                        )
-                        .await
-                        .map(|done| done.is_some()),
-                    "rotation" => store
-                        .rotate_secret(
-                            &owner,
-                            &id,
-                            &new_secret,
-                            now + time::Duration::hours(24),
-                            now,
-                            Some(&both),
-                        )
-                        .await
-                        .map(|done| done.is_some()),
-                    "ping" => store
-                        .insert_delivery(
-                            &owner,
-                            &id,
-                            &NewDelivery {
-                                id: DeliveryId::generate(now).unwrap(),
-                                event_id: None,
-                                sequence: None,
-                                event_type: "ping".to_owned(),
-                                created_at: now,
-                                give_up_at: now,
-                            },
-                            Some(&both),
-                        )
-                        .await
-                        .map(|done| done.is_some()),
-                    _ => store.delete_endpoint(&owner, &id, Some(&both)).await,
-                }
+                call_through_set(&store, op, &owner, &id, &both, &new_secret, now).await
             })
         };
         tokio::time::sleep(Duration::from_millis(300)).await;
