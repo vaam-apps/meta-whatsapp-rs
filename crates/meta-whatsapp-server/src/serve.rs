@@ -657,7 +657,11 @@ pub fn webhooks_out(config: WebhookConfig) -> anyhow::Result<Option<WebhooksOut>
         keys,
         config.destinations,
         Arc::new(SystemResolver),
-        Arc::new(HyperSender::new().context("building webhooks out's TLS configuration")?),
+        Arc::new(
+            HyperSender::new()
+                .context("building webhooks out's TLS configuration")?
+                .with_pool(config.pool),
+        ),
     );
     out.schedule.window = config.retry_window;
     out.dispatch = config.dispatch;
