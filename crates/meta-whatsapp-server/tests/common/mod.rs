@@ -745,11 +745,35 @@ impl Harness {
         Self::build(Stores::memory(), settings, DEFAULT_APP_SECRETS, wrap)
     }
 
+    /// On a memory store, with `settings`, Meta reached by a client that
+    /// follows `retry` (every other harness never retries), to prove what
+    /// the service does not let the library replay.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_retry(settings: Settings, retry: RetryPolicy) -> Self {
+        Self::build_with_retry(
+            Stores::memory(),
+            settings,
+            DEFAULT_APP_SECRETS,
+            |graph| Arc::new(graph),
+            retry,
+        )
+    }
+
     fn build(
         stores: Stores,
         settings: Settings,
         app_secrets: &[&str],
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::build_with_retry(stores, settings, app_secrets, wrap, RetryPolicy::NONE)
+    }
+
+    fn build_with_retry(
+        stores: Stores,
+        settings: Settings,
+        app_secrets: &[&str],
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+        retry: RetryPolicy,
     ) -> Self {
         let Stores {
             store,
@@ -767,7 +791,7 @@ impl Harness {
         let graph = ScriptedTransport::new();
         let client = Client::builder()
             .shared_transport(wrap(graph.clone()))
-            .retry(RetryPolicy::NONE)
+            .retry(retry)
             .build()
             .unwrap();
         let clock = ManualClock::new(time::OffsetDateTime::now_utc());
@@ -1021,6 +1045,8 @@ impl Sample {
                 "group_id" => SAMPLE_TEMPLATE_GROUP_ID,
                 "flow_id" => SAMPLE_FLOW_ID,
                 "catalog_id" => SAMPLE_CATALOG_ID,
+                "set_id" => SAMPLE_PRODUCT_SET_ID,
+                "product_id" => SAMPLE_PRODUCT_ID,
                 "template_id" => SAMPLE_TEMPLATE_ID,
                 "sequence_id" => SAMPLE_SEQUENCE_ID,
                 "business_id" => SAMPLE_BUSINESS_ID,
@@ -1067,6 +1093,10 @@ pub const SAMPLE_SEQUENCE_ID: &str = "186473890";
 pub const SAMPLE_BUSINESS_ID: &str = "529216684107530";
 /// A catalog's id (Meta's Catalog API).
 pub const SAMPLE_CATALOG_ID: &str = "194836987003835";
+/// A product set's id (Meta's Catalog API: the pages' ids are placeholders).
+pub const SAMPLE_PRODUCT_SET_ID: &str = "5000000000000101";
+/// A product's id (Meta's Catalog API: the pages' ids are placeholders).
+pub const SAMPLE_PRODUCT_ID: &str = "5000000000000001";
 
 /// A base64 public key of the shape `settings-api` asks for (an RSA
 /// `SubjectPublicKeyInfo` header): not a private key.
@@ -1190,6 +1220,11 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
         ("GET", "/v1/wabas/{waba_id}/analytics/templates") => {
             Some(format!("{}&template_ids={SAMPLE_TEMPLATE_ID}", range()))
         }
+        // Roadmap M5g2: template group analytics, as the page's example.
+        ("GET", "/v1/wabas/{waba_id}/analytics/template-groups") => Some(format!(
+            "{}&group_ids={SAMPLE_TEMPLATE_GROUP_ID}&metric_types=sent,delivered,read",
+            range()
+        )),
         // Roadmap M5f: a group's analytics reach back 90 days at most, so
         // the sample's range is two days to one day before now.
         ("GET", "/v1/numbers/{pn}/groups/{group_id}/analytics") => {
@@ -1289,6 +1324,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "payment_config_id": SAMPLE_PAYMENT_CONFIGURATION,
             "amount": {"currency": "INR", "value": "100", "offset": "100"}
         }),
+        // Roadmap M5g2: analytics, "Disabling button click analytics".
+        ("PUT", "/v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking") => {
+            serde_json::json!({"opted_out": true})
+        }
         // Roadmap M5d: a Flow created from the page's example, and changed
         // (`flows/guides/flowsapi`).
         ("POST", "/v1/wabas/{waba_id}/flows") => {

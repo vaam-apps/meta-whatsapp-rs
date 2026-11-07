@@ -467,6 +467,13 @@ const CALLS_META: &[&str] = &[
     "GET /v1/wabas/{waba_id}/analytics/conversations",
     "GET /v1/wabas/{waba_id}/analytics/pricing",
     "GET /v1/wabas/{waba_id}/analytics/templates",
+    // Roadmap M5g2.
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}",
+    "GET /v1/wabas/{waba_id}/analytics/template-groups",
+    // (The insights are a legal act, off in this harness: Meta is not asked.)
+    "PUT /v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking",
     "GET /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users/unblock",
@@ -585,6 +592,11 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/wabas/{waba_id}/analytics/conversations",
     "GET /v1/wabas/{waba_id}/analytics/pricing",
     "GET /v1/wabas/{waba_id}/analytics/templates",
+    // Roadmap M5g2: the reads; the two switches answer no text of Meta's.
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}",
+    "GET /v1/wabas/{waba_id}/analytics/template-groups",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}",
     // Roadmap M5l: the roles read names no user.
     "GET /v1/numbers/{pn}/routing-roles",
     // Roadmap M5e: the call analytics keep Meta's details as the other
@@ -646,6 +658,9 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/numbers/{pn}/groups/{group_id}/participants",
     "GET /v1/numbers/{pn}/groups/{group_id}/join-requests",
     "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
+    // Roadmap M5g2: a group read for its WABA first, for each id.
+    "GET /v1/wabas/{waba_id}/analytics/template-groups",
+    "PUT /v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking",
     // Roadmap M5j: an intent Meta refuses is not this WABA's.
     "GET /v1/wabas/{waba_id}/solution-migration-intents/{intent_id}",
     // Roadmap M5h: a template or a sequence looked for in its WABA first.

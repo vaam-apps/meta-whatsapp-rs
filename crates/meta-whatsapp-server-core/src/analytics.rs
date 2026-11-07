@@ -9,12 +9,26 @@
 //! | [`Analytics::pricing`] | `GET /{waba_id}?fields=pricing_analytics.start(…).end(…).granularity(…)[.phone_numbers([…])]…` |
 //! | [`Analytics::calls`] | `GET /{waba_id}?fields=call_analytics.start(…).end(…).granularity(…)[.phone_numbers([…])][.country_codes([…])][.directions([…])][.dimensions([…])][.metric_types([…])]` (roadmap M5e) |
 //! | [`Analytics::template`] | the walk of the WABA's templates (`GET /{waba_id}/message_templates?fields=id&limit=100`, as D116), then `GET /{waba_id}/template_analytics?start=…&end=…&granularity=DAILY&template_ids=[…]` |
+//! | [`Analytics::template_groups`] | each group read first (`GET /{group_id}`, as D118: its WABA must be this one), then `GET /{waba_id}/template_group_analytics?start=…&end=…&granularity=daily&template_group_ids=[…]` (roadmap M5g2) |
+//! | [`Analytics::enable_template_insights`] | `POST /{waba_id}?is_enabled_for_insights=true` (roadmap M5g2; a legal act) |
+//! | [`Analytics::set_template_click_tracking`] | the template found among the WABA's own and its category read (`GET /{template_id}?fields=name`, then the WABA's templates of that name), then `POST /{template_id}?cta_url_link_tracking_opted_out=…&category=…` (roadmap M5g2) |
 //!
 //! Page: `analytics`. Not offered: group analytics (M5f's, on the group's
-//! route), template group analytics (they need the groups'
-//! ids: not routed yet), and the two switches the page documents
-//! (`enable_template_insights`, button click tracking), which change the
-//! WABA's settings rather than read.
+//! route).
+//!
+//! **The two switches** (roadmap M5g2, design D285, D286) change the WABA's
+//! or a template's settings. Confirming template insights is a **legal
+//! act** (the page: "by confirming access via the API, you direct Meta to
+//! add insights to your WhatsApp Business account", link tracking
+//! included, and "to collect and anonymize data from your chats with
+//! customers"; "once confirmed, template analytics cannot be disabled"):
+//! off until the deployment enables the legal acts
+//! ([`Analytics::with_legal_acts`], `WA_SERVER_LEGAL_ACTS`;
+//! [`crate::number_settings::is_legal_act`]), `403 feature_not_available`
+//! with nothing asked of Meta; on, it is the caller's audit event, and no
+//! other call makes it. The click tracking opt-out has no such effect (it
+//! turns a tracking off or on for one template). Both answer no text of
+//! Meta's: a refusal is its code.
 //!
 //! **A WABA's analytics are its WABA's.** The services open only on a WABA
 //! of the [`Caller`]'s own tenant (step 4 of the authorization order,
@@ -42,6 +56,7 @@
 //! punctuation a stray value could close.
 
 use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::RetryPolicy;
 use meta_whatsapp_rs::client::analytics::Granularity;
 use meta_whatsapp_rs::client::analytics::{
     AnalyticsTime, CallAnalytics, CallAnalyticsQuery, CallDataPoint, ConversationAnalytics,
@@ -49,14 +64,28 @@ use meta_whatsapp_rs::client::analytics::{
     MessagingAnalyticsQuery, MessagingGranularity, PricingAnalytics, PricingAnalyticsQuery,
     PricingDataPoint, TemplateAnalytics, TemplateAnalyticsQuery,
 };
-use meta_whatsapp_rs::core::ids::TemplateId;
+use meta_whatsapp_rs::client::analytics::{
+    MAX_TEMPLATE_GROUP_IDS, TemplateGroupAnalytics, TemplateGroupAnalyticsQuery,
+};
+use meta_whatsapp_rs::core::ids::{TemplateGroupId, TemplateId};
 use time::{Date, Duration, Month, OffsetDateTime, Time};
 
+use crate::audit::{AnalyticsFacts, Outcome, Subject, analytics_audit};
 use crate::authz::{Authorizer, Caller, OwnedWaba};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
+use crate::number_settings::is_legal_act;
 use crate::observe::Observer;
-use crate::request::{typed_graph_id, wire};
-use crate::templates::all_templates_in_waba;
+use crate::operation::Operation;
+use crate::request::{graph_id, typed_graph_id, wire};
+use crate::templates::{TemplateCache, Templates, all_groups_in_waba, all_templates_in_waba};
+
+/// The audit action of [`Analytics::enable_template_insights`]: a stored
+/// name in the logs, pending the owner's confirmation before the first
+/// release.
+pub const TEMPLATE_INSIGHTS_ENABLED: &str = "template_insights_enabled";
+/// The audit action of [`Analytics::set_template_click_tracking`], pending
+/// the owner's confirmation before the first release.
+pub const TEMPLATE_CLICK_TRACKING_SET: &str = "template_click_tracking_set";
 
 /// Longest list of a filter: the service's bound (D145).
 pub const MAX_FILTER_ITEMS: usize = 50;
@@ -106,6 +135,9 @@ const CALL_DIRECTIONS: [&str; 2] = ["USER_INITIATED", "BUSINESS_INITIATED"];
 const CALL_DIMENSIONS: [&str; 3] = ["phone", "direction", "country"];
 const CALL_METRICS: [&str; 3] = ["COUNT", "COST", "AVERAGE_DURATION"];
 const TEMPLATE_METRICS: [&str; 5] = ["COST", "CLICKED", "DELIVERED", "READ", "SENT"];
+/// The metrics of template group analytics, lowercase as the page writes
+/// them for this endpoint.
+const TEMPLATE_GROUP_METRICS: [&str; 5] = ["cost", "clicked", "delivered", "read", "sent"];
 
 // ─── The requests ────────────────────────────────────────────────────────
 
@@ -229,6 +261,24 @@ pub struct TemplateRequest {
     /// 1 to 10 template ids (the WABA's).
     pub template_ids: Vec<String>,
     /// `COST`, `CLICKED`, `DELIVERED`, `READ`, `SENT`; none: all.
+    pub metric_types: Vec<String>,
+    /// Report in the WABA's timezone (the bounds must then be days).
+    pub use_waba_timezone: Option<bool>,
+    /// Meta's cursor from the previous page.
+    pub after: Option<String>,
+}
+
+/// A template group analytics request, as the caller carried it (roadmap
+/// M5g2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateGroupRequest {
+    /// Range start.
+    pub start: Bound,
+    /// Range end.
+    pub end: Bound,
+    /// 1 to 10 template group ids (the WABA's).
+    pub group_ids: Vec<String>,
+    /// `cost`, `clicked`, `delivered`, `read`, `sent`; none: all.
     pub metric_types: Vec<String>,
     /// Report in the WABA's timezone (the bounds must then be days).
     pub use_waba_timezone: Option<bool>,
@@ -472,20 +522,7 @@ pub fn template_query(
     now: OffsetDateTime,
     request: &TemplateRequest,
 ) -> Result<TemplateAnalyticsQuery, ServiceError> {
-    let (start, end) = (request.start.moment(), request.end.moment());
-    if start < now - Duration::days(TEMPLATE_LOOKBACK_DAYS) {
-        return Err(invalid("start"));
-    }
-    if end <= start || end - start > Duration::days(TEMPLATE_LOOKBACK_DAYS) {
-        return Err(invalid("end"));
-    }
-    if request.use_waba_timezone == Some(true) {
-        for (field, bound) in [("start", request.start), ("end", request.end)] {
-            if !matches!(bound, Bound::Day(_)) {
-                return Err(invalid(field));
-            }
-        }
-    }
+    template_range(now, request.start, request.end, request.use_waba_timezone)?;
     if request.template_ids.is_empty() || request.template_ids.len() > MAX_TEMPLATE_IDS {
         return Err(invalid("template_ids"));
     }
@@ -497,6 +534,67 @@ pub fn template_query(
     }
     one_of("metric_types", &request.metric_types, &TEMPLATE_METRICS)?;
     let mut query = TemplateAnalyticsQuery::new(request.start, request.end, ids);
+    query.metric_types = typed(&request.metric_types);
+    query.use_waba_timezone = request.use_waba_timezone;
+    query.after.clone_from(&request.after);
+    Ok(query)
+}
+
+/// The range of template and template group analytics, checked against
+/// `now` (D145): `start` at most [`TEMPLATE_LOOKBACK_DAYS`] days back, `end`
+/// after `start` and at most that far from it, and days with the WABA's
+/// timezone.
+fn template_range(
+    now: OffsetDateTime,
+    start: Bound,
+    end: Bound,
+    use_waba_timezone: Option<bool>,
+) -> Result<(), ServiceError> {
+    let (at_start, at_end) = (start.moment(), end.moment());
+    if at_start < now - Duration::days(TEMPLATE_LOOKBACK_DAYS) {
+        return Err(invalid("start"));
+    }
+    if at_end <= at_start || at_end - at_start > Duration::days(TEMPLATE_LOOKBACK_DAYS) {
+        return Err(invalid("end"));
+    }
+    if use_waba_timezone == Some(true) {
+        for (field, bound) in [("start", start), ("end", end)] {
+            if !matches!(bound, Bound::Day(_)) {
+                return Err(invalid(field));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The library's template group query for `request`, checked against `now`
+/// (roadmap M5g2); the group ids are Meta ids here (that they are the
+/// WABA's is [`Analytics::template_groups`]'s check). The range is
+/// template analytics' (90 days: the page's look-back for groups).
+///
+/// # Errors
+///
+/// `422 invalid_request` on the field at fault (`start`, `end`,
+/// `group_ids`, `group_ids[i]`, `metric_types[i]`).
+pub fn template_group_query(
+    now: OffsetDateTime,
+    request: &TemplateGroupRequest,
+) -> Result<TemplateGroupAnalyticsQuery, ServiceError> {
+    template_range(now, request.start, request.end, request.use_waba_timezone)?;
+    if request.group_ids.is_empty() || request.group_ids.len() > MAX_TEMPLATE_GROUP_IDS {
+        return Err(invalid("group_ids"));
+    }
+    let mut ids = Vec::with_capacity(request.group_ids.len());
+    for (i, id) in request.group_ids.iter().enumerate() {
+        graph_id("group_ids", id).map_err(|_| invalid(&format!("group_ids[{i}]")))?;
+        ids.push(TemplateGroupId::new(id.as_str()));
+    }
+    one_of(
+        "metric_types",
+        &request.metric_types,
+        &TEMPLATE_GROUP_METRICS,
+    )?;
+    let mut query = TemplateGroupAnalyticsQuery::new(request.start, request.end, ids);
     query.metric_types = typed(&request.metric_types);
     query.use_waba_timezone = request.use_waba_timezone;
     query.after.clone_from(&request.after);
@@ -814,6 +912,88 @@ pub struct TemplatePage {
     pub next_after: Option<String>,
 }
 
+/// A template group's day of analytics (roadmap M5g2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateGroupPoint {
+    /// The template group.
+    pub template_group_id: String,
+    /// Day start.
+    pub start: Moment,
+    /// Day end.
+    pub end: Moment,
+    /// Sends.
+    pub sent: Option<u64>,
+    /// Deliveries.
+    pub delivered: Option<u64>,
+    /// Reads.
+    pub read: Option<u64>,
+    /// Button clicks.
+    pub clicked: Vec<Click>,
+    /// Cost metrics.
+    pub cost: Vec<Cost>,
+}
+
+/// A set of a template group analytics page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateGroupSet {
+    /// `DAILY`, as Meta writes it.
+    pub granularity: Option<String>,
+    /// The product the metrics are for.
+    pub product_type: Option<String>,
+    /// The WABA's timezone, with `use_waba_timezone`.
+    pub waba_timezone: Option<String>,
+    /// The data points.
+    pub data_points: Vec<TemplateGroupPoint>,
+}
+
+impl From<TemplateGroupAnalytics> for TemplateGroupSet {
+    fn from(set: TemplateGroupAnalytics) -> Self {
+        Self {
+            granularity: wire(set.granularity.as_ref()),
+            product_type: set.product_type,
+            waba_timezone: set.waba_timezone,
+            data_points: set
+                .data_points
+                .into_iter()
+                .map(|p| TemplateGroupPoint {
+                    template_group_id: p.template_group_id.into_inner(),
+                    start: p.start.into(),
+                    end: p.end.into(),
+                    sent: p.sent,
+                    delivered: p.delivered,
+                    read: p.read,
+                    clicked: p
+                        .clicked
+                        .into_iter()
+                        .map(|c| Click {
+                            kind: wire(Some(&c.kind)).unwrap_or_default(),
+                            button_content: c.button_content,
+                            count: c.count,
+                        })
+                        .collect(),
+                    cost: p
+                        .cost
+                        .into_iter()
+                        .map(|c| Cost {
+                            kind: wire(Some(&c.kind)).unwrap_or_default(),
+                            value: c.value,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A page of template group analytics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateGroupPage {
+    /// The sets.
+    pub sets: Vec<TemplateGroupSet>,
+    /// Meta's cursor for the next page, when Meta says one follows.
+    pub next_after: Option<String>,
+}
+
 // ─── The operations ──────────────────────────────────────────────────────
 
 /// The analytics reads on a WABA of the caller's tenant: an [`OwnedWaba`]
@@ -821,14 +1001,17 @@ pub struct TemplatePage {
 /// the WABA's token. Cheap: a few references.
 pub struct Analytics<'a> {
     authz: &'a Authorizer,
+    caller: &'a Caller,
     waba: &'a OwnedWaba,
     observer: &'a dyn Observer,
+    legal_acts: bool,
 }
 
 impl std::fmt::Debug for Analytics<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Analytics")
             .field("waba", self.waba)
+            .field("legal_acts", &self.legal_acts)
             .finish_non_exhaustive()
     }
 }
@@ -857,8 +1040,10 @@ impl<'a> Analytics<'a> {
         }
         Ok(Self {
             authz,
+            caller,
             waba,
             observer: &(),
+            legal_acts: false,
         })
     }
 
@@ -866,6 +1051,14 @@ impl<'a> Analytics<'a> {
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Whether the deployment enables the legal acts (the setting
+    /// `WA_SERVER_LEGAL_ACTS`; off until this is called with `true`).
+    #[must_use]
+    pub fn with_legal_acts(mut self, enabled: bool) -> Self {
+        self.legal_acts = enabled;
         self
     }
 
@@ -980,6 +1173,161 @@ impl<'a> Analytics<'a> {
                 })
             }
             Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// Template group analytics for `request`, once every group id is found
+    /// among the WABA's own groups (roadmap M5g2): each is read first
+    /// (`GET /{group_id}`), and its `whatsapp_business_account` must be
+    /// this WABA (D118).
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on the field at fault, before any request.
+    /// `404 not_found`, without Meta's code or text, for a group not the
+    /// WABA's (the analytics are not asked for). Meta's refusal or
+    /// failure, with its `details`.
+    pub async fn template_groups(
+        &self,
+        request: &TemplateGroupRequest,
+    ) -> Result<TemplateGroupPage, ServiceError> {
+        let query = template_group_query(self.authz.now(), request)?;
+        all_groups_in_waba(
+            self.authz,
+            self.observer,
+            self.waba,
+            &query.template_group_ids,
+        )
+        .await?;
+        match self.client().template_group(&query).await {
+            Ok(page) => {
+                let next_after = page.next_cursor().map(str::to_owned);
+                Ok(TemplateGroupPage {
+                    sets: page.data.into_iter().map(TemplateGroupSet::from).collect(),
+                    next_after,
+                })
+            }
+            Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// The caller's audit event `action` on the WABA.
+    fn audit(&self, action: &'static str, facts: &AnalyticsFacts<'_>, outcome: Outcome) {
+        analytics_audit(
+            action,
+            self.caller.key_id(),
+            &Subject {
+                tenant: Some(self.caller.tenant().as_str()),
+                waba_id: Some(self.waba.waba_id().as_str()),
+                ..Subject::default()
+            },
+            facts,
+            outcome,
+        );
+    }
+
+    /// The error of a switch that failed, with no text of Meta's in the
+    /// answer or the logs, audited when the change may have gone through
+    /// unanswered.
+    async fn switch_failed(
+        &self,
+        action: &'static str,
+        facts: &AnalyticsFacts<'_>,
+        error: &Error,
+    ) -> ServiceError {
+        let api = self.waba.failed_withholding_texts(self.authz, error).await;
+        if error.graph().is_some() {
+            self.observer.graph_error(api.code());
+        }
+        if api.may_have_been_sent() {
+            self.audit(action, facts, Outcome::Unanswered);
+        }
+        api
+    }
+
+    /// Confirm template insights for the WABA: `POST
+    /// /{waba_id}?is_enabled_for_insights=true` (roadmap M5g2). A **legal
+    /// act**: by it the business directs Meta to add link tracking to its
+    /// messages and to collect and anonymize data from its chats, and
+    /// Meta's page says it cannot be disabled once confirmed. Off until
+    /// the deployment enables the legal acts ([`Self::with_legal_acts`]):
+    /// `403 feature_not_available`, nothing asked of Meta. Audited as
+    /// [`TEMPLATE_INSIGHTS_ENABLED`]. Exactly one request, never replayed
+    /// (not after a timeout, a throttle or a server error), although the
+    /// library marks the call replayable: this act is not retried on the
+    /// business's behalf.
+    ///
+    /// # Errors
+    ///
+    /// `403 feature_not_available` with the legal acts off. Meta's refusal
+    /// or failure, its code and no text.
+    pub async fn enable_template_insights(&self) -> Result<(), ServiceError> {
+        if !self.legal_acts && is_legal_act(Operation::EnableTemplateInsights) {
+            return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
+        }
+        let facts = AnalyticsFacts::default();
+        // The library marks the confirmation replayable (confirming twice
+        // is harmless to Meta), but it is an act the business directs and
+        // cannot undo: exactly one request, whatever the failure.
+        let once = self.waba.client().clone().with_retry(RetryPolicy::NONE);
+        match once
+            .analytics(self.waba.waba_id().clone())
+            .enable_template_insights()
+            .await
+        {
+            Ok(_) => {
+                self.audit(TEMPLATE_INSIGHTS_ENABLED, &facts, Outcome::Answered);
+                Ok(())
+            }
+            Err(error) => Err(self
+                .switch_failed(TEMPLATE_INSIGHTS_ENABLED, &facts, &error)
+                .await),
+        }
+    }
+
+    /// Opt the template `template_id` out of (`true`) or back into button
+    /// click tracking, once it is found among the WABA's own templates
+    /// (roadmap M5g2): `POST /{template_id}?cta_url_link_tracking_opted_out=…
+    /// &category=…`. Meta wants the template's *current* category in the
+    /// call (another moves the template to `PENDING` review), so the
+    /// service reads it with the lookup and sends it back exactly
+    /// as Meta returned it (no change of case: D284); the caller names none. Audited
+    /// as [`TEMPLATE_CLICK_TRACKING_SET`].
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `template_id`, before any request. `404
+    /// not_found` for a template not the WABA's (nothing is changed).
+    /// Meta's refusal or failure, its code and no text.
+    pub async fn set_template_click_tracking(
+        &self,
+        template_id: &str,
+        opted_out: bool,
+    ) -> Result<(), ServiceError> {
+        let id: TemplateId = typed_graph_id("template_id", template_id)?;
+        let cache = TemplateCache::new(std::time::Duration::ZERO);
+        let category = Templates::new(self.authz, self.caller, self.waba, &cache)?
+            .observed_by(self.observer)
+            .category_of(&id)
+            .await
+            .map_err(ServiceError::without_details)?;
+        let facts = AnalyticsFacts {
+            template_id: Some(id.as_str()),
+            opted_out: Some(opted_out),
+        };
+        let set = self
+            .client()
+            .set_button_click_tracking(&id, opted_out, &category)
+            .await;
+        match set {
+            Ok(()) => {
+                self.audit(TEMPLATE_CLICK_TRACKING_SET, &facts, Outcome::Answered);
+                Ok(())
+            }
+            // The template was found: a refusal now is the change's own.
+            Err(error) => Err(self
+                .switch_failed(TEMPLATE_CLICK_TRACKING_SET, &facts, &error)
+                .await),
         }
     }
 }
@@ -1231,5 +1579,41 @@ mod tests {
         assert_eq!(parse_day("2026-02-30"), None);
         assert_eq!(parse_day("2026-1-05"), None);
         assert!(parse_day("2026-11-05").is_some());
+    }
+
+    /// Template group analytics keep to template analytics' 90 days and
+    /// 10 ids, with the page's lowercase metrics. Decisive: each clause of
+    /// `template_group_query` and the range it shares.
+    #[test]
+    fn a_template_group_range_is_90_days_and_its_ids_ten() {
+        let request = |start: Bound, end: Bound, ids: &[&str]| TemplateGroupRequest {
+            start,
+            end,
+            group_ids: ids.iter().map(|&i| i.to_owned()).collect(),
+            metric_types: Vec::new(),
+            use_waba_timezone: None,
+            after: None,
+        };
+        let at = |days: i64| Bound::At(NOW - Duration::days(days));
+        assert!(template_group_query(NOW, &request(at(90), at(0), &["1044106240855852"])).is_ok());
+        let fault = |r: &TemplateGroupRequest| field(&template_group_query(NOW, r).unwrap_err());
+        assert_eq!(fault(&request(at(91), at(0), &["1"])), "start");
+        assert_eq!(fault(&request(at(60), at(-31), &["1"])), "end");
+        assert_eq!(fault(&request(at(5), at(5), &["1"])), "end");
+        assert_eq!(fault(&request(at(5), at(0), &[])), "group_ids");
+        let ids = ["1"; MAX_TEMPLATE_GROUP_IDS + 1];
+        assert_eq!(fault(&request(at(5), at(0), &ids)), "group_ids");
+        assert_eq!(fault(&request(at(5), at(0), &["1", "01"])), "group_ids[1]");
+        assert_eq!(fault(&request(at(5), at(0), &["1", "x"])), "group_ids[1]");
+        let mut metrics = request(at(5), at(0), &["1"]);
+        metrics.metric_types = vec!["sent".to_owned(), "COST".to_owned()];
+        assert_eq!(fault(&metrics), "metric_types[1]");
+        metrics.metric_types = vec!["read".to_owned(), "impressions".to_owned()];
+        assert_eq!(fault(&metrics), "metric_types[1]");
+        metrics.metric_types = vec!["cost".to_owned(), "clicked".to_owned()];
+        assert!(template_group_query(NOW, &metrics).is_ok());
+        let mut tz = request(at(5), at(0), &["1"]);
+        tz.use_waba_timezone = Some(true);
+        assert_eq!(fault(&tz), "start");
     }
 }

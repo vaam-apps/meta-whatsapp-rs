@@ -24,8 +24,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::{Template, Templates};
-use crate::authz::object_failed;
+use crate::authz::{Authorizer, OwnedWaba, object_failed};
 use crate::error::ServiceError;
+use crate::observe::Observer;
 use crate::request::{dropped_key, graph_id};
 
 /// A template group, as Meta describes it.
@@ -146,6 +147,70 @@ fn group_id(id: &str) -> Result<TemplateGroupId, ServiceError> {
     Ok(TemplateGroupId::new(id))
 }
 
+/// The group `id`, if it is the WABA's (D118): `GET /{group_id}` (the
+/// library's `Templates::get_group`), whose `whatsapp_business_account`
+/// must be `waba`, read with its own token. What every operation on one
+/// group id checks before it acts, and what the analytics of groups
+/// (roadmap M5g2) check for each id they ask about.
+///
+/// # Errors
+///
+/// `404 not_found`, without Meta's code or text: Meta refusing the id, or a
+/// group (or node) not naming the WABA. Meta's failure otherwise, counted
+/// in `observer`.
+pub(crate) async fn owned_group_of(
+    authz: &Authorizer,
+    observer: &dyn Observer,
+    waba: &OwnedWaba,
+    id: &TemplateGroupId,
+) -> Result<TemplateGroup, ServiceError> {
+    let group = waba
+        .client()
+        .templates(waba.waba_id().clone())
+        .get_group(id)
+        .await;
+    let group = match group {
+        Ok(group) => group,
+        Err(error) => {
+            let api = waba.failed(authz, &error).await;
+            if error.graph().is_some() {
+                observer.graph_error(api.code());
+            }
+            return Err(object_failed(api, &error));
+        }
+    };
+    let owner = group
+        .whatsapp_business_account
+        .as_ref()
+        .map(|waba| &waba.id);
+    // The node answered is the one asked for: an id Meta resolves to
+    // another node (an alias, a redirect) is not acted on as the group.
+    if group.id == *id && owner == Some(waba.waba_id()) {
+        Ok(group)
+    } else {
+        tracing::warn!("refused a template group that is not the WABA's");
+        Err(ServiceError::not_found())
+    }
+}
+
+/// Whether every one of `ids` is a group of `waba` ([`owned_group_of`] for
+/// each, in order, stopping at the first that is not).
+///
+/// # Errors
+///
+/// As [`owned_group_of`].
+pub(crate) async fn all_groups_in_waba(
+    authz: &Authorizer,
+    observer: &dyn Observer,
+    waba: &OwnedWaba,
+    ids: &[TemplateGroupId],
+) -> Result<(), ServiceError> {
+    for id in ids {
+        owned_group_of(authz, observer, waba, id).await?;
+    }
+    Ok(())
+}
+
 impl Templates<'_> {
     /// The group `id`, if it is the WABA's: `GET /{group_id}` (the
     /// library's `Templates::get_group`), whose `whatsapp_business_account`
@@ -157,28 +222,7 @@ impl Templates<'_> {
     /// or a group (or node) not naming the WABA. Meta's failure otherwise,
     /// with its `details`.
     async fn owned_group(&self, id: &TemplateGroupId) -> Result<TemplateGroup, ServiceError> {
-        let group = self
-            .waba
-            .client()
-            .templates(self.waba.waba_id().clone())
-            .get_group(id)
-            .await;
-        let group = match group {
-            Ok(group) => group,
-            Err(error) => return Err(object_failed(self.counted(&error).await, &error)),
-        };
-        let owner = group
-            .whatsapp_business_account
-            .as_ref()
-            .map(|waba| &waba.id);
-        // The node answered is the one asked for: an id Meta resolves to
-        // another node (an alias, a redirect) is not acted on as the group.
-        if group.id == *id && owner == Some(self.waba.waba_id()) {
-            Ok(group)
-        } else {
-            tracing::warn!("refused a template group that is not the WABA's");
-            Err(ServiceError::not_found())
-        }
+        owned_group_of(self.authz, self.observer, self.waba, id).await
     }
 
     /// Create `group` (read by [`group_creation`]) in the WABA, its

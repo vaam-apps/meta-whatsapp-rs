@@ -1043,8 +1043,9 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
 }
 
 /// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3): `off` (the default) or `on`.
-/// The legal act a tenant may ask for (the compliance information
-/// declaration; `meta_whatsapp_server_core::number_settings::is_legal_act`)
+/// The legal acts a tenant may ask for (the compliance information
+/// declaration, the confirmation of template insights;
+/// `meta_whatsapp_server_core::number_settings::is_legal_act`)
 /// is taken only when the deployment turns it on.
 fn legal_acts(r: &Reader<'_>) -> Result<bool, ConfigError> {
     match r.plain("WA_SERVER_LEGAL_ACTS")?.as_deref().map(str::trim) {
