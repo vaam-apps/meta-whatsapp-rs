@@ -1381,6 +1381,8 @@ pub const FLOW_PREVIEW_TOKEN: &str = "CAPTURE-FLOW-PREVIEW-TOKEN-b9d6c7";
 /// request carries: in no log line.
 const FLOW_ANSWER: &str = "shopping";
 const FLOW_ENDPOINT_TOKEN: &str = "flowtoken-1234";
+/// What a refused Flow key was made of (roadmap M5d2): not logged.
+const FLOW_KEY_REFUSED: &str = "CAPTURE-FLOW-KEY-NOT-A-KEY-d41f";
 /// A Flow JSON's text: the caller's, not logged either.
 const FLOW_JSON_TEXT: &str = "CAPTURE-FLOW-JSON-TEXT-Heading-Hello-World";
 
@@ -1479,6 +1481,29 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
     let deleted = h.call(call(Method::DELETE, &format!("/{FLOW}"))).await;
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
 
+    // The WABA's own Flow key (roadmap M5d2): set, read, replaced by a
+    // second key, refused as text, deleted. Neither key nor the refused
+    // text is logged (both are among the secrets below).
+    let key_path = format!("/v1/wabas/{WABA}/flow-key");
+    for pem in [
+        super::flows::KEY_PEM,
+        super::flows::OTHER_KEY_PEM,
+        FLOW_KEY_REFUSED,
+    ] {
+        let set = h
+            .call(
+                Call::new(Method::PUT, key_path.clone())
+                    .key(&key)
+                    .json(&json!({"private_key": pem})),
+            )
+            .await;
+        assert!(matches!(set.status.as_u16(), 200 | 422), "{}", set.text);
+    }
+    let read = h.call(Call::get(key_path.clone()).key(&key)).await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    let removed = h.call(Call::new(Method::DELETE, key_path).key(&key)).await;
+    assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
+
     // Meta's data endpoint (the public listener): the three payloads, a
     // forged signature, and no signature at all.
     for name in ["ping", "error_notification", "data_exchange"] {
@@ -1517,10 +1542,12 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
         FLOW_ENDPOINT_TOKEN.to_owned(),
         FLOW_JSON_TEXT.to_owned(),
     ];
-    // The Flow private key: every line of its body, and the sealed texts.
+    secrets.push(FLOW_KEY_REFUSED.to_owned());
+    // The Flow private keys: every line of their bodies, and the sealed texts.
     secrets.extend(
-        super::flows::KEY_PEM
-            .lines()
+        [super::flows::KEY_PEM, super::flows::OTHER_KEY_PEM]
+            .into_iter()
+            .flat_map(str::lines)
             .filter(|line| !line.starts_with("-----"))
             .map(str::to_owned),
     );
@@ -4313,6 +4340,10 @@ fn check_audit(logs: &str) {
             "flow_published",
             "flow_deprecated",
             "flow_deleted",
+            // Roadmap M5d2: a Flow key set twice, then deleted.
+            "flow_key_set",
+            "flow_key_set",
+            "flow_key_deleted",
             // Roadmap M5g: a QR code's deletion, the blocks and the unblock.
             "qr_code_deleted",
             "template_insights_enabled",
