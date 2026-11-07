@@ -491,7 +491,13 @@ breaking change, so:
   library only sends (a `Serialize` struct with a `new` or a builder, a
   params struct, the Flow JSON document, a template definition, a
   message to send). Struct literals of those stay possible and are the
-  documented way to build them.
+  documented way to build them. The exception is a request type that
+  already carried the attribute before L20b and is built through its
+  `new`, its `Default` or a builder (the Embedded Signup `Setup` and
+  prefills, `NewSignup`, `NewWaba`, query types such as
+  `PhoneNumbersQuery` and `ListFlows`): it keeps it, since callers do not
+  need a literal, and removing it later is not a breaking change. A new
+  request type follows the rule.
 - **Sent and received**: a type that is both (template components, the
   calling settings, the welcome message's parts) is decided case by
   case, and stays open when callers must build it to send it; each is
