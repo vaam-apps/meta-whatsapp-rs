@@ -5,7 +5,7 @@ description: "WhatsApp Calling through meta-whatsapp-server, the meta-whatsapp-r
 
 # meta-whatsapp-rs-server-calling
 
-> **Verified against meta-whatsapp-rs 3cd24b38992fc5de77cffefaaf0edcf880b3e45f (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 4919b5caba4ae08b86755c2b0391bcdf64edf677 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/calls.ts](examples/calls.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#calling).
 
@@ -88,6 +88,17 @@ asked.
     return false;
   }
 ```
+
+## The Messaging Account is the binding's, never yours
+
+Under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on by default, the sends'
+setting) every action of a call (place, pre-accept, accept, reject,
+terminate) names the number's binding's WABA id as its messaging account,
+as Meta asks when a token reaches several Messaging Accounts. Do not send
+the field: a messaging account id (under either of Meta's names) in a body
+is `422 invalid_request`, nothing sent. If an operator moves the number to
+another WABA mid-call, the next action names the new one and Meta may
+refuse it.
 
 ## Recording and transcription are your choice, per call
 

@@ -433,7 +433,8 @@ fn calls<'a>(
         number.capability(state),
         state.call_records(),
     )?
-    .observed_by(state.metrics()))
+    .observed_by(state.metrics())
+    .naming_the_account(state.settings().send_messaging_account_id))
 }
 
 /// The settings' change from a body: the document's strict type, written

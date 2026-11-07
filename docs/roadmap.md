@@ -4844,7 +4844,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `unknown`; the SIP status codes of the page's SIP section are not
     Graph codes and are not classified; `613` as `rate_limited` makes a
     non-idempotent POST replayable on it (D241).
-- [ ] **L29. The Messaging Account on the calling actions**
+- [x] **L29. The Messaging Account on the calling actions**
   (`meta-whatsapp-client`, `client::calling`; row 140; found reading
   `account-model-evolution/messaging` for M5c5): Meta's Calling API takes
   `messaging_account_id` in the body of every action (`connect`,
@@ -4861,8 +4861,25 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     key.
   - **Then, in the service:** M5e's call routes name the number's
     binding's WABA id under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`, on
-    every action of a call, with M5c5's test walking them (a follow-up of
-    this item, not yet scheduled).
+    every action of a call, with M5c5's test walking them.
+  - **Landed:** the library option is `Calling::messaging_account_id`
+    (one option on the handle, applied to the five actions, a JSON string
+    as the pages' `connect` example shows, digits checked before any
+    request; no struct gained a field); decisive tests
+    `connect_matches_the_messaging_account_pages_example`,
+    `without_the_option_no_action_names_a_messaging_account` and
+    `a_malformed_messaging_account_id_never_reaches_the_transport`
+    (`client::calling`). The service follow-up landed with it:
+    `Calls::naming_the_account` (the only place the field is set,
+    `Calls::client`), `every_send_route_names_the_bindings_account` and its
+    off twin now walk the five call routes (holding the sample call by its
+    `calls` event), `a_call_body_naming_the_account_is_refused` and
+    `a_call_names_the_same_account_on_every_action`. The choices are
+    D310-D313, decided by the coordinator under the owner's delegation,
+    swappable: one setting for
+    sends and calls; the binding's WABA as read for each request, nothing
+    stored with the call (so the stored `wa.server.call` record is
+    unchanged); a body naming the field is refused. No OpenAPI change.
 
 ## 4. Service milestones
 
@@ -6725,9 +6742,8 @@ or WABA fails the family's own cross-tenant test).
     the committed document for every route that reaches `/{pn}/messages`,
     the latest same-tenant attach, the other tenant's refusal and the
     refused body. No stored name, route or OpenAPI change.
-  - **Not done here:** the calling actions (Meta's `calling` pages accept
-    the field; the library's calls do not carry it): L29, then the
-    service. The marketing send (M5h, landed) names none: Meta's pages
+  - **Not done here:** ~~the calling actions~~ (done by L29 and its
+    service follow-up, D310-D313). The marketing send (M5h, landed) names none: Meta's pages
     for `/marketing_messages` document no such field; pinned by the walk. Several bindings per number
     wait for OPEN_QUESTIONS #46.
 - [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,

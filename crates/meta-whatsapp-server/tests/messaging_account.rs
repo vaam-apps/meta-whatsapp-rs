@@ -2,7 +2,8 @@
 //! binding's WABA id as `messaging_account_id`, behind
 //! `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on by default). Every route of
 //! the committed document is walked and every request it sends to
-//! `/{pn}/messages` is read; after a same-tenant attach of a second WABA
+//! `/{pn}/messages` is read (and, since roadmap L29, to `/{pn}/calls`: the
+//! calling actions name the account the same way, design D310); after a same-tenant attach of a second WABA
 //! holding the number the sends name the second; another tenant's attach
 //! of the number stays `409 waba_owned_by_another_tenant`; a body naming
 //! the account itself is refused.
@@ -40,6 +41,18 @@ const SENDING: [&str; 4] = [
     "POST /v1/numbers/{pn}/marketing-messages",
 ];
 
+/// The routes whose request reaches Meta's `/{pn}/calls` (roadmap L29): the
+/// call a business places and the four actions on a user's call. Found by
+/// the same walk; each names the binding's WABA id, the same on every
+/// action of a call.
+const CALLING: [&str; 5] = [
+    "POST /v1/numbers/{pn}/calls",
+    "POST /v1/numbers/{pn}/calls/{call_id}/pre-accept",
+    "POST /v1/numbers/{pn}/calls/{call_id}/accept",
+    "POST /v1/numbers/{pn}/calls/{call_id}/reject",
+    "POST /v1/numbers/{pn}/calls/{call_id}/terminate",
+];
+
 /// The sending routes that name no account: the marketing send. Meta's
 /// pages for `/{pn}/marketing_messages` (`marketing-messages/send-marketing-messages`
 /// and the endpoint's reference) document no `messaging_account_id` for
@@ -48,6 +61,11 @@ const SENDING: [&str; 4] = [
 /// When Meta documents it, the library's `Marketing::send` gains it, the
 /// route names it, and this list is emptied (the walk fails until then).
 const NAMING_NONE: [&str; 1] = ["POST /v1/numbers/{pn}/marketing-messages"];
+
+/// The sending and the calling routes.
+fn every_route() -> BTreeSet<&'static str> {
+    SENDING.into_iter().chain(CALLING).collect()
+}
 
 fn accepted() -> Value {
     json!({
@@ -99,14 +117,17 @@ fn reply(key: &str, body: &Value) -> Call {
     .json(body)
 }
 
-/// The bodies of the requests Meta got on `/{pn}/messages`.
+/// The bodies of the requests Meta got on `/{pn}/messages` (and
+/// `/{pn}/marketing_messages`, and `/{pn}/calls`).
 fn sent(h: &Harness) -> Vec<Value> {
     h.graph
         .requests()
         .into_iter()
         .filter(|r| {
             r.method == Method::POST
-                && (r.path().ends_with("/messages") || r.path().ends_with("/marketing_messages"))
+                && (r.path().ends_with("/messages")
+                    || r.path().ends_with("/marketing_messages")
+                    || r.path().ends_with("/calls"))
         })
         .map(|r| r.json().expect("a JSON body"))
         // A read receipt (`status: read`) posts to the same edge and is
@@ -146,10 +167,23 @@ async fn walk(setting: bool) -> Vec<(String, Vec<Value>)> {
                 .await
                 .unwrap()
         );
-        h.graph.push_json(200, accepted());
-        let _ = h
-            .call(common::sample_call(&operation, &sample, Some(&key)))
+        // The sample call is the number's, as a `calls` event makes it, so
+        // that the calling actions reach Meta.
+        let held = h
+            .webhook(&common::meta::call_connected(
+                WABA,
+                PN,
+                common::SAMPLE_CALL_ID,
+            ))
             .await;
+        assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+        h.graph.push_json(200, accepted());
+        let mut call = common::sample_call(&operation, &sample, Some(&key));
+        if operation.label() == CALLING[0] {
+            // A call placed needs its `Idempotency-Key` (design D213).
+            call = call.header("idempotency-key", "walk-connect");
+        }
+        let _ = h.call(call).await;
         let bodies = sent(&h);
         if !bodies.is_empty() {
             found.push((operation.label(), bodies));
@@ -166,7 +200,7 @@ async fn walk(setting: bool) -> Vec<(String, Vec<Value>)> {
 async fn every_send_route_names_the_bindings_account() {
     let found = walk(true).await;
     let routes: BTreeSet<&str> = found.iter().map(|(label, _)| label.as_str()).collect();
-    assert_eq!(routes, BTreeSet::from(SENDING));
+    assert_eq!(routes, every_route());
     for (label, bodies) in &found {
         for body in bodies {
             if NAMING_NONE.contains(&label.as_str()) {
@@ -184,7 +218,7 @@ async fn every_send_route_names_the_bindings_account() {
 async fn with_the_setting_off_no_send_route_names_an_account() {
     let found = walk(false).await;
     let routes: BTreeSet<&str> = found.iter().map(|(label, _)| label.as_str()).collect();
-    assert_eq!(routes, BTreeSet::from(SENDING));
+    assert_eq!(routes, every_route());
     for (label, bodies) in &found {
         for body in bodies {
             assert_eq!(body.get("messaging_account_id"), None, "{label}: {body}");
@@ -201,7 +235,10 @@ async fn with_the_setting_off_no_send_route_names_an_account() {
 /// the inbox).
 #[test]
 fn only_the_known_files_reach_the_librarys_send() {
-    const SENDING_CALLS: [&str; 6] = [
+    const SENDING_CALLS: [&str; 7] = [
+        // The library's calling actions (roadmap L29), which name the
+        // account through `Calls::naming_the_account`.
+        ".calling(",
         ".messages(",
         "inbox.send(",
         "OtpService::new(",
@@ -225,6 +262,9 @@ fn only_the_known_files_reach_the_librarys_send() {
         "meta-whatsapp-server-core/src/otp.rs",
         // The marketing send (`NAMING_NONE`).
         "meta-whatsapp-server-core/src/marketing.rs",
+        // The calling actions: `Calls::client`, the one place that names
+        // the account (D310).
+        "meta-whatsapp-server-core/src/calls.rs",
     ]);
     let root = std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
     let prefix = format!("{}/", root.display());
@@ -302,6 +342,143 @@ async fn a_body_naming_the_account_is_refused() {
         );
     }
     assert!(h.graph.requests().is_empty(), "nothing was sent");
+}
+
+/// A caller cannot choose a call's account either (roadmap L29): the three
+/// call bodies that exist refuse the key (`reject` and `terminate` take no
+/// body), as `422 invalid_request`, and Meta is asked nothing. Decisive:
+/// accepting a caller-supplied value, or dropping `deny_unknown_fields`
+/// from a body.
+#[tokio::test]
+async fn a_call_body_naming_the_account_is_refused() {
+    let (h, key) = held(settings(true)).await;
+    let held_call = h
+        .webhook(&common::meta::call_connected(
+            WABA,
+            PN,
+            common::SAMPLE_CALL_ID,
+        ))
+        .await;
+    assert_eq!(held_call.status, StatusCode::OK, "{}", held_call.text);
+    let base = format!("/v1/numbers/{PN}/calls");
+    let one = format!("{base}/{}", common::SAMPLE_CALL_ID);
+    for field in ["messaging_account_id", "paid_messaging_account_id"] {
+        let bodies = [
+            (
+                base.clone(),
+                json!({"to": {"phone": TO}, "sdp_offer": common::SAMPLE_SDP}),
+            ),
+            (
+                format!("{one}/pre-accept"),
+                json!({"sdp_answer": common::SAMPLE_SDP}),
+            ),
+            (
+                format!("{one}/accept"),
+                json!({"sdp_answer": common::SAMPLE_SDP}),
+            ),
+        ];
+        for (path, mut body) in bodies {
+            body[field] = json!("999999999999");
+            let refused = h
+                .call(
+                    Call::new(Method::POST, path.clone())
+                        .key(&key)
+                        .header("idempotency-key", "refused-1")
+                        .json(&body),
+                )
+                .await;
+            assert_eq!(
+                (refused.status, refused.code().as_str()),
+                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"),
+                "{field} on {path}: {}",
+                refused.text
+            );
+        }
+    }
+    assert!(h.graph.requests().is_empty(), "nothing was sent");
+}
+
+/// One call, every action: the call a business places, then the actions on
+/// a user's call, all name the binding's WABA id; after the same tenant
+/// attaches a second WABA that holds the number, the next action names the
+/// second (the binding as the store holds it now: nothing of the account is
+/// kept with the call, D311).
+/// Decisive: ignoring the setting, or setting the field in one action only.
+#[tokio::test]
+async fn a_call_names_the_same_account_on_every_action() {
+    let (h, key) = held(settings(true)).await;
+    let admin = h.admin_key().await;
+    let call = common::SAMPLE_CALL_ID;
+    let one = format!("/v1/numbers/{PN}/calls/{call}");
+    let held_call = h
+        .webhook(&common::meta::call_connected(WABA, PN, call))
+        .await;
+    assert_eq!(held_call.status, StatusCode::OK, "{}", held_call.text);
+    let ok = json!({"messaging_product": "whatsapp", "success": true});
+    let post = |path: &str, body: Option<&Value>| {
+        let c = Call::new(Method::POST, path.to_owned()).key(&key);
+        match body {
+            Some(b) => c.json(b),
+            None => c,
+        }
+    };
+    let answer = json!({"sdp_answer": common::SAMPLE_SDP});
+
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "calls": [{"id": "wacid.OUT"}]}),
+    );
+    let placed = h
+        .call(
+            post(
+                &format!("/v1/numbers/{PN}/calls"),
+                Some(&json!({"to": {"phone": TO}, "sdp_offer": common::SAMPLE_SDP})),
+            )
+            .header("idempotency-key", "call-1"),
+        )
+        .await;
+    assert_eq!(placed.status, StatusCode::CREATED, "{}", placed.text);
+    for (path, body) in [
+        (format!("{one}/pre-accept"), Some(&answer)),
+        (format!("{one}/accept"), Some(&answer)),
+        (format!("{one}/reject"), None),
+    ] {
+        h.graph.push_json(200, ok.clone());
+        let reply = h.call(post(&path, body)).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NO_CONTENT,
+            "{path}: {}",
+            reply.text
+        );
+    }
+    let bodies = sent(&h);
+    let actions: Vec<&str> = bodies
+        .iter()
+        .map(|b| b["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["connect", "pre_accept", "accept", "reject"]);
+    for body in &bodies {
+        assert_eq!(body["messaging_account_id"], WABA, "{body}");
+    }
+
+    // The same tenant attaches a second WABA holding the number.
+    h.graph.push_json(200, phone_numbers(&[PN]));
+    h.graph.push_json(200, json!({"success": true}));
+    let attach = h
+        .call(
+            Call::new(Method::POST, format!("/v1/admin/tenants/{A}/wabas"))
+                .key(&admin)
+                .json(&json!({"waba_id": SECOND_WABA, "token": "EAAG-second-token"})),
+        )
+        .await;
+    assert_eq!(attach.status, StatusCode::CREATED, "{}", attach.text);
+    h.graph.push_json(200, ok);
+    let ended = h.call(post(&format!("{one}/terminate"), None)).await;
+    assert_eq!(ended.status, StatusCode::NO_CONTENT, "{}", ended.text);
+    let last = sent(&h).pop().unwrap();
+    assert_eq!(last["action"], "terminate");
+    assert_eq!(last["messaging_account_id"], SECOND_WABA, "{last}");
 }
 
 /// Meta's listing of `numbers` under a WABA.
