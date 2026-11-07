@@ -92,6 +92,7 @@ use crate::uploads::NewUpload;
 /// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
+/// | `set_flow_key` ([`Self::set_flow_key`]; roadmap M5d2) | the WABA's id; the SHA-256 of the key's **public** half: **never the private key** (nor anything derived from it), so no record holds any |
 /// | `submit_business_verification`, `create_partner_solution` ([`Self::submit_business_verification`], [`Self::create_partner_solution`]; roadmap M5j2) | the JSON body, canonical as above; the operator's, so under [`run_admin`]: the admin key's id is the records' scope, not an input |
 /// | `add_pre_verified_number`, `request_pre_verified_code`, `complete_hosted_signup` ([`Self::add_pre_verified_number`], [`Self::request_pre_verified_code`], [`Self::complete_hosted_signup`]; roadmap M5j3) | the JSON body, canonical as above (the hosted claim's `pin` only as present); the pool number's id for the code request; the operator's, as above |
 ///
@@ -488,6 +489,19 @@ impl Fingerprint {
     /// (roadmap M5d; no legacy fingerprint).
     pub fn create_flow(waba: &WabaId, body: &serde_json::Value) -> Self {
         Self::json(Operation::CreateFlow, &[("waba_id", waba.as_str())], body)
+    }
+
+    /// `set_flow_key` in `waba`, with the SHA-256 (hex) of the new key's
+    /// public half (roadmap M5d2; no legacy fingerprint). The private key
+    /// is no input and nothing derived from it but its public half, which
+    /// is public: a repeat with the same key and another key is
+    /// `idempotency_key_reused`, and no record holds secret material.
+    pub fn set_flow_key(waba: &WabaId, public_key_sha256: &str) -> Self {
+        Self::json(
+            Operation::SetFlowKey,
+            &[("waba_id", waba.as_str())],
+            &serde_json::json!({"public_key_sha256": public_key_sha256}),
+        )
     }
 
     /// `submit_business_verification` with the JSON body the request

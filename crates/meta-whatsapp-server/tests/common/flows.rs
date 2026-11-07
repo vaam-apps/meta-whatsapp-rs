@@ -16,7 +16,7 @@ use meta_whatsapp_rs::core::secret::AppSecret;
 use meta_whatsapp_rs::webhooks::axum::body::Body;
 use meta_whatsapp_rs::webhooks::axum::http::Method;
 use meta_whatsapp_server_core::flows_endpoint::{
-    DeploymentKey, FlowCall, FlowHandler, FlowsDeployment, HandlerError,
+    DeploymentKey, FlowCall, FlowHandler, FlowKeys, FlowsDeployment, HandlerError, NoDeploymentKey,
 };
 use serde_json::{Value, json};
 
@@ -27,8 +27,26 @@ pub const KEY_PEM: &str = include_str!(
     "../../../meta-whatsapp-client/src/flows/endpoint/testdata/test_rsa2048_pkcs8.pem"
 );
 
+/// A second TEST-ONLY key (roadmap M5d2), beside the KATs made for it.
+pub const OTHER_KEY_PEM: &str = include_str!("../flows_data/test_rsa2048_other_pkcs8.pem");
+
 /// Meta's requests and the answers Meta's Node.js code seals for them.
 const KAT: &str = include_str!("../flows_data/kat_endpoint.json");
+
+/// The same scenarios, encrypted to [`OTHER_KEY_PEM`]'s public key
+/// (`flows_data/kat_other_key.mjs`).
+const KAT_OTHER: &str = include_str!("../flows_data/kat_other_key.json");
+
+/// [`kat`], encrypted to [`OTHER_KEY_PEM`].
+pub fn kat_other(name: &str) -> Value {
+    let all: Value = serde_json::from_str(KAT_OTHER).unwrap();
+    all[name].clone()
+}
+
+/// [`kat_body`], encrypted to [`OTHER_KEY_PEM`].
+pub fn kat_other_body(name: &str) -> Vec<u8> {
+    serde_json::to_vec(&kat_other(name)["request"]).unwrap()
+}
 
 /// A scenario of `kat_endpoint.json`: `request` (the body Meta's client
 /// posts), `request_plaintext`, `response_plaintext`, `sealed_response`.
@@ -136,6 +154,29 @@ pub fn deployment(handler: Arc<dyn FlowHandler>) -> FlowsDeployment {
         )),
         handler,
     )
+}
+
+/// [`deployment`], with `key` (a PEM) as the deployment's key, or none,
+/// and the deployment's key used for a tenant with none of its own only if
+/// `fallback` (roadmap M5d2).
+pub fn deployment_with(
+    key: Option<&str>,
+    fallback: bool,
+    handler: Arc<dyn FlowHandler>,
+) -> FlowsDeployment {
+    let keys: Arc<dyn FlowKeys> = match key {
+        Some(pem) => Arc::new(DeploymentKey::new(FlowEndpointKey::from_pem(pem).unwrap())),
+        None => Arc::new(NoDeploymentKey),
+    };
+    FlowsDeployment::new(
+        vec![
+            AppSecret::new(APP_SECRET),
+            AppSecret::new(PREVIOUS_APP_SECRET),
+        ],
+        keys,
+        handler,
+    )
+    .deployment_key_fallback(fallback)
 }
 
 /// `POST /webhooks/flows/{waba}` of `body`, signed as Meta signs it with

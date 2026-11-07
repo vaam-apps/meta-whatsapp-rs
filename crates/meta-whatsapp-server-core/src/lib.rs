@@ -88,6 +88,7 @@ pub mod display_names;
 pub mod erasure;
 pub mod error;
 pub mod events;
+pub mod flow_key;
 pub mod flows;
 pub mod flows_endpoint;
 pub mod groups;

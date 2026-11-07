@@ -47,7 +47,9 @@ export async function createFlow(api: WhatsApp, wabaId: string, flow: FlowCreate
 - **Not offered**: connecting a Meta app to a Flow with an endpoint (do it
   in the Flow Builder), a Flow's health status and its assets.
 - **The data endpoint** (`POST /webhooks/flows/{waba_id}` on the public
-  listener) is Meta's, not yours: with `WA_SERVER_FLOWS_PRIVATE_KEY` the
+  listener) is Meta's, not yours: with a Flow key (your own, set with
+  `PUT /v1/wabas/{waba_id}/flow-key`; or the deployment's
+  `WA_SERVER_FLOWS_PRIVATE_KEY`) the
   service decrypts and answers the health check and error notifications;
   the binary answers no data exchange (`503`), so a Flow that needs
   screens from your backend keeps its own `endpoint_uri`.
