@@ -27,6 +27,9 @@
 //!           contacts before roadmap M3b), when a tenant owns it
 //!        c. the outbox row: that tenant, or none (operator-only); the outbox
 //!           checks the routing again, atomically with the insert
+//!        d. a `message_received` of a tenant's number: the bot's replies
+//!           ([`MessageActions`], roadmap M5k slice 2), each answer claimed
+//!           before it is sent
 //!      then the lease marked done (released when the sink failed)
 //!   4. every event recorded, or already: Delivered (200)
 //! ```

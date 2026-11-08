@@ -236,6 +236,14 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   for the events the library gives none, the signed body and their place
   in it, for an hour). A sink error answers Meta 500 and the batch is
   redelivered (OQ #30 applies unchanged).
+- *As built in M5k, slice 2* (D460 to D467, proposals): once a
+  `message_received` event is recorded for the tenant holding its number
+  (also one found recorded already, on a redelivery), the sink hands it to
+  the bot's replies (`inbound::MessageActions`, `Pipeline::with_message_actions`;
+  `bot::BotReplies`), which evaluates the number's rules and sends the
+  answers, each claimed before it is sent. A storage failure before the
+  claim fails the delivery (`500`: Meta redelivers); every other outcome is
+  logged by rule id and the delivery is answered `200`.
 - The service adds `number_connected`, `number_disconnected` and
   `number_reconnect_required` (after a 190 on a merchant's call) events.
   *As built in M2d* (`meta_whatsapp_server_core::number_events`; D80–D85,

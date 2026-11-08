@@ -88,7 +88,7 @@ use time::OffsetDateTime;
 
 use crate::audit::{BotFacts, Subject, bot_audit};
 use crate::authz::{Authorizer, Caller};
-use crate::error::{ErrorCode, ServiceError};
+use crate::error::{ErrorCode, ServiceError, kind_code};
 use crate::inbound::MessageActions;
 use crate::inbox::{Conversations, ReplyChecksByNumber};
 use crate::messages::{MessageType, ReplyMessage, TextObject, names_an_object, reply_message};
@@ -1222,7 +1222,9 @@ impl BotReplies {
             {
                 Ok(CooldownOutcome::Started) => {}
                 Ok(_) => return Ok(Outcome::CoolingDown),
-                Err(error) => return Err(error),
+                // Past the claim nothing is retried: the answer is lost, and
+                // the delivery goes on.
+                Err(error) => return Ok(Outcome::Failed(kind_code(error.kind()))),
             }
         }
         let (text, template, fallback) = match &rule.spec.action {
