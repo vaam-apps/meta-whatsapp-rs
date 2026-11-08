@@ -7661,8 +7661,8 @@ or WABA fails the family's own cross-tenant test).
     `tests/bot_logs.rs` and the capture's `bot` section (no word, text,
     message or person in any line), `live_bot.rs` on Postgres, M5.1 by
     construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`).
-  - **Proposed** (the implementer; the coordinator decides): D460 to D467 in
-    the design's section 10, marked as proposals: the rules' place, literal
+  - **Decided** (the coordinator, 2026-11-07, under the owner's delegation, swappable): D460 to D467 in
+    the design's section 10: the rules' place, literal
     matching, the answer inline with its marker, the limits, the scope and
     audit, who is answered, what stays open, the routes' shape. Pending the
     owner's confirmation before the first release: the scope `bot`, the

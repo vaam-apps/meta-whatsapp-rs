@@ -9,12 +9,17 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use common::bot::*;
 use common::meta::{bytes, sent_now};
 use common::{Call, Harness};
 use meta_whatsapp_rs::core::clock::Clock;
+use meta_whatsapp_rs::core::error::TransportError;
+use meta_whatsapp_rs::core::transport::{HttpRequest, HttpResponse, HttpTransport};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_rs::webhooks::{WebhookPayload, events};
 use meta_whatsapp_server::model::Scope;
@@ -260,10 +265,16 @@ async fn another_tenants_bot_is_not_found() {
         ),
         rules(&rival, PN),
         create(&rival, PN, &any),
+        // A body that is no rule: still `404` (the number first), never `422`.
+        create(&rival, PN, &json!({"trigger": 5})),
+        put(&rival, PN, &json!({"owners": 7})),
         Call::get(rule_path(PN, &id)).key(&rival),
         Call::new(Method::PUT, rule_path(PN, &id))
             .key(&rival)
             .json(&any),
+        Call::new(Method::PUT, rule_path(PN, &id))
+            .key(&rival)
+            .json(&json!({"trigger": 5})),
         Call::new(Method::DELETE, rule_path(PN, &id)).key(&rival),
         // Their own number, the first's rule.
         Call::get(rule_path(OTHER_PN, &id)).key(&rival),
@@ -734,4 +745,229 @@ async fn answers_wait_for_the_numbers_budget() {
         "three answers at one a second took {}",
         w.clock.now() - started
     );
+}
+
+/// Meta's text example with its first message changed by `change`.
+fn edited(wamid: &str, change: impl FnOnce(&mut Value)) -> Vec<u8> {
+    let mut payload = common::meta::text(WABA, PN, wamid);
+    change(&mut payload["entry"][0]["changes"][0]["value"]["messages"][0]);
+    bytes(&payload)
+}
+
+/// What is not a message to answer is never answered, not even by `any`:
+/// a reaction, a deletion, a system message, an unsupported type, a status
+/// webhook (the bot's own answers' echo) and the number's own message.
+/// Decisive: `input_of`'s `_ => None`, the self guard in
+/// `BotReplies::handle`; delete either and a loop or a spurious answer
+/// appears.
+#[tokio::test]
+async fn what_is_not_a_message_to_answer_is_never_answered() {
+    let w = world().await;
+    add(
+        &w,
+        &json!({"trigger": {"type": "any"}, "action": {"type": "reply", "text": "hi"}}),
+    )
+    .await;
+    enable(&w).await;
+    script(&w.h, 8);
+    let strip = |m: &mut Value| {
+        m.as_object_mut().unwrap().remove("text");
+    };
+    deliver(
+        &w.h,
+        &edited("wamid.X1", |m| {
+            strip(m);
+            m["type"] = json!("reaction");
+            m["reaction"] = json!({"message_id": "wamid.OLD", "emoji": "\u{1F44D}"});
+        }),
+    )
+    .await;
+    deliver(
+        &w.h,
+        &edited("wamid.X2", |m| {
+            strip(m);
+            m["type"] = json!("revoke");
+            m["revoke"] = json!({"original_message_id": "wamid.OLD"});
+        }),
+    )
+    .await;
+    deliver(
+        &w.h,
+        &edited("wamid.X3", |m| {
+            strip(m);
+            m["type"] = json!("system");
+            m["system"] = json!({"body": "changed", "type": "user_changed_number", "wa_id": "16505550000"});
+        }),
+    )
+    .await;
+    deliver(
+        &w.h,
+        &edited("wamid.X4", |m| {
+            strip(m);
+            m["type"] = json!("a_type_nobody_knows");
+        }),
+    )
+    .await;
+    // A status webhook (what the bot's own answers raise).
+    let status = bytes(&common::meta::delivered(WABA, PN, "wamid.BOT0"));
+    deliver(&w.h, &status).await;
+    // The number's own message: its display number is the sender.
+    let own = common::meta::text(WABA, PN, "wamid.X5");
+    let display = own["entry"][0]["changes"][0]["value"]["metadata"]["display_phone_number"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let digits: String = display.chars().filter(char::is_ascii_digit).collect();
+    deliver(&w.h, &inbound_from(&digits, "wamid.X5", "hello myself")).await;
+    assert!(
+        w.h.graph.requests().is_empty(),
+        "answered what is not a message: {:?}",
+        bodies(&w.h)
+    );
+    // The control: a text from a customer is answered.
+    deliver(&w.h, &inbound("wamid.X6", "hello")).await;
+    assert_eq!(w.h.graph.requests().len(), 1);
+}
+
+/// A `payload` rule answers a tapped button or row, never a text that
+/// spells the id: a customer cannot forge a tap by typing. Decisive:
+/// `Input::Text` never matches `Trigger::Payload`.
+#[tokio::test]
+async fn a_typed_button_id_is_not_a_tap() {
+    let w = world().await;
+    add(
+        &w,
+        &json!({"trigger": {"type": "payload", "ids": ["MENU_BTN"]},
+                "action": {"type": "reply", "text": "button tapped"}}),
+    )
+    .await;
+    enable(&w).await;
+    script(&w.h, 2);
+    deliver(&w.h, &inbound("wamid.P1", "MENU_BTN")).await;
+    assert!(w.h.graph.requests().is_empty(), "a typed id was a tap");
+    deliver(&w.h, &tapped("wamid.P2", "MENU_BTN")).await;
+    assert_eq!(w.h.graph.requests().len(), 1);
+}
+
+/// A sender is known by its BSUID as by its phone: a ban by BSUID alone
+/// stops a message that carries both, an owner by BSUID alone passes an
+/// `owners_only` rule, and a stranger with neither does not.
+#[tokio::test]
+async fn senders_are_known_by_their_bsuid() {
+    let w = world().await;
+    let mut admin = command("admin", "admin menu");
+    admin["owners_only"] = json!(true);
+    add(&w, &admin).await;
+    add(&w, &command("hello", "hi")).await;
+    script(&w.h, 6);
+    let from_user = |wamid: &str, body: &str, user: &str| {
+        edited(wamid, |m| {
+            m["text"]["body"] = json!(body);
+            m["from_user_id"] = json!(user);
+        })
+    };
+    let on = |owners: &[&str], banned: &[&str]| {
+        put(
+            &w.key,
+            PN,
+            &json!({"enabled": true, "owners": owners, "banned": banned}),
+        )
+    };
+    assert_eq!(w.h.call(on(&[CUSTOMER_BSUID], &[])).await.status, StatusCode::OK);
+    deliver(&w.h, &from_user("wamid.U1", "/admin", CUSTOMER_BSUID)).await;
+    assert_eq!(w.h.graph.requests().len(), 1, "an owner by BSUID");
+    deliver(&w.h, &from_user("wamid.U2", "/admin", "US.99999999999")).await;
+    // The phone of this message is the customer's, not an owner's entry.
+    assert_eq!(w.h.graph.requests().len(), 1, "a stranger ran an owner rule");
+    assert_eq!(w.h.call(on(&[], &[CUSTOMER_BSUID])).await.status, StatusCode::OK);
+    deliver(&w.h, &from_user("wamid.U3", "/hello", CUSTOMER_BSUID)).await;
+    assert_eq!(w.h.graph.requests().len(), 1, "a banned BSUID was answered");
+    deliver(&w.h, &from_user("wamid.U4", "/hello", "US.99999999999")).await;
+    assert_eq!(w.h.graph.requests().len(), 2);
+}
+
+/// The floor under every rule: a sender gets a dozen answers a minute from
+/// a number, however many rules and messages (two bots answering each
+/// other), and the next minute starts again. Decisive:
+/// `BotReplies::within_floor`.
+#[tokio::test]
+async fn a_sender_cannot_drive_unbounded_answers() {
+    let w = world().await;
+    add(
+        &w,
+        &json!({"trigger": {"type": "any"}, "action": {"type": "reply", "text": "hi"}}),
+    )
+    .await;
+    enable(&w).await;
+    script(&w.h, 40);
+    let most = meta_whatsapp_server_core::bot::SENDER_ANSWERS_PER_MINUTE as usize;
+    w.clock.advance(Duration::from_secs(
+        60 - w.clock.now().unix_timestamp().rem_euclid(60) as u64,
+    ));
+    for n in 0..most + 5 {
+        deliver(&w.h, &inbound(&format!("wamid.L{n}"), "ping")).await;
+    }
+    assert_eq!(w.h.graph.requests().len(), most);
+    // Another person is not held back; the next minute starts again.
+    deliver(&w.h, &inbound_from("16505550000", "wamid.L90", "ping")).await;
+    assert_eq!(w.h.graph.requests().len(), most + 1);
+    w.clock.advance(Duration::from_secs(60));
+    deliver(&w.h, &inbound("wamid.L91", "ping")).await;
+    assert_eq!(w.h.graph.requests().len(), most + 2);
+}
+
+/// A transport whose requests never come back.
+struct Hangs {
+    sent: Arc<AtomicUsize>,
+}
+
+impl std::fmt::Debug for Hangs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Hangs").finish()
+    }
+}
+
+#[async_trait]
+impl HttpTransport for Hangs {
+    async fn send(&self, _request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        std::future::pending().await
+    }
+}
+
+/// A send that never returns cannot hold a delivery past the bot's budget:
+/// the delivery is answered `200`, and a redelivery does not send again
+/// (the answer was claimed). Decisive: the `BUDGET` timeout in
+/// `MessageActions::on_message`; delete it and the delivery waits for the
+/// request deadline (and then fails).
+#[tokio::test(start_paused = true)]
+async fn a_hung_send_does_not_hold_the_delivery() {
+    let clock = meta_whatsapp_rs::core::clock::ManualClock::new(time::OffsetDateTime::now_utc());
+    let sent = Arc::new(AtomicUsize::new(0));
+    let hang = Hangs { sent: sent.clone() };
+    let h = Harness::with_clock(
+        common::Stores::memory(),
+        common::test_settings(),
+        clock.clone(),
+        move |_graph| Arc::new(hang),
+    );
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Bot]).await;
+    let w = World { h, key, clock };
+    add(&w, &command("hello", "hi")).await;
+    enable(&w).await;
+    let body = inbound("wamid.H1", "/hello");
+    let started = tokio::time::Instant::now();
+    deliver(&w.h, &body).await;
+    let took = started.elapsed();
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
+    assert!(
+        took >= meta_whatsapp_server_core::bot::BUDGET
+            && took < meta_whatsapp_server_core::bot::BUDGET + Duration::from_secs(5),
+        "the delivery took {took:?}"
+    );
+    // Meta redelivers the same message under another delivery: claimed.
+    deliver(&w.h, &body).await;
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
 }

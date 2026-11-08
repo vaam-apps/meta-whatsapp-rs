@@ -146,6 +146,14 @@ pub const BUDGET: Duration = Duration::from_secs(20);
 /// The most answers one message gets (rules with `continue_after`).
 pub const MAX_REPLIES_PER_MESSAGE: usize = 3;
 
+/// The most answers one sender gets from one number in a minute, whatever
+/// the rules say: a floor under a rule with no cooldown, so that two bots
+/// (a number the service also hosts, another vendor's) answering each
+/// other, or a script, cannot drive the number's budget (past it, the answer
+/// is dropped, counted `sender_limited`). A person does not read twelve
+/// answers a minute.
+pub const SENDER_ANSWERS_PER_MINUTE: u32 = 12;
+
 /// The most words (names, keywords, ids) one trigger lists.
 pub const MAX_WORDS: usize = 20;
 
@@ -985,6 +993,7 @@ enum Outcome {
     Duplicate,
     CoolingDown,
     Limited,
+    SenderLimited,
     WindowClosed,
     ThreadOwned,
     Unusable,
@@ -998,6 +1007,7 @@ impl Outcome {
             Self::Duplicate => "duplicate",
             Self::CoolingDown => "cooling_down",
             Self::Limited => "limited",
+            Self::SenderLimited => "sender_limited",
             Self::WindowClosed => "window_closed",
             Self::ThreadOwned => "thread_owned_elsewhere",
             Self::Unusable => "number_unusable",
@@ -1018,6 +1028,8 @@ pub struct BotReplies {
     names_account: bool,
     pacer: Pacer,
     cooldowns: KvCooldowns,
+    /// The per-sender floor ([`SENDER_ANSWERS_PER_MINUTE`]).
+    floors: JsonStore<u32>,
 }
 
 impl fmt::Debug for BotReplies {
@@ -1079,6 +1091,7 @@ impl BotReplies {
         pacer: Pacer,
     ) -> Self {
         let cooldowns = KvCooldowns::new(records.kv.clone(), records.clock.clone());
+        let floors = JsonStore::new(records.kv.clone(), MARKER_NAMESPACE);
         Self {
             records,
             authz,
@@ -1087,13 +1100,47 @@ impl BotReplies {
             names_account,
             pacer,
             cooldowns,
+            floors,
         }
+    }
+
+    /// Count one answer to `user` on `pn` in the current minute; whether it
+    /// is within [`SENDER_ANSWERS_PER_MINUTE`]. Kept under the markers'
+    /// namespace, in a key no marker's can equal (a marker's hash input
+    /// begins with a digit).
+    async fn within_floor(&self, pn: &PhoneNumberId, user: &str) -> Result<bool, StorageError> {
+        let minute = self.records.clock.now().unix_timestamp() / 60;
+        let mut hasher = Sha256::new();
+        for part in ["floor", pn.as_str(), user, &minute.to_string()] {
+            hasher.update(format!("{}:", part.len()));
+            hasher.update(part);
+            hasher.update(",");
+        }
+        let key = format!("floor-{}", hex::encode(hasher.finalize()));
+        let expiry = Expiry::After(Duration::from_secs(120));
+        for _ in 0..CAS_ATTEMPTS {
+            let written = match self.floors.get(&key).await? {
+                None => self.floors.put_if_absent(&key, &1, expiry).await?,
+                Some((count, _, _)) if count >= SENDER_ANSWERS_PER_MINUTE => return Ok(false),
+                Some((count, version, _)) => {
+                    self.floors
+                        .compare_and_swap(&key, version, Some(&(count + 1)), expiry)
+                        .await?
+                }
+            };
+            if written.is_some() {
+                return Ok(true);
+            }
+        }
+        // Contention that does not clear: not an answer to count on.
+        Ok(false)
     }
 
     #[allow(clippy::too_many_lines)] // one pass over the rules, top to bottom
     async fn handle(&self, tenant: &TenantId, event: &WebhookEvent) -> Result<(), Error> {
         let WebhookEvent::MessageReceived {
             phone_number_id,
+            display_phone_number,
             contact,
             message,
             ..
@@ -1122,6 +1169,16 @@ impl BotReplies {
             return Ok(());
         }
         let ids = sender_ids(message, contact.as_ref());
+        // A message from the number itself is never answered (a loop of
+        // one).
+        let own: String = display_phone_number
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect();
+        if !own.is_empty() && ids.contains(&own) {
+            tracing::debug!(target: LOG_TARGET, "a message from the number itself: no answer");
+            return Ok(());
+        }
         if ids.iter().any(|id| config.banned.contains(id)) {
             tracing::debug!(target: LOG_TARGET, "a banned sender's message: no answer");
             return Ok(());
@@ -1212,8 +1269,13 @@ impl BotReplies {
         if !claimed {
             return Ok(Outcome::Duplicate);
         }
+        let user = ids.first().map_or(contact, String::as_str);
+        match self.within_floor(pn, user).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(Outcome::SenderLimited),
+            Err(error) => return Ok(Outcome::Failed(kind_code(Error::from(error).kind()))),
+        }
         if let Some(seconds) = rule.spec.cooldown_seconds {
-            let user = ids.first().map_or(contact, String::as_str);
             let key = CooldownKey::new(pn, &rule.id, user);
             match self
                 .cooldowns

@@ -14,8 +14,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M5k, slice 2)
 
-- **The bot over HTTP** (roadmap M5k; D460 to D467, the implementer's
-  proposals, awaiting the coordinator's decision): a new scope `bot` and
+- **The bot over HTTP** (roadmap M5k; D460 to D467, decided by the coordinator
+  on 2026-11-07 under the owner's delegation, swappable): a new scope `bot` and
   seven routes under `/v1/numbers/{pn}`: `GET` and `PUT …/bot` (the bot is
   off until switched on; its owners and banned senders) and `GET`, `POST
   …/bot/rules` (an `Idempotency-Key`), `GET`, `PUT`, `DELETE

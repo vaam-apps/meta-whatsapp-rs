@@ -1580,9 +1580,9 @@ marked). A deleted tenant's queued broadcasts stop for want of a token.
 
 ## The bot
 
-One scope, `bot` (roadmap M5k, slice 2; design D460 to D467, the
-implementer's proposals awaiting the coordinator's decision, so the names
-below can change before the first release). The service cannot run a
+One scope, `bot` (roadmap M5k, slice 2; design D460 to D467, decided
+by the coordinator under the owner's delegation, swappable; the names
+below are pending the owner's confirmation before the first release). The service cannot run a
 tenant's code, so the bot over HTTP is **rules a tenant configures** for a
 number, which the service evaluates on that number's inbound messages and
 answers from. A tenant that wants to decide for itself reads the message
