@@ -1614,7 +1614,9 @@ record, and answers inline. Each answer is **claimed before it is sent**
 a second replica and a retry never answer twice; the residual is an answer
 never sent, never a second one. A failed answer is not retried. A rule's
 cooldown (`wa.bot.cooldown`, per number, rule and user) holds the same
-person back silently. The reply goes through the inbox's, with the number's
+person back silently. Under every rule, a person gets at most 12 answers a
+minute from a number, and the number's own messages are never answered
+(bots answering each other are bounded; give a catch-all rule a cooldown). The reply goes through the inbox's, with the number's
 own checks (`WA_SERVER_INBOX_REPLY_CHECKS`): the 24-hour window, the
 thread's owner and the binding epoch, with the token of the number's
 *current* tenant, so **a number moved to another tenant never answers from

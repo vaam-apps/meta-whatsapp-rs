@@ -68,6 +68,12 @@ person back from the same rule, silently. Rules are tried by `priority`
 guard that refuses ends the message too, and `continue_after` lets the
 next rules answer as well (three answers to one message at most).
 
+Whatever the rules say, a person gets at most twelve answers a minute from
+a number (two bots answering each other would otherwise only meet the
+number's rate), and the number's own messages are never answered: give a
+rule that answers anything a `cooldown_seconds`. A ban listed by phone
+does not match a message that carries only a BSUID: list both.
+
 A number has 50 rules by default and a message is answered only if it is
 less than an hour old when the service records it. Both are the
 deployment's settings (`WA_SERVER_BOT_MAX_RULES`,

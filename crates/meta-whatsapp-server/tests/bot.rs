@@ -770,6 +770,10 @@ async fn what_is_not_a_message_to_answer_is_never_answered() {
     .await;
     enable(&w).await;
     script(&w.h, 8);
+    // Open the 24-hour window with a text, which `any` answers: from here
+    // on only the bot's own choice, not the window, keeps it quiet.
+    deliver(&w.h, &inbound("wamid.X0", "hello")).await;
+    assert_eq!(w.h.graph.requests().len(), 1);
     let strip = |m: &mut Value| {
         m.as_object_mut().unwrap().remove("text");
     };
@@ -819,14 +823,15 @@ async fn what_is_not_a_message_to_answer_is_never_answered() {
         .to_owned();
     let digits: String = display.chars().filter(char::is_ascii_digit).collect();
     deliver(&w.h, &inbound_from(&digits, "wamid.X5", "hello myself")).await;
-    assert!(
-        w.h.graph.requests().is_empty(),
+    assert_eq!(
+        w.h.graph.requests().len(),
+        1,
         "answered what is not a message: {:?}",
         bodies(&w.h)
     );
-    // The control: a text from a customer is answered.
+    // The control: a text from the customer is answered.
     deliver(&w.h, &inbound("wamid.X6", "hello")).await;
-    assert_eq!(w.h.graph.requests().len(), 1);
+    assert_eq!(w.h.graph.requests().len(), 2);
 }
 
 /// A `payload` rule answers a tapped button or row, never a text that
