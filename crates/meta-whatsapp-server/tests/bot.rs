@@ -37,13 +37,18 @@ async fn rules_are_created_listed_replaced_and_deleted() {
         json!({"enabled": false, "owners": [], "banned": [], "rules": 0, "max_rules": 50})
     );
 
-    let first = w.h.call(create(&w.key, PN, &command("Help", "hello"))).await;
+    let first =
+        w.h.call(create(&w.key, PN, &command("Help", "hello")))
+            .await;
     assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
     let first = first.json();
     let id = first["id"].as_str().unwrap().to_owned();
     assert!(id.starts_with("br_") && id.len() == 35, "{id}");
     // Normalised: words in lower case, the default prefix, the defaults.
-    assert_eq!(first["trigger"], json!({"type": "command", "names": ["help"], "prefixes": ["/"]}));
+    assert_eq!(
+        first["trigger"],
+        json!({"type": "command", "names": ["help"], "prefixes": ["/"]})
+    );
     assert_eq!(first["action"], json!({"type": "reply", "text": "hello"}));
     assert_eq!(first["enabled"], true);
     assert_eq!(first["priority"], 100);
@@ -68,9 +73,8 @@ async fn rules_are_created_listed_replaced_and_deleted() {
     let read = w.h.call(Call::get(rule_path(PN, &id)).key(&w.key)).await;
     assert_eq!(read.json(), first);
 
-    let replaced = w
-        .h
-        .call(
+    let replaced =
+        w.h.call(
             Call::new(Method::PUT, rule_path(PN, &id))
                 .key(&w.key)
                 .json(&command("help", "hello again")),
@@ -81,10 +85,9 @@ async fn rules_are_created_listed_replaced_and_deleted() {
     assert_eq!(replaced.json()["created_at"], first["created_at"]);
     assert_eq!(replaced.json()["action"]["text"], "hello again");
 
-    let gone = w
-        .h
-        .call(Call::new(Method::DELETE, rule_path(PN, &id)).key(&w.key))
-        .await;
+    let gone =
+        w.h.call(Call::new(Method::DELETE, rule_path(PN, &id)).key(&w.key))
+            .await;
     assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.text);
     for call in [
         Call::get(rule_path(PN, &id)).key(&w.key),
@@ -108,6 +111,7 @@ async fn rules_are_created_listed_replaced_and_deleted() {
 /// Each invalid rule is a `422` naming its field and quoting nothing; the
 /// number's limit of rules is one; a key without the scope is `403`.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one table of refusals, then the limits
 async fn a_rule_is_checked_and_bounded() {
     let w = world_with(BotSettings {
         max_rules: 2,
@@ -115,7 +119,12 @@ async fn a_rule_is_checked_and_bounded() {
     })
     .await;
     let field = |reply: common::Reply| {
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            reply.text
+        );
         assert_eq!(reply.code(), "invalid_request");
         reply.json()["error"]["field"].as_str().map(str::to_owned)
     };
@@ -125,18 +134,39 @@ async fn a_rule_is_checked_and_bounded() {
         body
     };
     for (body, expected) in [
-        (with(&|b| b["trigger"] = json!({"type": "regex", "pattern": "(a+)+$"})), "body"),
+        (
+            with(&|b| b["trigger"] = json!({"type": "regex", "pattern": "(a+)+$"})),
+            "body",
+        ),
         (with(&|b| b["stray"] = json!(1)), "body"),
-        (with(&|b| b["trigger"]["names"] = json!([])), "trigger.names"),
-        (with(&|b| b["trigger"]["names"] = json!(["a b"])), "trigger.names"),
-        (with(&|b| b["trigger"]["prefixes"] = json!(["a"])), "trigger.prefixes"),
-        (with(&|b| b["action"]["text"] = json!("x".repeat(4097))), "action.text"),
+        (
+            with(&|b| b["trigger"]["names"] = json!([])),
+            "trigger.names",
+        ),
+        (
+            with(&|b| b["trigger"]["names"] = json!(["a b"])),
+            "trigger.names",
+        ),
+        (
+            with(&|b| b["trigger"]["prefixes"] = json!(["a"])),
+            "trigger.prefixes",
+        ),
+        (
+            with(&|b| b["action"]["text"] = json!("x".repeat(4097))),
+            "action.text",
+        ),
         (with(&|b| b["action"]["text"] = json!(" ")), "action.text"),
-        (with(&|b| b["cooldown_seconds"] = json!(0)), "cooldown_seconds"),
+        (
+            with(&|b| b["cooldown_seconds"] = json!(0)),
+            "cooldown_seconds",
+        ),
         (with(&|b| b["priority"] = json!(10_001)), "priority"),
         (with(&|b| b["name"] = json!("")), "name"),
         (
-            with(&|b| b["action"] = json!({"type": "template", "template": {"language": {"code": "en_US"}}})),
+            with(&|b| {
+                b["action"] =
+                    json!({"type": "template", "template": {"language": {"code": "en_US"}}});
+            }),
             "action.template",
         ),
         (
@@ -170,8 +200,15 @@ async fn a_rule_is_checked_and_bounded() {
     assert_eq!(lists.json()["owners"], json!(["16505551234"]));
     assert_eq!(lists.json()["banned"], json!(["US.1"]));
     assert_eq!(
-        field(w.h.call(put(&w.key, PN, &json!({"enabled": true, "owners": ["a b"]}))).await)
-            .as_deref(),
+        field(
+            w.h.call(put(
+                &w.key,
+                PN,
+                &json!({"enabled": true, "owners": ["a b"]})
+            ))
+            .await
+        )
+        .as_deref(),
         Some("owners")
     );
     assert_eq!(
@@ -179,7 +216,9 @@ async fn a_rule_is_checked_and_bounded() {
         Some("body")
     );
     // The scope: a key allowed to send is not thereby allowed a bot.
-    let sender = w.h.tenant_key(TENANT, &[Scope::Send, Scope::Broadcasts]).await;
+    let sender =
+        w.h.tenant_key(TENANT, &[Scope::Send, Scope::Broadcasts])
+            .await;
     let refused = w.h.call(rules(&sender, PN)).await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN);
     assert_eq!(refused.code(), "forbidden");
@@ -214,15 +253,23 @@ async fn another_tenants_bot_is_not_found() {
     let any = command("help", "stolen");
     let calls = [
         settings(&rival, PN),
-        put(&rival, PN, &json!({"enabled": true, "banned": ["16505551234"]})),
+        put(
+            &rival,
+            PN,
+            &json!({"enabled": true, "banned": ["16505551234"]}),
+        ),
         rules(&rival, PN),
         create(&rival, PN, &any),
         Call::get(rule_path(PN, &id)).key(&rival),
-        Call::new(Method::PUT, rule_path(PN, &id)).key(&rival).json(&any),
+        Call::new(Method::PUT, rule_path(PN, &id))
+            .key(&rival)
+            .json(&any),
         Call::new(Method::DELETE, rule_path(PN, &id)).key(&rival),
         // Their own number, the first's rule.
         Call::get(rule_path(OTHER_PN, &id)).key(&rival),
-        Call::new(Method::PUT, rule_path(OTHER_PN, &id)).key(&rival).json(&any),
+        Call::new(Method::PUT, rule_path(OTHER_PN, &id))
+            .key(&rival)
+            .json(&any),
         Call::new(Method::DELETE, rule_path(OTHER_PN, &id)).key(&rival),
     ];
     for call in calls {
@@ -276,15 +323,19 @@ async fn a_matching_message_is_answered_once_under_redelivery() {
         request.url
     );
     assert_eq!(
-        request.headers.get("authorization").and_then(|v| v.to_str().ok()),
+        request
+            .headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok()),
         Some(format!("Bearer {TOKEN}").as_str())
     );
     // The reply is in the inbox, recorded `accepted`.
-    let history = w
-        .h
-        .call(
-            Call::get(format!("/v1/numbers/{PN}/conversations/{CUSTOMER}/messages"))
-                .key(&w.h.tenant_key(TENANT, &[Scope::Inbox]).await),
+    let history =
+        w.h.call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/conversations/{CUSTOMER}/messages"
+            ))
+            .key(&w.h.tenant_key(TENANT, &[Scope::Inbox]).await),
         )
         .await
         .json();
@@ -299,7 +350,12 @@ async fn a_matching_message_is_answered_once_under_redelivery() {
     let second = inbound("wamid.IN2", "/hello");
     w.h.outbox.fail_next(1);
     let failed = w.h.webhook(&second).await;
-    assert_eq!(failed.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", failed.text);
+    assert_eq!(
+        failed.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        failed.text
+    );
     assert_eq!(w.h.graph.requests().len(), 1, "the bot runs once recorded");
     deliver(&w.h, &second).await;
     deliver(&w.h, &second).await;
@@ -356,7 +412,7 @@ async fn a_cooldown_is_respected_under_a_fake_clock() {
 #[tokio::test]
 async fn outside_the_window_there_is_no_free_form_answer() {
     let w = world_with(BotSettings {
-        max_message_age: Duration::from_secs(72 * 3600),
+        max_message_age: Duration::from_hours(72),
         ..BotSettings::default()
     })
     .await;
@@ -373,9 +429,12 @@ async fn outside_the_window_there_is_no_free_form_answer() {
     enable(&w).await;
     script(&w.h, 3);
     // 25 hours after the customer wrote: the window is closed.
-    w.clock.advance(Duration::from_secs(25 * 3600));
+    w.clock.advance(Duration::from_hours(25));
     deliver(&w.h, &inbound("wamid.W1", "/hello")).await;
-    assert!(w.h.graph.requests().is_empty(), "a free-form answer went out");
+    assert!(
+        w.h.graph.requests().is_empty(),
+        "a free-form answer went out"
+    );
     deliver(&w.h, &inbound("wamid.W2", "/hi")).await;
     let sent = bodies(&w.h);
     assert_eq!(sent.len(), 1, "{sent:?}");
@@ -395,7 +454,7 @@ async fn a_backlog_is_not_answered() {
     let w = world().await;
     add(&w, &command("hello", "hi")).await;
     enable(&w).await;
-    w.clock.advance(Duration::from_secs(2 * 3600));
+    w.clock.advance(Duration::from_hours(2));
     deliver(&w.h, &inbound("wamid.O1", "/hello")).await;
     assert!(w.h.graph.requests().is_empty());
 }
@@ -421,14 +480,19 @@ async fn a_rebound_number_never_answers_from_the_first_tenants_rules() {
     let waba = meta_whatsapp_rs::core::ids::WabaId::new(WABA).unwrap();
     let number = meta_whatsapp_rs::core::ids::PhoneNumberId::new(PN).unwrap();
     assert!(w.h.store.unbind_waba(&waba).await.unwrap());
-    w.h.store.bind_waba(&second, &waba, &[number]).await.unwrap();
+    w.h.store
+        .bind_waba(&second, &waba, &[number])
+        .await
+        .unwrap();
     w.h.vault
         .store(
             &meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken::new(
                 waba.clone(),
                 meta_whatsapp_rs::core::secret::AccessToken::new("EAAG-second"),
             )
-            .phone_number_ids(vec![meta_whatsapp_rs::core::ids::PhoneNumberId::new(PN).unwrap()]),
+            .phone_number_ids(vec![
+                meta_whatsapp_rs::core::ids::PhoneNumberId::new(PN).unwrap(),
+            ]),
         )
         .await
         .unwrap();
@@ -448,21 +512,23 @@ async fn a_rebound_number_never_answers_from_the_first_tenants_rules() {
     let seen = w.h.call(settings(&rival, PN)).await.json();
     assert_eq!(seen["enabled"], false, "{seen}");
     assert_eq!(seen["rules"], 0, "{seen}");
-    assert_eq!(w.h.call(settings(&w.key, PN)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        w.h.call(settings(&w.key, PN)).await.status,
+        StatusCode::NOT_FOUND
+    );
     // Every request that went out used the first tenant's token, once.
-    let tokens: Vec<_> = w
-        .h
-        .graph
-        .requests()
-        .iter()
-        .map(|r| {
-            r.headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .to_owned()
-        })
-        .collect();
+    let tokens: Vec<_> =
+        w.h.graph
+            .requests()
+            .iter()
+            .map(|r| {
+                r.headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect();
     assert!(tokens.iter().all(|t| t.contains(TOKEN)), "{tokens:?}");
 }
 
@@ -483,28 +549,51 @@ async fn the_switch_the_lists_and_the_guards_decide_who_is_answered() {
     assert!(w.h.graph.requests().is_empty());
     // On: answered; not an owner: the owners' rule is not.
     let on = |owners: &[&str], banned: &[&str]| {
-        put(&w.key, PN, &json!({"enabled": true, "owners": owners, "banned": banned}))
+        put(
+            &w.key,
+            PN,
+            &json!({"enabled": true, "owners": owners, "banned": banned}),
+        )
     };
     assert_eq!(w.h.call(on(&[], &[])).await.status, StatusCode::OK);
     deliver(&w.h, &inbound("wamid.S2", "/hello")).await;
     assert_eq!(w.h.graph.requests().len(), 1);
     deliver(&w.h, &inbound("wamid.S3", "/admin")).await;
-    assert_eq!(w.h.graph.requests().len(), 1, "a non-owner ran an owner rule");
+    assert_eq!(
+        w.h.graph.requests().len(),
+        1,
+        "a non-owner ran an owner rule"
+    );
     // An owner, named with a `+`.
-    assert_eq!(w.h.call(on(&["+16505551234"], &[])).await.status, StatusCode::OK);
+    assert_eq!(
+        w.h.call(on(&["+16505551234"], &[])).await.status,
+        StatusCode::OK
+    );
     deliver(&w.h, &inbound("wamid.S4", "/admin")).await;
     assert_eq!(w.h.graph.requests().len(), 2);
     // Banned by phone: nothing, not even the plain rule.
-    assert_eq!(w.h.call(on(&[], &["16505551234"])).await.status, StatusCode::OK);
+    assert_eq!(
+        w.h.call(on(&[], &["16505551234"])).await.status,
+        StatusCode::OK
+    );
     deliver(&w.h, &inbound("wamid.S5", "/hello")).await;
-    assert_eq!(w.h.graph.requests().len(), 2, "a banned sender was answered");
+    assert_eq!(
+        w.h.graph.requests().len(),
+        2,
+        "a banned sender was answered"
+    );
     // A group message is not a private chat's.
     assert_eq!(w.h.call(on(&[], &[])).await.status, StatusCode::OK);
     let mut group = common::meta::text(WABA, PN, "wamid.S6");
     group["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!("/hello");
-    group["entry"][0]["changes"][0]["value"]["messages"][0]["group_id"] = json!("120363000000000000@g.us");
+    group["entry"][0]["changes"][0]["value"]["messages"][0]["group_id"] =
+        json!("120363000000000000@g.us");
     deliver(&w.h, &bytes(&group)).await;
-    assert_eq!(w.h.graph.requests().len(), 2, "a private rule answered a group");
+    assert_eq!(
+        w.h.graph.requests().len(),
+        2,
+        "a private rule answered a group"
+    );
 }
 
 /// Keywords, a tapped button, `any` and the generated help, end to end;
@@ -517,23 +606,32 @@ async fn rules_are_tried_in_order_and_the_first_answer_decides() {
     menu["description"] = json!("Show the menu");
     menu["priority"] = json!(1);
     add(&w, &menu).await;
-    add(&w, &json!({
-        "trigger": {"type": "command", "names": ["help"]},
-        "action": {"type": "help"},
-        "priority": 2,
-    }))
+    add(
+        &w,
+        &json!({
+            "trigger": {"type": "command", "names": ["help"]},
+            "action": {"type": "help"},
+            "priority": 2,
+        }),
+    )
     .await;
-    add(&w, &json!({
-        "trigger": {"type": "keyword", "words": ["Hours"], "mode": "exact"},
-        "action": {"type": "reply", "text": "9 to 5"},
-        "priority": 3,
-    }))
+    add(
+        &w,
+        &json!({
+            "trigger": {"type": "keyword", "words": ["Hours"], "mode": "exact"},
+            "action": {"type": "reply", "text": "9 to 5"},
+            "priority": 3,
+        }),
+    )
     .await;
-    add(&w, &json!({
-        "trigger": {"type": "payload", "ids": ["MENU_BTN"]},
-        "action": {"type": "reply", "text": "button tapped"},
-        "priority": 4,
-    }))
+    add(
+        &w,
+        &json!({
+            "trigger": {"type": "payload", "ids": ["MENU_BTN"]},
+            "action": {"type": "reply", "text": "button tapped"},
+            "priority": 4,
+        }),
+    )
     .await;
     let mut greet = json!({
         "trigger": {"type": "keyword", "words": ["hello"], "mode": "contains"},
@@ -543,11 +641,14 @@ async fn rules_are_tried_in_order_and_the_first_answer_decides() {
     });
     greet["enabled"] = json!(true);
     add(&w, &greet).await;
-    add(&w, &json!({
-        "trigger": {"type": "any"},
-        "action": {"type": "reply", "text": "fallback"},
-        "priority": 6,
-    }))
+    add(
+        &w,
+        &json!({
+            "trigger": {"type": "any"},
+            "action": {"type": "reply", "text": "fallback"},
+            "priority": 6,
+        }),
+    )
     .await;
     enable(&w).await;
     script(&w.h, 12);

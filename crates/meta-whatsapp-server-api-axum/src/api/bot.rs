@@ -521,7 +521,12 @@ pub(crate) async fn create_bot_rule(
         Err(error) => return error.into_response(),
     };
     // The number is the caller's tenant's before the body is read.
-    let admitted = async { operations(&state, &caller)?.admits(&pn).await.map_err(ApiError::from) };
+    let admitted = async {
+        operations(&state, &caller)?
+            .admits(&pn)
+            .await
+            .map_err(ApiError::from)
+    };
     if let Err(error) = admitted.await {
         return error.into_response();
     }
@@ -658,7 +663,10 @@ mod tests {
         let Trigger::Command { names, prefixes } = &spec.trigger else {
             panic!("a command");
         };
-        assert_eq!((names.as_slice(), prefixes.as_slice()), (&["help".to_owned()][..], &["/".to_owned()][..]));
+        assert_eq!(
+            (names.as_slice(), prefixes.as_slice()),
+            (&["help".to_owned()][..], &["/".to_owned()][..])
+        );
         for bad in [
             json!({"trigger": {"type": "regex", "pattern": ".*"}, "action": {"type": "help"}}),
             json!({"trigger": {"type": "any"}, "action": {"type": "reply", "text": "x"}, "to": "x"}),

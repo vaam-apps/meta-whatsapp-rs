@@ -42,18 +42,16 @@ async fn a_bot_is_audited_by_id_and_logs_nobody() {
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
     let id = created.json()["id"].as_str().unwrap().to_owned();
     rule["action"]["text"] = json!(format!("{REPLY} again"));
-    let replaced = w
-        .h
-        .call(
+    let replaced =
+        w.h.call(
             Call::new(Method::PUT, rule_path(PN, &id))
                 .key(&w.key)
                 .json(&rule),
         )
         .await;
     assert_eq!(replaced.status, StatusCode::OK, "{}", replaced.text);
-    let on = w
-        .h
-        .call(put(
+    let on =
+        w.h.call(put(
             &w.key,
             PN,
             &json!({"enabled": true, "owners": [OWNER], "banned": [BANNED]}),
@@ -71,8 +69,16 @@ async fn a_bot_is_audited_by_id_and_logs_nobody() {
                          "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     script(&w.h, 2);
-    deliver(&w.h, &inbound("wamid.LOG1", &format!("one {TRIGGER} {HEARD}"))).await;
-    deliver(&w.h, &inbound("wamid.LOG2", &format!("two {TRIGGER} {HEARD}"))).await;
+    deliver(
+        &w.h,
+        &inbound("wamid.LOG1", &format!("one {TRIGGER} {HEARD}")),
+    )
+    .await;
+    deliver(
+        &w.h,
+        &inbound("wamid.LOG2", &format!("two {TRIGGER} {HEARD}")),
+    )
+    .await;
     deliver(
         &w.h,
         &inbound_from(BANNED, "wamid.LOG3", &format!("three {TRIGGER} {HEARD}")),
@@ -85,10 +91,9 @@ async fn a_bot_is_audited_by_id_and_logs_nobody() {
     .await;
     assert_eq!(w.h.graph.requests().len(), 2, "one refused, one sent");
 
-    let gone = w
-        .h
-        .call(Call::new(Method::DELETE, rule_path(PN, &id)).key(&w.key))
-        .await;
+    let gone =
+        w.h.call(Call::new(Method::DELETE, rule_path(PN, &id)).key(&w.key))
+            .await;
     assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.text);
     // A refused creation is no event.
     let refused = w.h.call(create(&w.key, PN, &json!({"stray": 1}))).await;
@@ -138,8 +143,14 @@ async fn a_bot_is_audited_by_id_and_logs_nobody() {
         .filter(|e| e["fields"]["outcome"].is_string())
         .map(|e| {
             (
-                e["fields"]["rule_id"].as_str().unwrap_or_default().to_owned(),
-                e["fields"]["outcome"].as_str().unwrap_or_default().to_owned(),
+                e["fields"]["rule_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                e["fields"]["outcome"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
             )
         })
         .collect();

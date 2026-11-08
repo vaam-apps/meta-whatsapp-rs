@@ -1497,7 +1497,8 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
         ) => serde_json::json!({"user": {"phone": SAMPLE_TO}}),
         // Roadmap M5k, slice 2: the bot's switch, and a rule.
         ("PUT", "/v1/numbers/{pn}/bot") => serde_json::json!({"enabled": false}),
-        ("POST", "/v1/numbers/{pn}/bot/rules") | ("PUT", "/v1/numbers/{pn}/bot/rules/{rule_id}") => {
+        ("POST", "/v1/numbers/{pn}/bot/rules")
+        | ("PUT", "/v1/numbers/{pn}/bot/rules/{rule_id}") => {
             serde_json::json!({
                 "trigger": {"type": "command", "names": ["help"]},
                 "action": {"type": "reply", "text": "hello"},

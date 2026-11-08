@@ -90,10 +90,10 @@ use crate::backend::Backend;
 use crate::calls::CallRecords;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
 use crate::groups::GroupRecords;
+use crate::model::TenantId;
 use crate::notify::{EventNotifier, Wakeup};
 use crate::number_events::NumberEvents;
 use crate::observe::Observer;
-use crate::model::TenantId;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
 

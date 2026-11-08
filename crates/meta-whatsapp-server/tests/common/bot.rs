@@ -146,10 +146,7 @@ pub fn command(name: &str, reply: &str) -> Value {
 
 /// Turn the bot of `pn` on.
 pub async fn enable(w: &World) {
-    let reply = w
-        .h
-        .call(put(&w.key, PN, &json!({"enabled": true})))
-        .await;
+    let reply = w.h.call(put(&w.key, PN, &json!({"enabled": true}))).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
 }
 

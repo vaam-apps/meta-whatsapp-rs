@@ -74,9 +74,7 @@ use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::core::recipient::Recipient;
-use meta_whatsapp_rs::core::store::{
-    ConversationStore, Expiry, JsonStore, KvStore, StoreKey,
-};
+use meta_whatsapp_rs::core::store::{ConversationStore, Expiry, JsonStore, KvStore, StoreKey};
 use meta_whatsapp_rs::inbox::conversation_key;
 use meta_whatsapp_rs::webhooks::WebhookEvent;
 use meta_whatsapp_rs::webhooks::fields::common::Contact;
@@ -129,11 +127,11 @@ pub const SETTINGS_UPDATED: &str = "bot_settings_updated";
 /// The default of [`BotSettings::max_message_age`]: a message older than
 /// this when the pipeline records it is not answered, for an outage's
 /// backlog, or a replay, is not a conversation (D462).
-pub const MAX_MESSAGE_AGE: Duration = Duration::from_secs(60 * 60);
+pub const MAX_MESSAGE_AGE: Duration = Duration::from_hours(1);
 
 /// How long an answer's marker lives: past Meta's seven days of webhook
 /// retries (`webhooks/create-webhook-endpoint`).
-pub const MARKER_TTL: Duration = Duration::from_secs(8 * 24 * 60 * 60);
+pub const MARKER_TTL: Duration = Duration::from_hours(8 * 24);
 
 /// The longest an answer waits for a slot of the number's pacer: past it,
 /// the answer is dropped (counted `limited`) rather than hold a webhook
@@ -322,7 +320,9 @@ fn word(value: &str, field: &str, lower: bool) -> Result<String, ServiceError> {
     if chars == 0
         || chars > MAX_WORD_CHARS
         || word.chars().any(char::is_control)
-        || (field != "trigger.words" && field != "trigger.ids" && word.chars().any(char::is_whitespace))
+        || (field != "trigger.words"
+            && field != "trigger.ids"
+            && word.chars().any(char::is_whitespace))
     {
         return Err(ServiceError::invalid(field));
     }
@@ -333,11 +333,7 @@ fn word(value: &str, field: &str, lower: bool) -> Result<String, ServiceError> {
     })
 }
 
-fn words(
-    values: &[String],
-    field: &str,
-    lower: bool,
-) -> Result<Vec<String>, ServiceError> {
+fn words(values: &[String], field: &str, lower: bool) -> Result<Vec<String>, ServiceError> {
     if values.is_empty() || values.len() > MAX_WORDS {
         return Err(ServiceError::invalid(field));
     }
@@ -465,7 +461,10 @@ impl RuleSpec {
             }
             Action::Template { template } => check_template(template, "action.template")?,
             Action::Help => {
-                if !matches!(self.trigger, Trigger::Command { .. } | Trigger::Keyword { .. }) {
+                if !matches!(
+                    self.trigger,
+                    Trigger::Command { .. } | Trigger::Keyword { .. }
+                ) {
                     // Help answers a request for it, not every message.
                     return Err(ServiceError::invalid("action"));
                 }
@@ -597,8 +596,9 @@ impl Config {
     }
 
     fn sort(&mut self) {
-        self.rules
-            .sort_by(|a, b| (a.spec.priority, a.created_ms, &a.id).cmp(&(b.spec.priority, b.created_ms, &b.id)));
+        self.rules.sort_by(|a, b| {
+            (a.spec.priority, a.created_ms, &a.id).cmp(&(b.spec.priority, b.created_ms, &b.id))
+        });
     }
 }
 
@@ -1149,22 +1149,31 @@ impl BotReplies {
                 break;
             }
             let outcome = self
-                .answer(tenant, &config, rule, phone_number_id, message.id.as_str(), &key.contact, &ids)
+                .answer(
+                    tenant,
+                    &config,
+                    rule,
+                    phone_number_id,
+                    message.id.as_str(),
+                    &key.contact,
+                    &ids,
+                )
                 .await?;
-            match outcome {
-                Outcome::Failed(code) => tracing::warn!(
+            if let Outcome::Failed(code) = outcome {
+                tracing::warn!(
                     target: LOG_TARGET,
                     rule_id = rule.id,
                     outcome = outcome.as_str(),
                     code,
                     "a bot answer failed"
-                ),
-                _ => tracing::info!(
+                );
+            } else {
+                tracing::info!(
                     target: LOG_TARGET,
                     rule_id = rule.id,
                     outcome = outcome.as_str(),
                     "a bot rule fired"
-                ),
+                );
             }
             if outcome != Outcome::Sent && outcome != Outcome::Duplicate {
                 break;
@@ -1291,15 +1300,14 @@ impl BotReplies {
 #[async_trait]
 impl MessageActions for BotReplies {
     async fn on_message(&self, tenant: &TenantId, event: &WebhookEvent) -> Result<(), Error> {
-        match tokio::time::timeout(BUDGET, self.handle(tenant, event)).await {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "a bot took too long: the delivery goes on (an answer in flight is never repeated)"
-                );
-                Ok(())
-            }
+        if let Ok(result) = tokio::time::timeout(BUDGET, self.handle(tenant, event)).await {
+            result
+        } else {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "a bot took too long: the delivery goes on (an answer in flight is never repeated)"
+            );
+            Ok(())
         }
     }
 }
@@ -1433,7 +1441,10 @@ mod tests {
             change(&mut rule);
             rule.checked().unwrap_err().field().map(str::to_owned)
         };
-        assert_eq!(field(&|r| r.name = Some("  ".into())).as_deref(), Some("name"));
+        assert_eq!(
+            field(&|r| r.name = Some("  ".into())).as_deref(),
+            Some("name")
+        );
         assert_eq!(
             field(&|r| r.priority = MAX_PRIORITY + 1).as_deref(),
             Some("priority")
@@ -1534,7 +1545,10 @@ mod tests {
     #[test]
     fn the_lists_are_normalised() {
         let list = |entries: &[&str]| {
-            identities(&entries.iter().map(|e| (*e).to_owned()).collect::<Vec<_>>(), "owners")
+            identities(
+                &entries.iter().map(|e| (*e).to_owned()).collect::<Vec<_>>(),
+                "owners",
+            )
         };
         assert_eq!(
             list(&["+16505551234", "16505551234", "US.1"]).unwrap(),
@@ -1556,7 +1570,10 @@ mod tests {
         assert_ne!(a, marker_key(&pn("2"), "m", "r"));
         assert_ne!(a, marker_key(&pn("1"), "n", "r"));
         assert_ne!(a, marker_key(&pn("1"), "m", "s"));
-        assert_ne!(marker_key(&pn("1"), "ab", "c"), marker_key(&pn("1"), "a", "bc"));
+        assert_ne!(
+            marker_key(&pn("1"), "ab", "c"),
+            marker_key(&pn("1"), "a", "bc")
+        );
         assert_eq!(a.namespace(), MARKER_NAMESPACE);
     }
 }

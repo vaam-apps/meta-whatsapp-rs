@@ -80,7 +80,11 @@ async fn live_postgres_a_bot_answers_once_across_replicas() {
         .next()
         .unwrap();
     let tenant = meta_whatsapp_server::model::TenantId::parse(TENANT).unwrap();
-    b.grant.bot_replies().on_message(&tenant, &event).await.unwrap();
+    b.grant
+        .bot_replies()
+        .on_message(&tenant, &event)
+        .await
+        .unwrap();
     assert_eq!(b.graph.requests().len(), 0, "answered by both replicas");
 
     // The cooldown A started holds for B; after it, B answers.
@@ -97,7 +101,9 @@ async fn live_postgres_a_bot_answers_once_across_replicas() {
         .await;
     let rival = a.tenant_key(OTHER_TENANT, &[Scope::Bot]).await;
     assert_eq!(
-        b.call(Call::get(rule_path(PN, &id)).key(&rival)).await.status,
+        b.call(Call::get(rule_path(PN, &id)).key(&rival))
+            .await
+            .status,
         StatusCode::NOT_FOUND
     );
     assert_eq!(

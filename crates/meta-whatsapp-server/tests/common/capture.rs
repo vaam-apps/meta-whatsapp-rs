@@ -2715,8 +2715,10 @@ async fn bot(h: &Harness, admin: &str) -> Vec<String> {
         .call(
             Call::new(Method::PUT, format!("/v1/numbers/{PN}/bot"))
                 .key(&key)
-                .json(&json!({"enabled": true, "owners": [format!("+{BOT_OWNER}")],
-                              "banned": [BOT_BANNED]})),
+                .json(
+                    &json!({"enabled": true, "owners": [format!("+{BOT_OWNER}")],
+                              "banned": [BOT_BANNED]}),
+                ),
         )
         .await;
     assert_eq!(on.status.as_u16(), 200, "{}", on.text);
