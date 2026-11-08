@@ -1425,6 +1425,7 @@ const FLOW_JSON_TEXT: &str = "CAPTURE-FLOW-JSON-TEXT-Heading-Hello-World";
 #[allow(clippy::too_many_lines)] // eleven routes and the endpoint, each with its scripted answer
 async fn flows(h: &Harness, admin: &str) -> Vec<String> {
     const WABA: &str = "102290129340398";
+    const FLOW_NUMBER: &str = "1972385232742141";
     const FLOW: &str = "1234567890123456";
     let minted = h
         .call(
@@ -1535,7 +1536,6 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
 
     // A number's business public key (roadmap M5d2): refused as text,
     // refused as a private key, set, read.
-    const FLOW_NUMBER: &str = "1972385232742141";
     let public = super::flows::public_key_pem(super::flows::OTHER_KEY_PEM);
     let number_key_path = format!("/v1/numbers/{FLOW_NUMBER}/business-public-key");
     for refused in [BUSINESS_KEY_REFUSED, super::flows::KEY_PEM] {
