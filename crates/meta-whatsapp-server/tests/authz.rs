@@ -41,6 +41,10 @@ async fn two_tenants() -> Harness {
         // sweeps below reach it as every other owned route
         // (`tests/calls_m5e2.rs` has it off).
         call_sip_credentials: true,
+        // The same for setting a number's webhook override (roadmap M5c6,
+        // D441), whose gate is before the vault.
+        number_webhook_override: true,
+        webhooks_out: Some(common::capture::webhooks_out_for_an_address()),
         ..common::test_settings()
     });
     h.tenant(A).await;
@@ -116,6 +120,11 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}/compliance-info"),
         (Method::PUT, "/v1/numbers/{pn}/compliance-info"),
         (Method::GET, "/v1/numbers/{pn}/health-status"),
+        // Roadmap M5c6.
+        (Method::GET, "/v1/wabas/{waba_id}/health-status"),
+        (Method::GET, "/v1/numbers/{pn}/webhook-override"),
+        (Method::PUT, "/v1/numbers/{pn}/webhook-override"),
+        (Method::DELETE, "/v1/numbers/{pn}/webhook-override"),
         (Method::GET, "/v1/numbers/{pn}/conversational-components"),
         (Method::PUT, "/v1/numbers/{pn}/conversational-components"),
         (Method::DELETE, "/v1/numbers/{pn}/contact-book/{bsuid}"),

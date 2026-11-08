@@ -471,6 +471,40 @@ pub(crate) async fn update_profile(
     Ok(Json(ProfileView::from(profile)))
 }
 
+/// `GET /v1/wabas/{waba_id}/health-status`: whether messages can be sent
+/// through the tenant's WABA (roadmap M5c6, design D440).
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/health-status",
+    tag = "numbers",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The health status: the overall `can_send_message` and the nodes the tenant owns or already holds (its WABA, its numbers, its templates, the business portfolio, the app). Another tenant's entity ids are not in it", body = super::number_settings::WabaHealthStatusView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant (another tenant's included: nothing was asked of Meta)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_waba_health_status(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+) -> Result<Json<super::number_settings::WabaHealthStatusView>, ApiError> {
+    let status = Waba::new(state.authz(), owned.capability(&state))?
+        .observed_by(state.metrics())
+        .health_status(&caller)
+        .await?;
+    Ok(Json(status.into()))
+}
+
 /// `DELETE /v1/wabas/{waba_id}`: disconnect. Unsubscribes the app from the
 /// WABA with its token; only then deletes the token and the bindings. When
 /// Meta refuses or fails, nothing is deleted.

@@ -37,6 +37,7 @@
 //! | `WA_SERVER_BROADCAST_RATE`, `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`, `WA_SERVER_BROADCAST_WORKERS` | 10, 1000, 3, 2 | broadcasts (roadmap M5k, design D421, D425): messages a second for each number, shared by every replica; the most people one broadcast may be for; the most broadcasts a tenant may have queued or running at once; the broadcasts a replica sends at once; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow: the India compliance information declaration (`PUT /v1/numbers/{pn}/compliance-info`; roadmap M5c3, design D192), and the operator the max price agreement's signing (`POST /v1/admin/businesses/{business_id}/max-price-agreement`; roadmap M5h, design D231) and the Marketing Messages API onboarding invitation (`POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`; roadmap M5h2, design D431); off, each is `403 feature_not_available` with nothing asked of Meta (the Official Business Account application and the contact book erasure are not gated by it); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on` lets a key holding the scope `call_credentials` read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`; roadmap M5e2, design D410); off, it is `403 feature_not_available` with nothing asked of Meta, whichever key asks; pending the owner's confirmation before the first release |
+//! | `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` | `off` | `on` lets a key holding the scope `webhook_override` (not granted by `numbers`) make Meta deliver one of its numbers' webhooks (`messages`, `calls`, `history`, …) to a URL of its own instead of the service (`PUT /v1/numbers/{pn}/webhook-override`; roadmap M5c6, design D441): the service then no longer sees those events. The URL is checked as a webhook endpoint's is (`WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`, needs `WA_SERVER_DATA_KEY`); off, it is `403 feature_not_available` with nothing asked of Meta. Clearing an override is never gated by it; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
 //! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
@@ -1100,6 +1101,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         send_messaging_account_id: send_messaging_account_id(r)?,
         broadcasts: broadcast_settings(r)?,
         call_sip_credentials: call_sip_credentials(r)?,
+        number_webhook_override: number_webhook_override(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
@@ -1174,6 +1176,22 @@ fn legal_acts(r: &Reader<'_>) -> Result<bool, ConfigError> {
 /// may read a SIP server's password.
 fn call_sip_credentials(r: &Reader<'_>) -> Result<bool, ConfigError> {
     const NAME: &str = "WA_SERVER_CALL_SIP_CREDENTIALS";
+    match r.plain(NAME)?.as_deref().map(str::trim) {
+        None | Some("" | "off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(_) => Err(ConfigError::Invalid {
+            name: NAME,
+            reason: "expected `off` or `on`",
+        }),
+    }
+}
+
+/// `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` (roadmap M5c6, design D441): `off`
+/// (the default) or `on`. On, a key holding the scope `webhook_override`
+/// may set a number's webhook override, to a destination a webhook endpoint could
+/// have.
+fn number_webhook_override(r: &Reader<'_>) -> Result<bool, ConfigError> {
+    const NAME: &str = "WA_SERVER_NUMBER_WEBHOOK_OVERRIDE";
     match r.plain(NAME)?.as_deref().map(str::trim) {
         None | Some("" | "off") => Ok(false),
         Some("on") => Ok(true),

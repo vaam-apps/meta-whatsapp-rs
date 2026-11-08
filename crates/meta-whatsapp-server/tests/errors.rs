@@ -412,6 +412,12 @@ const CALLS_META: &[&str] = &[
     // Meta's API.
     "GET /v1/numbers/{pn}/business-public-key",
     "PUT /v1/numbers/{pn}/business-public-key",
+    // Roadmap M5c6: the WABA's health and the override's read and clear
+    // (the set is off in this harness and asks Meta nothing:
+    // tests/webhook_override.rs runs it).
+    "GET /v1/wabas/{waba_id}/health-status",
+    "GET /v1/numbers/{pn}/webhook-override",
+    "DELETE /v1/numbers/{pn}/webhook-override",
     // Roadmap M5f: the group routes, on a group the number holds.
     "POST /v1/numbers/{pn}/groups",
     "GET /v1/numbers/{pn}/groups",
@@ -566,6 +572,10 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/numbers/{pn}/business-public-key",
     "PUT /v1/numbers/{pn}/business-public-key",
     "DELETE /v1/numbers/{pn}/contact-book/{bsuid}",
+    // Roadmap M5c6.
+    "GET /v1/wabas/{waba_id}/health-status",
+    "GET /v1/numbers/{pn}/webhook-override",
+    "DELETE /v1/numbers/{pn}/webhook-override",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/wabas/{waba_id}/templates/{id}/unpause",

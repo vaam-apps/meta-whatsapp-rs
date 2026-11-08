@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-server-number-settings
-description: "Managing a business number's settings through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - the messaging limit tier on GET /v1/numbers/{pn}, the settings (local storage, identity key check, search visibility, security notifications, number-change notices; one setting per PATCH), payload encryption with the business's public key (never in a log, error or answer), the business username and its suggestions, the Official Business Account status and application, India's compliance information, the number's health status, conversational components (welcome message, ice breakers, commands), and the contact book erasure; why the compliance declaration is the one legal act, 403 feature_not_available until the deployment sets WA_SERVER_LEGAL_ACTS=on, and why the application and the contact book erasure are audited but not gated. Load when a CMS or a Medusa store configures a merchant's WhatsApp number through the service."
+description: "Managing a business number's settings through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - the messaging limit tier, the settings (local storage, identity key check, search visibility, notices; one setting per PATCH), payload encryption with the business's public key (never in a log, error or answer), the business username, the Official Business Account status and application, India's compliance information, the number's and the WABA's health status, the number's webhook override (off unless the deployment enables it, its URL checked as a webhook endpoint's is, clearing always allowed), conversational components and the contact book erasure; why the compliance declaration is the one legal act, 403 feature_not_available until WA_SERVER_LEGAL_ACTS=on. Load when a CMS or a Medusa store configures a merchant's WhatsApp number through the service."
 ---
 
 # meta-whatsapp-rs-server-number-settings
 
-> **Verified against meta-whatsapp-rs 57b8e74da170e1c39d0247055a898282ec773cd7 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 580585f006a10e12060844044e84fd8d7fcfe513 (2026-11-08).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/number-settings.ts](examples/number-settings.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#number-settings).
 
@@ -13,7 +13,7 @@ Reference code: [examples/number-settings.ts](examples/number-settings.ts), type
 
 A merchant's number is bound to their tenant and you configure it or read
 how it stands. Deploy the service first (`meta-whatsapp-rs-server`). The
-key needs the scope `numbers`; the contact book's erasure needs `erasure`
+key needs the scope `numbers` (setting a webhook override, the scope `webhook_override`); the contact book's erasure needs `erasure`
 too. Another tenant's number is `404 not_found` on every route.
 
 ## The routes
@@ -28,6 +28,8 @@ too. Another tenant's number is `404 not_found` on every route.
 | `GET`, `PUT /v1/numbers/{pn}/compliance-info` | India's compliance information; the declaration (the legal act) |
 | `GET /v1/numbers/{pn}/health-status` | whether messages can be sent, node by node |
 | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | welcome message flag, ice breakers, commands |
+| `GET /v1/wabas/{waba_id}/health-status` | the same for your WABA (another's is `404`, Meta not asked); only nodes you own or hold ([references/webhook-override.md](references/webhook-override.md)) |
+| `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override` | the number's own webhook URL; divert its webhooks there (the scope `webhook_override`, which `numbers` does not grant, and `403 feature_not_available` unless `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`; the service then stops seeing them); restore delivery (always allowed): [the rules](references/webhook-override.md) |
 | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase a contact book entry at Meta (scope `erasure`, audited) |
 
 ## The limit tier, health and settings
@@ -144,9 +146,9 @@ contact ids and components' texts are in no log line.
 
 ## What meta-whatsapp-rs does not do
 
-Not offered: a number's webhook URL, connection status or per-number
-webhook override (the service owns its events), a WABA's health, bot
-details, calling settings, the coexistence data sync. No call of these
+Not offered: a number's webhook URL setter and connection status (the service
+owns its events), the WABA-level callback override, bot details, calling
+settings, the coexistence data sync. No call of these
 routes was run against Meta live.
 
 ## Related skills
