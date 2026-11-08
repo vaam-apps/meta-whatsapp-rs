@@ -18113,6 +18113,395 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/webhook-override": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/webhook-override`: the URL the number's webhooks\ngo to instead of the service, if any.",
+        "operationId": "get_webhook_override",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The number's own override, `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookOverride"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/webhook-override`: make Meta deliver the number's\nsupported webhooks (`messages`, `calls`, `history`, …) to the tenant's\nURL instead of the service. Off unless the deployment enables it.",
+        "operationId": "set_webhook_override",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetWebhookOverride"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The override is set. Audited as `webhook_override_set` (who and which number, never the URL or the token)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (the key lacks the scope `webhook_override`), `tenant_suspended`, `feature_not_available` (the deployment has not enabled overrides, `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`: nothing was asked of Meta), or Meta's refusal (its texts are withheld)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured` (no allow-list to check the URL against), `number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `url` (not `https`, over 200 characters, credentials in it, not listed, an address it resolves to not allowed, or unresolvable: as a webhook endpoint's) or `verify_token` (empty) or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (for one, it could not verify the URL): see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the override may have been set (`GET …/webhook-override`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/webhook-override`: remove the number's own\noverride, so Meta delivers its webhooks to the service again. Always\nallowed to the number's owner, whatever the deployment's setting.",
+        "operationId": "clear_webhook_override",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The override is cleared (also when there was none). Audited as `webhook_override_cleared`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the override",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "tags": [
@@ -23953,6 +24342,135 @@
           },
           "504": {
             "description": "`timeout`: the Flow may have been published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/health-status": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/health-status`: whether messages can be sent\nthrough the tenant's WABA (roadmap M5c6, design D440).",
+        "operationId": "get_waba_health_status",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The health status: the overall `can_send_message` and the nodes the tenant owns or already holds (its WABA, its numbers, its templates, the business portfolio, the app). Another tenant's entity ids are not in it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WabaHealthStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant (another tenant's included: nothing was asked of Meta)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
             "content": {
               "application/json": {
                 "schema": {
@@ -39668,6 +40186,7 @@
           "routing",
           "calls",
           "call_credentials",
+          "webhook_override",
           "partners",
           "broadcasts"
         ]
@@ -39934,6 +40453,26 @@
             "description": "The sequences (Meta documents no cursor)."
           }
         }
+      },
+      "SetWebhookOverride": {
+        "type": "object",
+        "description": "An override to set.",
+        "required": [
+          "url",
+          "verify_token"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Where Meta delivers the number's supported webhooks: `https`, 1 to\n200 characters (Meta's page), a destination the deployment's webhook\nallow-list admits, as a webhook endpoint's is."
+          },
+          "verify_token": {
+            "type": "string",
+            "format": "password",
+            "description": "The token Meta echoes when it verifies the URL (the same handshake\nas the app's callback). A secret: never answered, logged or audited."
+          }
+        },
+        "additionalProperties": false
       },
       "SettingChanged": {
         "type": "object",
@@ -42005,6 +42544,30 @@
           }
         }
       },
+      "WabaHealthStatus": {
+        "type": "object",
+        "description": "A WABA's health status: whether messages can be sent through it, with\nthe nodes the tenant owns or already holds (its WABA, its numbers, its\ntemplates, the business portfolio and the app). Another tenant's\nentity ids are never in it (roadmap M5c6, design D440).",
+        "required": [
+          "can_send_message",
+          "entities"
+        ],
+        "properties": {
+          "can_send_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The overall status Meta computed: `BLOCKED` if any node is blocked,\nelse `LIMITED` if any is limited, else `AVAILABLE`."
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HealthEntityView"
+            },
+            "description": "The nodes the tenant may see."
+          }
+        }
+      },
       "WabaList": {
         "type": "object",
         "description": "A page of WABAs.",
@@ -42270,6 +42833,22 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page; `null` on the last."
+          }
+        }
+      },
+      "WebhookOverride": {
+        "type": "object",
+        "description": "A number's webhook override, as the tenant set it. The WABA's override\nand the app's callback URL are never answered.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The URL Meta delivers this number's supported webhooks to instead\nof the service; `null` when the number has none."
           }
         }
       },

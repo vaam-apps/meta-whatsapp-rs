@@ -511,6 +511,10 @@ pub enum ScopeName {
     /// M5e2): off for every key until it is given, and answered only when
     /// the deployment enables it.
     CallCredentials,
+    /// Setting a number's webhook override (roadmap M5c6): off for every
+    /// key until it is given, and answered only when the deployment
+    /// enables it.
+    WebhookOverride,
     /// Partner acts on a WABA (roadmap M5j).
     Partners,
     /// A number's broadcasts: a template queued for many people, read and
@@ -542,6 +546,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Routing => Scope::Routing,
             ScopeName::Calls => Scope::Calls,
             ScopeName::CallCredentials => Scope::CallCredentials,
+            ScopeName::WebhookOverride => Scope::WebhookOverride,
             ScopeName::Partners => Scope::Partners,
             ScopeName::Broadcasts => Scope::Broadcasts,
         }
@@ -572,6 +577,7 @@ impl From<Scope> for ScopeName {
             Scope::Routing => ScopeName::Routing,
             Scope::Calls => ScopeName::Calls,
             Scope::CallCredentials => ScopeName::CallCredentials,
+            Scope::WebhookOverride => ScopeName::WebhookOverride,
             Scope::Partners => ScopeName::Partners,
             Scope::Broadcasts => ScopeName::Broadcasts,
         }

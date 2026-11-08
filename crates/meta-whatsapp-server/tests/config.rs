@@ -1172,3 +1172,36 @@ fn reads_whether_the_deployment_flow_key_is_a_fallback() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Roadmap M5c6: `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` is off unless the
+/// deployment says `on`; anything else is refused, naming the variable.
+/// Decisive: each arm of `number_webhook_override`, and the default.
+#[test]
+fn a_numbers_webhook_override_is_off_unless_the_deployment_turns_it_on() {
+    for off in [None, Some("off"), Some(" ")] {
+        let vars = off.map_or_else(production, |v| {
+            production().set("WA_SERVER_NUMBER_WEBHOOK_OVERRIDE", v)
+        });
+        assert!(
+            !Config::from_env(&vars)
+                .unwrap()
+                .settings
+                .number_webhook_override,
+            "{off:?}"
+        );
+    }
+    assert!(
+        Config::from_env(&production().set("WA_SERVER_NUMBER_WEBHOOK_OVERRIDE", "on"))
+            .unwrap()
+            .settings
+            .number_webhook_override
+    );
+    for bad in ["true", "1", "ON", "yes"] {
+        match refused(&production().set("WA_SERVER_NUMBER_WEBHOOK_OVERRIDE", bad)) {
+            ConfigError::Invalid { name, .. } => {
+                assert_eq!(name, "WA_SERVER_NUMBER_WEBHOOK_OVERRIDE");
+            }
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}

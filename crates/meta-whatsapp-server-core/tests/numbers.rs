@@ -35,3 +35,18 @@ async fn the_registration_services_open_on_the_callers_own_number_only() {
     conformance::numbers::the_registration_services_open_on_the_callers_own_number_only(&backend)
         .await;
 }
+
+/// Roadmap M5c6: a WABA's health status is the caller's tenant's own, and
+/// filtered; a number's webhook override is refused with the setting off,
+/// without webhooks out, and at a destination a webhook endpoint would be
+/// refused at, all before anything is sent; clearing is allowed in every
+/// state. In the core alone, so the API adapter's own gate cannot cover for
+/// the core's.
+#[tokio::test]
+async fn the_waba_health_and_the_webhook_override_services_gate_and_filter() {
+    let backend = memory::Memory::default();
+    conformance::webhook_override::the_waba_health_and_the_webhook_override_services_gate_and_filter(
+        &backend,
+    )
+    .await;
+}

@@ -11,6 +11,7 @@ import type { components, paths } from "./meta-whatsapp-server";
 export type SettingsPatch = components["schemas"]["SettingsPatch"];
 export type NumberSettings = components["schemas"]["NumberSettings"];
 export type NumberHealthStatus = components["schemas"]["NumberHealthStatus"];
+export type SetWebhookOverride = components["schemas"]["SetWebhookOverride"];
 export type ObaApplicationBody = components["schemas"]["ObaApplicationBody"];
 export type ComplianceInfoBody = components["schemas"]["ComplianceInfoBody"];
 export type ErrorObject = components["schemas"]["ErrorObject"];
@@ -173,4 +174,61 @@ export async function eraseContactBookEntry(api: WhatsApp, pn: string, bsuid: st
     throw new WhatsAppError(error.error);
   }
   return data.deleted;
+}
+
+// A WABA's health status (roadmap M5c6): `can_send_message` and the nodes
+// you own or already hold. Another tenant's WABA is `404`; an entity that
+// is not yours is not in the list.
+export async function wabaHealth(api: WhatsApp, wabaId: string) {
+  const { data, error } = await api.GET("/v1/wabas/{waba_id}/health-status", {
+    params: { path: { waba_id: wabaId } },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
+}
+
+// The number's own webhook override, if any (`null`: Meta delivers its
+// webhooks to the service). The WABA's and the app's callbacks are not
+// answered.
+export async function webhookOverride(api: WhatsApp, pn: string): Promise<string | null> {
+  const { data, error } = await api.GET("/v1/numbers/{pn}/webhook-override", {
+    params: { path: { pn } },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data.url;
+}
+
+// Divert the number's `messages`, `calls`, `history` and the other
+// supported webhooks to your URL: the service then no longer sees them.
+// `403 forbidden` without the scope `webhook_override`;
+// `403 feature_not_available` until the deployment sets
+// `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`; the URL must be one a webhook
+// endpoint could have (`422` on `url` otherwise); the token is yours, never
+// answered or logged.
+export async function setWebhookOverride(
+  api: WhatsApp,
+  pn: string,
+  body: SetWebhookOverride,
+) {
+  const { error } = await api.PUT("/v1/numbers/{pn}/webhook-override", {
+    params: { path: { pn } },
+    body,
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+}
+
+// Restore delivery to the service. Always allowed, whatever the setting.
+export async function clearWebhookOverride(api: WhatsApp, pn: string) {
+  const { error } = await api.DELETE("/v1/numbers/{pn}/webhook-override", {
+    params: { path: { pn } },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
 }
