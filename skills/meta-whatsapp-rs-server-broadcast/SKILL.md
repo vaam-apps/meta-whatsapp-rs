@@ -122,7 +122,7 @@ until the broadcast settles and 30 days after.
 
 ## What meta-whatsapp-rs does not do
 
-It does not offer the bot API, a time to send at, a list of your
+It does not offer a time to send at, a list of your
 broadcasts, a rate per tenant, or the per-user marketing limit (`131049`)
 arriving as a status event. Meta's own limits (the daily messaging limit,
 the pair limit, per-user marketing limits) still apply and answer their own
@@ -133,5 +133,6 @@ codes in `failures`.
 `meta-whatsapp-rs-server` (deploying the service, keys, errors),
 `meta-whatsapp-rs-server-send` (one message), `meta-whatsapp-rs-server-marketing`
 (the Marketing Messages API), `meta-whatsapp-rs-server-events` (the status
-events of a broadcast's messages), `meta-whatsapp-rs-bot` (the same
+events of a broadcast's messages), `meta-whatsapp-rs-server-bot` (automatic
+answers), `meta-whatsapp-rs-bot` (the same
 pacing and durable jobs in the Rust library).

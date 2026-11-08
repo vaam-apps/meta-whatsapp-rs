@@ -181,6 +181,12 @@ pub enum Scope {
     /// grant (a stored name, pending the owner's confirmation before the
     /// first release).
     Broadcasts,
+    /// The bot (roadmap M5k, slice 2): a number's rules for answering
+    /// inbound messages, its allow and deny lists, and turning it on. A
+    /// rule makes the service send messages as the business with nobody
+    /// asking, so a scope of its own, which `send` does not grant (a stored
+    /// name, pending the owner's confirmation before the first release).
+    Bot,
     /// Calling (roadmap M5e): a number's calling settings, a user's call
     /// permission, the call a business places and the actions on a call
     /// (pre-accept, accept, reject, terminate). Calls carry SDP and may be
@@ -216,7 +222,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 24] = [
+    pub const ALL: [Scope; 25] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -241,6 +247,7 @@ impl Scope {
         Self::WebhookOverride,
         Self::Partners,
         Self::Broadcasts,
+        Self::Bot,
     ];
 
     /// Stored and API name.
@@ -270,6 +277,7 @@ impl Scope {
             Self::WebhookOverride => "webhook_override",
             Self::Partners => "partners",
             Self::Broadcasts => "broadcasts",
+            Self::Bot => "bot",
         }
     }
 

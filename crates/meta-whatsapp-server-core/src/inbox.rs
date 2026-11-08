@@ -361,6 +361,8 @@ pub struct Conversations<'a> {
     observer: &'a dyn Observer,
     /// [`Self::naming_the_account`].
     names_account: bool,
+    /// [`Self::withholding_texts`].
+    withhold_texts: bool,
 }
 
 impl std::fmt::Debug for Conversations<'_> {
@@ -408,6 +410,7 @@ impl<'a> Conversations<'a> {
             clock,
             observer: &(),
             names_account: false,
+            withhold_texts: false,
         })
     }
 
@@ -417,6 +420,16 @@ impl<'a> Conversations<'a> {
     #[must_use]
     pub fn naming_the_account(mut self, enabled: bool) -> Self {
         self.names_account = enabled;
+        self
+    }
+
+    /// Keep Meta's error texts out of every log of a failed reply: for a
+    /// reply nobody asked for in a request, whose refusal may quote the
+    /// customer (the bot's, roadmap M5k, slice 2; D464). The error is the
+    /// same but for its texts.
+    #[must_use]
+    pub fn withholding_texts(mut self) -> Self {
+        self.withhold_texts = true;
         self
     }
 
@@ -871,9 +884,18 @@ impl<'a> Conversations<'a> {
     /// its WABA's numbers), counted when Meta answered with a Graph error,
     /// with Meta's `details`.
     async fn failed(&self, error: &Error) -> ServiceError {
-        let api = self.number.failed(self.authz, error).await;
+        let api = if self.withhold_texts {
+            self.number
+                .failed_withholding_texts(self.authz, error)
+                .await
+        } else {
+            self.number.failed(self.authz, error).await
+        };
         if error.graph().is_some() {
             self.observer.graph_error(api.code());
+        }
+        if self.withhold_texts {
+            return api;
         }
         api.with_details(error)
     }

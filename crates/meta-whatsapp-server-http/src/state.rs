@@ -21,6 +21,7 @@ use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::bot::{BotRecords, BotReplies, BotSettings};
 use meta_whatsapp_server_core::broadcasts::{BroadcastRecords, BroadcastSettings};
 use meta_whatsapp_server_core::calls::CallRecords;
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
@@ -172,6 +173,9 @@ pub struct Settings {
     /// Broadcasts (roadmap M5k, D420 to D425): the rate each number is held
     /// to, the bounds on a broadcast and the workers a replica runs.
     pub broadcasts: BroadcastSettings,
+    /// The bot (roadmap M5k, slice 2, D460 to D467): the most rules a number
+    /// may have. Its replies are paced in the broadcasts' budget.
+    pub bot: BotSettings,
     /// `WA_SERVER_CALL_SIP_CREDENTIALS` (roadmap M5e2, design D410,
     /// pending the owner's confirmation before the first release):
     /// whether `GET /v1/numbers/{pn}/call-settings/sip-credentials`
@@ -215,6 +219,7 @@ impl Default for Settings {
             legal_acts: false,
             send_messaging_account_id: true,
             broadcasts: BroadcastSettings::default(),
+            bot: BotSettings::default(),
             call_sip_credentials: false,
             number_webhook_override: false,
         }
@@ -253,6 +258,8 @@ struct Inner {
     group_records: GroupRecords,
     call_records: CallRecords,
     broadcasts: BroadcastRecords,
+    bot: BotRecords,
+    bot_replies: Arc<BotReplies>,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -328,11 +335,33 @@ impl AppState {
         // vault; its offboarding acts on the webhook pipeline's account
         // updates, through the same authorization order (roadmap M3a).
         let signups = Signups::new(backend.kv(), clock.clone(), settings.signup.clone());
+        // The broadcasts' records and their jobs in the same store, on the
+        // service's one clock (roadmap M5k).
+        let broadcasts =
+            BroadcastRecords::new(&backend.kv(), clock.clone(), settings.broadcasts.clone())
+                .map_err(|_| {
+                    Error::from(meta_whatsapp_rs::core::error::ConfigError::new(
+                        "the broadcast settings are invalid (a rate of zero messages a second)",
+                    ))
+                })?;
+        // The bot's rules in the same store, and its replies: paced in the
+        // broadcasts' budget, sent through the inbox's reply with the
+        // number's own checks (roadmap M5k, slice 2).
+        let bot = BotRecords::new(backend.kv(), clock.clone(), settings.bot.clone());
+        let bot_replies = Arc::new(BotReplies::new(
+            bot.clone(),
+            authz.clone(),
+            backend.conversations(),
+            settings.inbox_reply_checks.clone(),
+            settings.send_messaging_account_id,
+            broadcasts.pacer().clone(),
+        ));
         let events = Events::new(
             inbound,
             backend.as_ref(),
             metrics.clone(),
             signups.account_actions(authz.clone()),
+            bot_replies.clone(),
         );
         // The codes in the bundle's key/value store, as the vault, on the
         // service's one clock.
@@ -360,15 +389,6 @@ impl AppState {
         let uploads = UploadSessions::new(backend.kv(), clock.clone());
         // And the calls each number holds (roadmap M5e), the same way.
         let call_records = CallRecords::new(backend.kv());
-        // The broadcasts' records and their jobs in the same store, on the
-        // service's one clock (roadmap M5k).
-        let broadcasts =
-            BroadcastRecords::new(&backend.kv(), clock.clone(), settings.broadcasts.clone())
-                .map_err(|_| {
-                    Error::from(meta_whatsapp_rs::core::error::ConfigError::new(
-                        "the broadcast settings are invalid (a rate of zero messages a second)",
-                    ))
-                })?;
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -387,6 +407,8 @@ impl AppState {
                 group_records,
                 call_records,
                 broadcasts,
+                bot,
+                bot_replies,
                 otp,
                 signups,
                 streams,
@@ -681,6 +703,17 @@ impl Grant {
     /// The broadcasts' records and jobs (roadmap M5k).
     pub fn broadcasts(&self) -> &BroadcastRecords {
         &self.0.inner.broadcasts
+    }
+
+    /// The bots' rules (roadmap M5k, slice 2).
+    pub fn bot(&self) -> &BotRecords {
+        &self.0.inner.bot
+    }
+
+    /// The bot's replies, which the webhook pipeline hands each recorded
+    /// inbound message to (roadmap M5k, slice 2).
+    pub fn bot_replies(&self) -> &Arc<BotReplies> {
+        &self.0.inner.bot_replies
     }
 
     /// The OTP services (roadmap M3c): codes in the backend's key/value

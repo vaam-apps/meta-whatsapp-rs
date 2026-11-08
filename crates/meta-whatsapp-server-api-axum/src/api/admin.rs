@@ -520,6 +520,9 @@ pub enum ScopeName {
     /// A number's broadcasts: a template queued for many people, read and
     /// cancelled by id (roadmap M5k).
     Broadcasts,
+    /// A number's bot: rules answering inbound messages, its allow and
+    /// deny lists (roadmap M5k).
+    Bot,
 }
 
 impl From<ScopeName> for Scope {
@@ -549,6 +552,7 @@ impl From<ScopeName> for Scope {
             ScopeName::WebhookOverride => Scope::WebhookOverride,
             ScopeName::Partners => Scope::Partners,
             ScopeName::Broadcasts => Scope::Broadcasts,
+            ScopeName::Bot => Scope::Bot,
         }
     }
 }
@@ -580,6 +584,7 @@ impl From<Scope> for ScopeName {
             Scope::WebhookOverride => ScopeName::WebhookOverride,
             Scope::Partners => ScopeName::Partners,
             Scope::Broadcasts => ScopeName::Broadcasts,
+            Scope::Bot => ScopeName::Bot,
         }
     }
 }

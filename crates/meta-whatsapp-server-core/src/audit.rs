@@ -177,6 +177,36 @@ pub struct BroadcastFacts<'a> {
     pub recipients: usize,
 }
 
+/// A change to a tenant's bot on a number (roadmap M5k, slice 2; D460),
+/// logged like [`tenant_audit`] (target `audit`, message `tenant change`)
+/// with the rule's id, when the change is to one, and how many rules the
+/// number has after it. Never a trigger word, a reply text or a person.
+pub fn bot_audit(action: &'static str, key_id: &str, subject: &Subject<'_>, bot: &BotFacts<'_>) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        rule_id = bot.rule_id,
+        rules = bot.rules,
+        enabled = bot.enabled,
+        "tenant change"
+    );
+}
+
+/// What a [`bot_audit`] event names besides its [`Subject`].
+#[derive(Debug, Clone, Copy)]
+pub struct BotFacts<'a> {
+    /// The rule changed, if the change is to one.
+    pub rule_id: Option<&'a str>,
+    /// How many rules the number has after the change (a count).
+    pub rules: usize,
+    /// Whether the number's bot is on after the change.
+    pub enabled: bool,
+}
+
 /// A customer erased on a number (roadmap M2f: `crate::erasure`), logged
 /// like [`tenant_audit`] (target `audit`, message `tenant change`, action
 /// `customer_erased`) with the erasure's id (its journal entry's) and
