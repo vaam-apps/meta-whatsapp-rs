@@ -35,8 +35,8 @@ for that number then go quiet. So:
   nothing sent, whatever the reason. At most 200 characters; `verify_token`
   (yours, the one Meta echoes to verify the URL) must not be empty. With no
   allow-list at all the answer is `409 webhooks_not_configured`. Meta is
-  given the URL as the check read it (normalized: a lowercase host, a `/`
-  path); it connects later, so the check holds at the set only: list hosts
+  given the URL as the check read it (normalized: a lowercase host, a
+  slash for an empty path); it connects later, so the check holds at the set only: list hosts
   you trust.
 - The token and the URL are in no log, audit event, error or answer, and
   Meta's error texts are withheld. The set is audited (webhook_override_set)

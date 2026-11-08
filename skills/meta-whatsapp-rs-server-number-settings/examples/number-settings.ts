@@ -204,8 +204,8 @@ export async function webhookOverride(api: WhatsApp, pn: string): Promise<string
 
 // Divert the number's `messages`, `calls`, `history` and the other
 // supported webhooks to your URL: the service then no longer sees them.
-// `403 forbidden` without the scope `webhook_override`, `403
-// feature_not_available` until the deployment sets
+// `403 forbidden` without the scope `webhook_override`;
+// `403 feature_not_available` until the deployment sets
 // `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`; the URL must be one a webhook
 // endpoint could have (`422` on `url` otherwise); the token is yours, never
 // answered or logged.
