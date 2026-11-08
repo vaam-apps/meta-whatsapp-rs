@@ -187,3 +187,190 @@ impl CdnFetcher for HyperFetcher {
             .map_err(|_| FetchError::Timeout)?
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test code: a panic is the report
+mod tests {
+    use std::net::SocketAddr;
+    use std::sync::Mutex;
+
+    use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    /// What a receiver got: each request's head, as text.
+    type Seen = Arc<Mutex<Vec<String>>>;
+
+    /// A plain HTTP receiver on 127.0.0.1 writing `answer` to every request
+    /// then closing; with `hold`, it keeps the connection open and silent
+    /// after the head.
+    async fn receiver(answer: Vec<u8>, hold: bool) -> (SocketAddr, Seen) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen: Seen = Arc::default();
+        let s = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = listener.accept().await {
+                let (s, answer) = (s.clone(), answer.clone());
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while !head.windows(4).any(|x| x == b"\r\n\r\n") {
+                        match tcp.read(&mut buf).await {
+                            Ok(n) if n > 0 => head.extend_from_slice(&buf[..n]),
+                            _ => return,
+                        }
+                    }
+                    s.lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&head).into_owned());
+                    if hold {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        return;
+                    }
+                    let _ = tcp.write_all(&answer).await;
+                    let _ = tcp.shutdown().await;
+                });
+            }
+        });
+        (addr, seen)
+    }
+
+    /// `media.test` resolves nowhere: the fetch can only reach the pinned
+    /// address.
+    fn pinned(path: &str, address: SocketAddr) -> Pinned {
+        let policy = DestinationPolicy::parse("media.test", true).unwrap();
+        Pinned {
+            destination: policy
+                .check_url(&format!("http://media.test:{}{path}", address.port()))
+                .unwrap(),
+            address,
+        }
+    }
+
+    async fn get(answer: Vec<u8>, max: usize) -> (Result<Vec<u8>, FetchError>, Seen) {
+        let (addr, seen) = receiver(answer, false).await;
+        let got = HyperFetcher::new()
+            .unwrap()
+            .get(&pinned("/v/f?oh=TOKEN", addr), max, Duration::from_secs(5))
+            .await;
+        (got, seen)
+    }
+
+    /// A plain `GET` to the pinned address: the URL's host is only the
+    /// `Host` header, the path and query are the request line's, and the
+    /// request carries no credential (no `Authorization`, no `Cookie`).
+    #[tokio::test]
+    async fn the_file_is_fetched_from_the_pinned_address_with_no_credential() {
+        let (got, seen) = get(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello".to_vec(),
+            1024,
+        )
+        .await;
+        assert_eq!(got.unwrap(), b"hello");
+        let seen = seen.lock().unwrap();
+        let [head] = &seen[..] else { panic!("{seen:?}") };
+        let lower = head.to_ascii_lowercase();
+        assert!(head.starts_with("GET /v/f?oh=TOKEN HTTP/1.1\r\n"), "{head}");
+        assert!(lower.contains("\r\nhost: media.test:"), "{head}");
+        for header in ["authorization", "cookie", "proxy-authorization", "referer"] {
+            assert!(!lower.contains(header), "{header} was sent: {head}");
+        }
+    }
+
+    /// **A redirect is never followed.** The first receiver redirects to
+    /// the second; the second is never contacted, and the fetch is the
+    /// status. Delete the status check and the redirect's empty body is
+    /// the "file".
+    #[tokio::test]
+    async fn a_redirect_is_a_failure_and_its_target_is_never_asked() {
+        let (target, target_seen) = receiver(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\n\r\nevil".to_vec(),
+            false,
+        )
+        .await;
+        for status in ["301 Moved Permanently", "302 Found", "307 Temporary Redirect"] {
+            let redirect = format!(
+                "HTTP/1.1 {status}\r\nlocation: http://{target}/stolen\r\ncontent-length: 0\r\n\r\n"
+            );
+            let (got, _) = get(redirect.into_bytes(), 1024).await;
+            assert_eq!(
+                got.unwrap_err(),
+                FetchError::Status(status[..3].parse().unwrap())
+            );
+        }
+        assert!(
+            target_seen.lock().unwrap().is_empty(),
+            "the target was asked"
+        );
+    }
+
+    #[tokio::test]
+    async fn anything_but_a_200_is_a_failure() {
+        for code in [201u16, 204, 206, 403, 404, 500] {
+            let (got, _) = get(
+                format!("HTTP/1.1 {code} X\r\ncontent-length: 2\r\n\r\nok").into_bytes(),
+                1024,
+            )
+            .await;
+            assert_eq!(got.unwrap_err(), FetchError::Status(code));
+        }
+    }
+
+    /// The bound: a declared length past it is refused before a byte of the
+    /// body is read, and an undeclared (chunked) body is cut when it passes
+    /// it. Exactly the bound is accepted.
+    #[tokio::test]
+    async fn the_body_is_bounded() {
+        let (got, _) = get(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\r\nhello world".to_vec(),
+            10,
+        )
+        .await;
+        assert_eq!(got.unwrap_err(), FetchError::TooLarge);
+        let (got, _) = get(
+            b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n6\r\nhello \r\n5\r\nworld\r\n0\r\n\r\n"
+                .to_vec(),
+            10,
+        )
+        .await;
+        assert_eq!(got.unwrap_err(), FetchError::TooLarge);
+        let (got, _) = get(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nhelloworld".to_vec(),
+            10,
+        )
+        .await;
+        assert_eq!(got.unwrap(), b"helloworld");
+    }
+
+    #[tokio::test]
+    async fn a_truncated_body_is_a_failure() {
+        let (got, _) = get(
+            b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nhello".to_vec(),
+            1024,
+        )
+        .await;
+        assert_eq!(got.unwrap_err(), FetchError::Protocol);
+    }
+
+    #[tokio::test]
+    async fn a_silent_cdn_times_out_and_nothing_listening_is_a_connect_failure() {
+        let (addr, _) = receiver(Vec::new(), true).await;
+        let got = HyperFetcher::new()
+            .unwrap()
+            .get(&pinned("/v/f", addr), 1024, Duration::from_millis(200))
+            .await;
+        assert_eq!(got.unwrap_err(), FetchError::Timeout);
+        let closed = {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        };
+        let got = HyperFetcher::new()
+            .unwrap()
+            .get(&pinned("/v/f", closed), 1024, Duration::from_secs(5))
+            .await;
+        assert_eq!(got.unwrap_err(), FetchError::Connect);
+    }
+}
