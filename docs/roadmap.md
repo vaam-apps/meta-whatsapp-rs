@@ -6852,14 +6852,16 @@ or WABA fails the family's own cross-tenant test).
     own (a number not bound to it, another WABA, a type unknown to this
     version; D440). `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override`
     (`NumberSettings::webhook_override`, `set_webhook_override`,
-    `clear_webhook_override`; D441 to D444): the `PUT` is `403
-    feature_not_available` with nothing asked of Meta unless
-    `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on` (default `off`;
+    `clear_webhook_override`; D441 to D444): the `PUT` takes a scope of
+    its own, `webhook_override` (`Scope::WebhookOverride`: `numbers` does not
+    grant it, and `GET` and `DELETE` stay `numbers`'; D441, the coordinator's
+    swap), and is `403 feature_not_available` with nothing asked of Meta
+    unless `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on` (default `off`;
     `Settings::number_webhook_override`; the gate is an extractor before the
     vault and again in the core), its URL goes through the same
     `server_core::webhooks_out::destination::pin` as a webhook endpoint's before anything
-    is sent (`422` on `url`; `409 webhooks_not_configured` without webhooks
-    out), the token and the URL are in no log or audit event
+    is sent, in the serialization the check read (`422` on `url`; `409
+    webhooks_not_configured` without webhooks out), the token and the URL are in no log or audit event
     (`webhook_override_set`, `webhook_override_refused`), and clearing
     (`webhook_override_cleared`) is never gated. The library needed nothing
     new (`PhoneNumber::set_webhook_override`, `clear_webhook_override`,
@@ -6873,9 +6875,11 @@ or WABA fails the family's own cross-tenant test).
     `tests/errors.rs`. The parity rows of the override and of a WABA's
     health are done on both sides; the rows of bot details and of the
     two setters stay partial.
-  - **Proposed, not decided:** D440 to D445, by the implementer (the
-    coordinator decides, AGENTS.md § Decisions). New names pending the
-    owner's confirmation before the first release: the setting
+  - **Decided:** D440 to D445, by the coordinator on 2026-11-07 under the
+    owner's delegation, swappable (D441 changed: the set's own scope instead
+    of the setting alone; its swap folds the scope back into `numbers`). New
+    names pending the owner's confirmation before the first release: the
+    scope `webhook_override`, the setting
     `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, the operation ids
     `get_waba_health_status`, `get_webhook_override`,
     `set_webhook_override` and `clear_webhook_override`, the two paths, and

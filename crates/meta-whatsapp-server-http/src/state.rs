@@ -181,7 +181,7 @@ pub struct Settings {
     pub call_sip_credentials: bool,
     /// `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE` (roadmap M5c6, design D441,
     /// pending the owner's confirmation before the first release): whether
-    /// a key holding the scope `numbers` may make Meta deliver one of its
+    /// a key holding the scope `webhook_override` may make Meta deliver one of its
     /// numbers' webhooks to a URL of its own instead of the service
     /// (`PUT /v1/numbers/{pn}/webhook-override`). Off (the default), it is
     /// `403 feature_not_available` and nothing is asked of Meta; on, the

@@ -15,20 +15,22 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5c6, a slice)
 
 - A WABA's health status and a number's webhook override in the service
-  (design D440 to D445, the implementer's proposals, not decided). `GET
+  (design D440 to D445, the coordinator's decisions of 2026-11-07, swappable). `GET
   /v1/wabas/{waba_id}/health-status` answers the caller's own WABA only
   (another tenant's is `404`, nothing asked of Meta) with the entities the
   tenant owns or already holds. `GET`, `PUT`, `DELETE
-  /v1/numbers/{pn}/webhook-override`: the `PUT` is `403
-  feature_not_available`, Meta not asked, unless the deployment sets the new
+  /v1/numbers/{pn}/webhook-override`: the `PUT` takes a new
+  scope of its own, `webhook_override` (not granted by `numbers`; reading and
+  clearing stay `numbers`'), and is `403 feature_not_available`, Meta not
+  asked, unless the deployment sets the new
   `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on` (off by default); its URL is
   checked as a webhook endpoint's is (`https`, no credentials, the operator's
-  allow-list, every resolved address allowed) before anything is sent; the
+  allow-list, every resolved address allowed) before anything is sent, in the one serialization the check read, and ids of other nodes in a health entity's texts are withheld; the
   verify token, the URL and Meta's texts are in no log or audit event; the
   set and a refused set are audited (`webhook_override_set`,
   `webhook_override_refused`); clearing (`webhook_override_cleared`) is
-  never gated. The OpenAPI document gains four operations and three schemas
-  (additive). The library needed nothing new.
+  never gated. The OpenAPI document gains four operations, three schemas and
+  a scope name (additive). The library needed nothing new.
 
 ### Added (roadmap M5k, slice 1)
 

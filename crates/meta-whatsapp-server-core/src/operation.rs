@@ -70,7 +70,7 @@ pub enum Operation {
     GetWabaHealthStatus,
     /// `get_webhook_override`: whether a number has its own webhook callback, and its URL (roadmap M5c6; pending the owner's confirmation before the first release).
     GetWebhookOverride,
-    /// `set_webhook_override`: a number's webhook callback overridden (off until the deployment enables `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`; its URL checked as a webhook endpoint's is) (roadmap M5c6; pending the owner's confirmation before the first release).
+    /// `set_webhook_override`: a number's webhook callback overridden (scope `webhook_override`, which `numbers` does not grant; off until the deployment enables `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`; its URL checked as a webhook endpoint's is) (roadmap M5c6; pending the owner's confirmation before the first release).
     SetWebhookOverride,
     /// `clear_webhook_override`: a number's webhook callback override removed, so Meta delivers to the service again (always allowed to the number's owner) (roadmap M5c6; pending the owner's confirmation before the first release).
     ClearWebhookOverride,

@@ -46,8 +46,9 @@
 //! **The webhook override** (roadmap M5c6, design D441 to D444). Setting a
 //! number's override makes Meta deliver that number's `messages`, `calls`,
 //! `history`, … to the tenant's URL instead of the service, which hides
-//! them from the service's inbox and events. So setting one is off until
-//! the deployment enables it (`WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, default
+//! them from the service's inbox and events. So setting one takes a scope of
+//! its own (`webhook_override`, which `numbers` does not grant; the route
+//! guard's, D441) and is off until the deployment enables it (`WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, default
 //! `off`; [`NumberSettings::with_webhook_override`]): off, `403
 //! feature_not_available` with nothing asked of Meta; on, the URL goes
 //! through the **same check as a webhook endpoint's**

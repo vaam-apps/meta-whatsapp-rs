@@ -13,7 +13,7 @@ Reference code: [examples/number-settings.ts](examples/number-settings.ts), type
 
 A merchant's number is bound to their tenant and you configure it or read
 how it stands. Deploy the service first (`meta-whatsapp-rs-server`). The
-key needs the scope `numbers`; the contact book's erasure needs `erasure`
+key needs the scope `numbers` (setting a webhook override, the scope `webhook_override`); the contact book's erasure needs `erasure`
 too. Another tenant's number is `404 not_found` on every route.
 
 ## The routes
@@ -29,7 +29,7 @@ too. Another tenant's number is `404 not_found` on every route.
 | `GET /v1/numbers/{pn}/health-status` | whether messages can be sent, node by node |
 | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | welcome message flag, ice breakers, commands |
 | `GET /v1/wabas/{waba_id}/health-status` | the same for your WABA (another's is `404`, Meta not asked); only nodes you own or hold ([references/webhook-override.md](references/webhook-override.md)) |
-| `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override` | the number's own webhook URL; divert its webhooks there (`403 feature_not_available` unless `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`; the service then stops seeing them); restore delivery (always allowed): [the rules](references/webhook-override.md) |
+| `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override` | the number's own webhook URL; divert its webhooks there (the scope `webhook_override`, which `numbers` does not grant, and `403 feature_not_available` unless `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on`; the service then stops seeing them); restore delivery (always allowed): [the rules](references/webhook-override.md) |
 | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase a contact book entry at Meta (scope `erasure`, audited) |
 
 ## The limit tier, health and settings
