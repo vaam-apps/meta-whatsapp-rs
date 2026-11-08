@@ -1406,6 +1406,12 @@ const FLOW_ANSWER: &str = "shopping";
 const FLOW_ENDPOINT_TOKEN: &str = "flowtoken-1234";
 /// What a refused Flow key was made of (roadmap M5d2): not logged.
 const FLOW_KEY_REFUSED: &str = "CAPTURE-FLOW-KEY-NOT-A-KEY-d41f";
+/// What a refused business public key was made of (roadmap M5d2): not
+/// logged.
+const BUSINESS_KEY_REFUSED: &str = "CAPTURE-BUSINESS-KEY-NOT-A-KEY-7c2e";
+/// A Flow media URL's token (the CDN's signature, in its query): not
+/// logged.
+const FLOW_MEDIA_TOKEN: &str = "CAPTURE-FLOW-MEDIA-TOKEN-51ad";
 /// A Flow JSON's text: the caller's, not logged either.
 const FLOW_JSON_TEXT: &str = "CAPTURE-FLOW-JSON-TEXT-Heading-Hello-World";
 
@@ -1527,6 +1533,54 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
     let removed = h.call(Call::new(Method::DELETE, key_path).key(&key)).await;
     assert_eq!(removed.status.as_u16(), 204, "{}", removed.text);
 
+    // A number's business public key (roadmap M5d2): refused as text,
+    // refused as a private key, set, read.
+    const FLOW_NUMBER: &str = "1972385232742141";
+    let public = super::flows::public_key_pem(super::flows::OTHER_KEY_PEM);
+    let number_key_path = format!("/v1/numbers/{FLOW_NUMBER}/business-public-key");
+    for refused in [BUSINESS_KEY_REFUSED, super::flows::KEY_PEM] {
+        let reply = h
+            .call(
+                Call::new(Method::PUT, number_key_path.clone())
+                    .key(&key)
+                    .json(&json!({"business_public_key": refused})),
+            )
+            .await;
+        assert_eq!(reply.status.as_u16(), 422, "{}", reply.text);
+    }
+    h.graph.push_json(200, json!({"success": true}));
+    let set = h
+        .call(
+            Call::new(Method::PUT, number_key_path.clone())
+                .key(&key)
+                .json(&json!({"business_public_key": public})),
+        )
+        .await;
+    assert_eq!(set.status.as_u16(), 200, "{}", set.text);
+    h.graph.push_json(
+        200,
+        json!({"business_public_key": public, "business_public_key_signature_status": "VALID"}),
+    );
+    let read = h.call(Call::get(number_key_path).key(&key)).await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+
+    // A Flow's uploaded media (roadmap M5d2): this harness configures no
+    // download, so the route answers `feature_not_available`; the URL's
+    // token and the keys are among the secrets below. The download itself
+    // is walked by `tests/flow_media_logs.rs`.
+    let mut media = super::flows::media_object();
+    media["cdn_url"] = json!(format!(
+        "https://mmg.whatsapp.net/v/t62?oh={FLOW_MEDIA_TOKEN}"
+    ));
+    let downloaded = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/flow-media"))
+                .key(&key)
+                .json(&media),
+        )
+        .await;
+    assert_eq!(downloaded.status.as_u16(), 403, "{}", downloaded.text);
+
     // Meta's data endpoint (the public listener): the three payloads, a
     // forged signature, and no signature at all.
     for name in ["ping", "error_notification", "data_exchange"] {
@@ -1566,6 +1620,25 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
         FLOW_JSON_TEXT.to_owned(),
     ];
     secrets.push(FLOW_KEY_REFUSED.to_owned());
+    secrets.push(BUSINESS_KEY_REFUSED.to_owned());
+    secrets.push(FLOW_MEDIA_TOKEN.to_owned());
+    // The business public key and the media's keys and hashes.
+    secrets.extend(
+        super::flows::public_key_pem(super::flows::OTHER_KEY_PEM)
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .map(str::to_owned),
+    );
+    let metadata = &super::flows::media_object()["encryption_metadata"];
+    for field in [
+        "encrypted_hash",
+        "iv",
+        "encryption_key",
+        "hmac_key",
+        "plaintext_hash",
+    ] {
+        secrets.push(metadata[field].as_str().unwrap().to_owned());
+    }
     // The Flow private keys: every line of their bodies, and the sealed texts.
     secrets.extend(
         [super::flows::KEY_PEM, super::flows::OTHER_KEY_PEM]
@@ -4545,6 +4618,9 @@ fn check_audit(logs: &str) {
             "flow_key_set",
             "flow_key_set",
             "flow_key_deleted",
+            // Roadmap M5d2: a number's business public key, set once (the
+            // two refusals and the read are not changes).
+            "business_public_key_set",
             // Roadmap M5g: a QR code's deletion, the blocks and the unblock.
             "qr_code_deleted",
             "template_insights_enabled",
