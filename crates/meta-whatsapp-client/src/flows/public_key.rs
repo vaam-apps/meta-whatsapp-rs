@@ -300,7 +300,11 @@ mod tests {
         match content.len() {
             n if n < 0x80 => out.push(u8::try_from(n).unwrap()),
             n if n < 0x100 => out.extend([0x81, u8::try_from(n).unwrap()]),
-            n => out.extend([0x82, u8::try_from(n >> 8).unwrap(), (n & 0xff) as u8]),
+            n => out.extend([
+                0x82,
+                u8::try_from(n >> 8).unwrap(),
+                u8::try_from(n & 0xff).unwrap(),
+            ]),
         }
         out.extend_from_slice(content);
         out

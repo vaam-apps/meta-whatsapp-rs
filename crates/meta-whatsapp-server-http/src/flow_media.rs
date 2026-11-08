@@ -125,7 +125,7 @@ where
     let _driver = AbortOnDrop(tokio::spawn(async move {
         let _ = connection.await;
     }));
-    let result = async {
+    async {
         let request = Request::get(target.destination.path_and_query.as_str())
             .header(header::HOST, target.destination.authority.as_str())
             .header(header::USER_AGENT, "meta-whatsapp-rs")
@@ -169,8 +169,7 @@ where
         }
         Ok(file)
     }
-    .await;
-    result
+    .await
 }
 
 /// Aborts the connection's task when dropped: on the way out, and when the

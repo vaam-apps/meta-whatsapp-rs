@@ -139,7 +139,11 @@ async fn a_business_key_is_in_no_log_line_and_its_change_is_audited() {
         ],
         "{audited:?}"
     );
-    let key_id = key.split('_').nth(1).unwrap();
+    check_fields(&audited, key.split('_').nth(1).unwrap(), &public, &other);
+}
+
+/// The two `business_public_key_set` events' fields.
+fn check_fields(audited: &[serde_json::Value], key_id: &str, public: &str, other: &str) {
     let fields = &audited[1];
     assert_eq!(fields["tenant"], TENANT, "{fields}");
     assert_eq!(fields["waba_id"], WABA, "{fields}");
