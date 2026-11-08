@@ -92,6 +92,24 @@ fn public_key_pem_matches_openssl_output() {
     assert_eq!(key.public_key_pem().unwrap(), PUBLIC);
 }
 
+#[test]
+fn the_public_half_parses_as_the_same_2048_bit_key_as_openssls() {
+    use crate::flows::Rsa2048PublicKey;
+    let ours = Rsa2048PublicKey::from_pem(
+        &FlowEndpointKey::from_pem(PKCS8)
+            .unwrap()
+            .public_key_pem()
+            .unwrap(),
+    )
+    .unwrap();
+    let openssl = Rsa2048PublicKey::from_pem(PUBLIC).unwrap();
+    assert_eq!(ours, openssl);
+    assert_eq!(ours.to_pem(), PUBLIC);
+    // Another key is another key.
+    let other = Rsa2048PublicKey::from_pem(include_str!("../testdata/rsa2048_public.pem")).unwrap();
+    assert_ne!(ours, other);
+}
+
 // ── Round trip with a key generated in-test ───────────────────────────────
 
 struct SimulatedClient {

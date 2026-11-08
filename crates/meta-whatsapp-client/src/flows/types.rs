@@ -13,7 +13,7 @@ use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::common::SecretUrl;
+use crate::common::{HealthStatus, SecretUrl};
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 
@@ -330,6 +330,12 @@ pub struct UpdateFlow {
     /// New data endpoint URL (Flow JSON 3.0 and later only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_uri: Option<String>,
+    /// The Meta app to connect to the Flow. Every Flow with an endpoint
+    /// needs one (`flows/guides/flowsapi`, "Updating Flow's metadata"); a
+    /// Flow without one is `BLOCKED` in its
+    /// [`health_status`](FlowDetails::health_status) (`app_check`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<String>,
 }
 
 impl UpdateFlow {
@@ -359,9 +365,27 @@ impl UpdateFlow {
         self
     }
 
+    /// Connect the Meta app with this id to the Flow.
+    #[must_use]
+    pub fn application_id(mut self, application_id: impl Into<String>) -> Self {
+        self.application_id = Some(application_id.into());
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if self.name.is_none() && self.categories.is_none() && self.endpoint_uri.is_none() {
+        if self.name.is_none()
+            && self.categories.is_none()
+            && self.endpoint_uri.is_none()
+            && self.application_id.is_none()
+        {
             return Err(ValidationError::new("body", "nothing to update"));
+        }
+        if self
+            .application_id
+            .as_deref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(ValidationError::new("application_id", "must not be empty"));
         }
         if self.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
             return Err(ValidationError::new("name", "must not be empty"));
@@ -430,6 +454,15 @@ pub struct FlowDetails {
     /// The Meta app that created the Flow. Documented only as "object".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application: Option<serde_json::Value>,
+    /// Whether the Flow can be sent, with the reason when it cannot. Only
+    /// present when requested through `fields`
+    /// ([`super::Flow::health_status`]). The type a phone number's or a
+    /// template's health status has; its `FLOW` entity is the Flow's own
+    /// node (its `errors` are the publishing checks that fail), the
+    /// `WABA`, `BUSINESS` and `APP` entities are the other nodes a send
+    /// involves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_status: Option<HealthStatus>,
 }
 
 /// Shareable, login-free web preview of a Flow.

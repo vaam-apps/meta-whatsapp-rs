@@ -17,7 +17,7 @@
 //! | Accessor | Scope | Calls |
 //! | --- | --- | --- |
 //! | [`Client::flows`](crate::Client::flows) | WABA | [`Flows::create`], [`Flows::list`], [`Flows::list_stream`] |
-//! | [`Client::flow`](crate::Client::flow) | one Flow | [`Flow::get`], [`Flow::update`], [`Flow::upload_flow_json`], [`Flow::upload_flow_json_typed`], [`Flow::assets`], [`Flow::preview`], [`Flow::publish`], [`Flow::deprecate`], [`Flow::delete`] |
+//! | [`Client::flow`](crate::Client::flow) | one Flow | [`Flow::get`], [`Flow::update`], [`Flow::upload_flow_json`], [`Flow::upload_flow_json_typed`], [`Flow::assets`], [`Flow::health_status`], [`Flow::preview`], [`Flow::publish`], [`Flow::deprecate`], [`Flow::delete`] |
 //! | [`Client::business_encryption`](crate::Client::business_encryption) | phone number | [`BusinessEncryption::set_public_key`], [`BusinessEncryption::get`] |
 //!
 //! Not covered: sending a Flow (an interactive `flow` message or a template
@@ -114,6 +114,7 @@
 mod encryption;
 pub mod flow_json;
 mod management;
+mod public_key;
 mod types;
 
 #[cfg(feature = "flows-endpoint")]
@@ -126,6 +127,7 @@ pub use crate::common::SecretUrl;
 pub use encryption::{BusinessEncryption, BusinessPublicKey, PublicKeySignatureStatus};
 pub use flow_json::FlowJson;
 pub use management::{Flow, Flows};
+pub use public_key::{MAX_PUBLIC_KEY_PEM_BYTES, Rsa2048PublicKey};
 pub use types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowAssetType, FlowCategory, FlowDetails, FlowJsonUpload,
     FlowPreview, FlowStatus, FlowValidationError, FlowValidationPointer, ListFlowAssets, ListFlows,
