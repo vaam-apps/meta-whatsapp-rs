@@ -5,7 +5,7 @@ description: "Managing a business number's settings through meta-whatsapp-server
 
 # meta-whatsapp-rs-server-number-settings
 
-> **Verified against meta-whatsapp-rs 6802f4d141d61d8f77e4afbe7b72f15c5f34f155 (2026-11-07).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 580585f006a10e12060844044e84fd8d7fcfe513 (2026-11-08).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/number-settings.ts](examples/number-settings.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#number-settings).
 

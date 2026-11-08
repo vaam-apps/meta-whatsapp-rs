@@ -1,6 +1,6 @@
 # A WABA's health status and a number's webhook override
 
-> **Verified against meta-whatsapp-rs 6802f4d141d61d8f77e4afbe7b72f15c5f34f155 (2026-11-07).** Source: `docs/design/server.md` D440 to D445 and `tests/webhook_override.rs`.
+> **Verified against meta-whatsapp-rs 580585f006a10e12060844044e84fd8d7fcfe513 (2026-11-08).** Source: `docs/design/server.md` D440 to D445 and `tests/webhook_override.rs`.
 
 The routes are in [../SKILL.md](../SKILL.md); the calls are the functions
 wabaHealth, webhookOverride, setWebhookOverride and clearWebhookOverride of
