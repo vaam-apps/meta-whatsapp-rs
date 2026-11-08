@@ -15,6 +15,7 @@ use super::types::{
     ListFlows, UpdateFlow, validate_flow_json_len,
 };
 use crate::Client;
+use crate::common::HealthStatus;
 use crate::request::{PAGING_WITHHELD, paginate_or_error, reject_cursors};
 
 /// The body snippet of a preview answer that does not decode: its link
@@ -27,6 +28,13 @@ const PREVIEW_WITHHELD: &[u8] = b"(withheld: the preview link carries a viewing 
 /// `endpoint_uri`.
 const DETAIL_FIELDS: &str = "id,name,status,categories,validation_errors,json_version,\
 data_api_version,endpoint_uri,whatsapp_business_account,application";
+
+/// The one field [`Flow::health_status`] asks for.
+#[derive(serde::Deserialize)]
+struct FlowHealth {
+    #[serde(default)]
+    health_status: Option<HealthStatus>,
+}
 
 /// Flows owned by one WhatsApp Business Account. See [`Client::flows`].
 #[derive(Debug, Clone)]
@@ -142,6 +150,32 @@ impl Flow {
             .context("flow details response")
             .send()
             .await
+    }
+
+    /// The Flow's health status (`GET /{FLOW_ID}?fields=health_status`):
+    /// whether it can be sent, node by node (the Flow, the WABA, the
+    /// business portfolio and the app), with the reason when it cannot.
+    /// With `phone_number`, `health_status.phone_number(ID)` also asks
+    /// whether the Flow can be used with that number
+    /// (`flows/guides/flowsapi`, "Retrieving Flow details").
+    ///
+    /// `None` when Meta answers without the field.
+    pub async fn health_status(
+        &self,
+        phone_number: Option<&meta_whatsapp_core::ids::PhoneNumberId>,
+    ) -> Result<Option<HealthStatus>> {
+        let fields = match phone_number {
+            Some(id) => format!("health_status.phone_number({})", id.as_str()),
+            None => "health_status".to_owned(),
+        };
+        let details: FlowHealth = self
+            .client
+            .get_at(&[self.flow_id.as_str()])
+            .query("fields", fields)
+            .context("flow health status response")
+            .send()
+            .await?;
+        Ok(details.health_status)
     }
 
     /// The Flow's web preview link (`GET /{FLOW_ID}?fields=preview.invalidate(..)`).

@@ -90,6 +90,8 @@ base64.workspace = true
 # whole suite in its own crate.
 meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
 hex.workspace = true
+# tests/business_key.rs: the urlencoded form Meta receives.
+url.workspace = true
 http-body-util.workspace = true
 pretty_assertions.workspace = true
 serde_json.workspace = true

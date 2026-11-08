@@ -318,6 +318,12 @@ pub enum Operation {
     GetFlowKey,
     /// `delete_flow_key`: a WABA's Flow key deleted (roadmap M5d2).
     DeleteFlowKey,
+    /// `set_business_public_key`: a number's Flows business public key set at Meta (roadmap M5d2).
+    SetBusinessPublicKey,
+    /// `get_business_public_key`: the business public key Meta holds for a number (roadmap M5d2).
+    GetBusinessPublicKey,
+    /// `download_flow_media`: a Flow's uploaded media downloaded, verified and decrypted (roadmap M5d2).
+    DownloadFlowMedia,
     /// `get_commerce_settings`: a number's commerce settings (roadmap M5g).
     GetCommerceSettings,
     /// `update_commerce_settings`: a number's commerce settings changed: the cart enabled or not, the catalog shown or not (roadmap M5g).
@@ -424,7 +430,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 185] = [
+    pub const ALL: [Self; 188] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -559,6 +565,9 @@ impl Operation {
         Self::SetFlowKey,
         Self::GetFlowKey,
         Self::DeleteFlowKey,
+        Self::SetBusinessPublicKey,
+        Self::GetBusinessPublicKey,
+        Self::DownloadFlowMedia,
         Self::GetCommerceSettings,
         Self::UpdateCommerceSettings,
         Self::ListCatalogs,
@@ -750,6 +759,9 @@ impl Operation {
             Self::SetFlowKey => "set_flow_key",
             Self::GetFlowKey => "get_flow_key",
             Self::DeleteFlowKey => "delete_flow_key",
+            Self::SetBusinessPublicKey => "set_business_public_key",
+            Self::GetBusinessPublicKey => "get_business_public_key",
+            Self::DownloadFlowMedia => "download_flow_media",
             Self::GetCommerceSettings => "get_commerce_settings",
             Self::UpdateCommerceSettings => "update_commerce_settings",
             Self::ListCatalogs => "list_catalogs",
@@ -879,7 +891,10 @@ impl Operation {
             | Self::DeleteFlow
             | Self::SetFlowKey
             | Self::GetFlowKey
-            | Self::DeleteFlowKey => Scope::Flows,
+            | Self::DeleteFlowKey
+            | Self::SetBusinessPublicKey
+            | Self::GetBusinessPublicKey
+            | Self::DownloadFlowMedia => Scope::Flows,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }

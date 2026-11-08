@@ -25,6 +25,7 @@ use meta_whatsapp_server_core::bot::{BotRecords, BotReplies, BotSettings};
 use meta_whatsapp_server_core::broadcasts::{BroadcastRecords, BroadcastSettings};
 use meta_whatsapp_server_core::calls::CallRecords;
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
+use meta_whatsapp_server_core::flow_media::FlowMediaDeployment;
 use meta_whatsapp_server_core::flows_endpoint::{FlowsDeployment, FlowsEndpoint};
 use meta_whatsapp_server_core::groups::GroupRecords;
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
@@ -152,6 +153,19 @@ pub struct Settings {
     /// `serve` applies it to [`Self::flows`]; the field is the setting's
     /// record.
     pub flows_deployment_key_fallback: bool,
+    /// `WA_SERVER_FLOWS_MEDIA_HOSTS` (roadmap M5d2, design D455, pending
+    /// the owner's confirmation before the first release): the host names a
+    /// Flow's uploaded media may be downloaded from, comma-separated,
+    /// `*.`-prefixed ones allowed, names only
+    /// ([`meta_whatsapp_server_core::flow_media::media_hosts`]). `None`:
+    /// the default, `*.whatsapp.net`. `serve` applies it to
+    /// [`Self::flow_media`]; the field is the setting's record.
+    pub flows_media_hosts: Option<String>,
+    /// The download of a Flow's uploaded media (roadmap M5d2): the host
+    /// list, the lookup and the fetcher. `None`, `POST
+    /// /v1/wabas/{waba_id}/flows/media` is `403 feature_not_available`
+    /// (the default, for tests; `serve` sets it).
+    pub flow_media: Option<FlowMediaDeployment>,
     /// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3, pending the owner's
     /// confirmation before the first release): whether the legal acts a
     /// tenant may ask for are taken: the compliance information
@@ -216,6 +230,8 @@ impl Default for Settings {
             webhooks_out: None,
             flows: None,
             flows_deployment_key_fallback: true,
+            flows_media_hosts: None,
+            flow_media: None,
             legal_acts: false,
             send_messaging_account_id: true,
             broadcasts: BroadcastSettings::default(),

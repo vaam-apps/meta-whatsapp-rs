@@ -39,6 +39,7 @@ pub mod api;
 pub mod auth;
 pub mod error;
 pub mod events;
+pub mod flow_media;
 pub mod idempotency;
 pub mod listen;
 pub mod metrics;

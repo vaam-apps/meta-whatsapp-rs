@@ -262,7 +262,10 @@ impl RouteClass {
             | Operation::DeleteFlow
             | Operation::SetFlowKey
             | Operation::GetFlowKey
-            | Operation::DeleteFlowKey => Self::Templates,
+            | Operation::DeleteFlowKey
+            | Operation::SetBusinessPublicKey
+            | Operation::GetBusinessPublicKey
+            | Operation::DownloadFlowMedia => Self::Templates,
             Operation::IssueOtp => Self::OtpIssue,
             Operation::VerifyOtp => Self::OtpVerify,
         }
@@ -715,6 +718,9 @@ mod tests {
             ("set_flow_key", RouteClass::Templates),
             ("get_flow_key", RouteClass::Templates),
             ("delete_flow_key", RouteClass::Templates),
+            ("set_business_public_key", RouteClass::Templates),
+            ("get_business_public_key", RouteClass::Templates),
+            ("download_flow_media", RouteClass::Templates),
             ("get_commerce_settings", RouteClass::Read),
             ("update_commerce_settings", RouteClass::Send),
             ("list_catalogs", RouteClass::Read),

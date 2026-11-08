@@ -193,3 +193,18 @@ pub fn signed_with(waba: &str, body: &[u8], secret: &str) -> Call {
 pub fn signed(waba: &str, body: &[u8]) -> Call {
     signed_with(waba, body, APP_SECRET)
 }
+
+/// The public half of a private key in PEM (roadmap M5d2).
+pub fn public_key_pem(private_pem: &str) -> String {
+    FlowEndpointKey::from_pem(private_pem)
+        .unwrap()
+        .public_key_pem()
+        .unwrap()
+}
+
+/// The media vector's object, as a data exchange request carries it
+/// (`tests/flows_data/kat_media.json`; roadmap M5d2).
+pub fn media_object() -> Value {
+    let kat: Value = serde_json::from_str(include_str!("../flows_data/kat_media.json")).unwrap();
+    kat["media"].clone()
+}

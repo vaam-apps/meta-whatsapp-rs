@@ -264,7 +264,7 @@ async fn flows_are_listed_and_read() {
 /// flows/guides/flowsapi, "Updating Flow's metadata": the Flow is read for
 /// its WABA first, then `POST /{FLOW-ID}` carries the documented fields;
 /// `204`. Refused before any request: an empty change, a key Meta's page
-/// does not list (`application_id` is the library's gap), a blank name, an
+/// does not list, an `application_id` that is not digits, a blank name, an
 /// endpoint that is not `https`. Decisive: `Flows::update`'s read and
 /// `flows::flow_change`'s checks.
 #[tokio::test]
@@ -289,9 +289,23 @@ async fn a_flows_metadata_is_changed() {
     assert_eq!(updated.json(), Some(body));
     assert_eq!(h.graph.remaining(), 0);
 
+    // Connecting the Meta app (roadmap M5d2): the page's `application_id`.
+    h.graph.push_json(200, flow_of(WABA));
+    h.graph.push_json(200, json!({"success": true}));
+    let connect = json!({"application_id": "1234567890"});
+    let reply = h
+        .call(call(Method::PATCH, &flows_path(&format!("/{FLOW}")), &key).json(&connect))
+        .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
+    assert_eq!(h.graph.last_request().unwrap().json(), Some(connect));
+    assert_eq!(h.graph.remaining(), 0);
+    let sent = h.graph.requests().len();
+
     for (body, field) in [
         (json!({}), "body"),
-        (json!({"application_id": "1"}), "body"),
+        (json!({"application_ref": "1"}), "body"),
+        (json!({"application_id": "app one"}), "application_id"),
+        (json!({"application_id": ""}), "application_id"),
         (json!({"name": " "}), "name"),
         (json!({"categories": []}), "categories"),
         (
@@ -310,7 +324,7 @@ async fn a_flows_metadata_is_changed() {
         );
         assert_eq!(reply.json()["error"]["field"], field, "{body}");
     }
-    assert_eq!(h.graph.requests().len(), 2, "nothing sent for a refusal");
+    assert_eq!(h.graph.requests().len(), sent, "nothing sent for a refusal");
 }
 
 /// flows/guides/flowsapi, "Updating a Flow's Flow JSON": the Flow is read,

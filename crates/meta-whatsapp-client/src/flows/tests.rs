@@ -577,3 +577,99 @@ async fn graph_errors_and_unsuccessful_answers_surface() {
     assert!(flow.delete().await.is_err(), "success: false is an error");
     assert_eq!(t.remaining(), 0);
 }
+
+#[tokio::test]
+async fn update_connects_an_application() {
+    // `application_id` of `flows/guides/flowsapi`, "Updating Flow's metadata".
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"success": true}));
+    client(&t)
+        .flow("FLOW-ID")
+        .update(&UpdateFlow::new().application_id("1234567890"))
+        .await
+        .unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/FLOW-ID");
+    assert_eq!(req.json(), Some(json!({"application_id": "1234567890"})));
+    assert_eq!(t.remaining(), 0);
+
+    // It counts as a change, and an empty id is not one.
+    let flow = client(&t).flow("FLOW-ID");
+    let err = flow
+        .update(&UpdateFlow::new().application_id("  "))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Validation(v) if v.field == "application_id"),
+        "{err}"
+    );
+    assert_eq!(t.requests().len(), 1, "nothing was sent for it");
+}
+
+#[tokio::test]
+async fn health_status_is_asked_for_alone_or_for_a_number() {
+    use crate::common::{HealthEntityType, HealthState};
+    // The sample response of `flows/guides/flowsapi`, "Retrieving Flow details".
+    let doc = json!({
+        "id": "<Flow-ID>",
+        "health_status": {
+            "can_send_message": "BLOCKED",
+            "entities": [
+                {"entity_type": "FLOW", "id": "<Flow-ID>", "can_send_message": "BLOCKED",
+                 "errors": [
+                    {"error_code": 131000,
+                     "error_description": "endpoint_uri: You need to set the endpoint URI before you can send or publish a flow.",
+                     "possible_solution": "/documentation/business-messaging/whatsapp/flows/guides/flowjson#top-level-flow-json-properties"},
+                    {"error_code": 131000,
+                     "error_description": "app_check: You need to connect a Meta app to the flow before you can send or publish it.",
+                     "possible_solution": "/docs/development/create-an-app"}]},
+                {"entity_type": "WABA", "id": "<WABA-ID>", "can_send_message": "AVAILABLE"},
+                {"entity_type": "BUSINESS", "id": "<Business-ID>", "can_send_message": "AVAILABLE"},
+                {"entity_type": "APP", "id": "<App-ID>", "can_send_message": "LIMITED",
+                 "additional_info": ["Your app is not subscribed to the message webhook. This means you will not receive any messages sent to your phone number."]}
+            ]
+        }
+    });
+    let t = ScriptedTransport::new();
+    t.push_json(200, doc.clone());
+    t.push_json(200, doc);
+    t.push_json(200, json!({"id": "F"}));
+    let flow = client(&t).flow("F");
+    let health = flow.health_status(None).await.unwrap().unwrap();
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::GET);
+    assert_eq!(req.path(), "/v25.0/F");
+    assert_eq!(req.query("fields").as_deref(), Some("health_status"));
+    assert_eq!(health.can_send_message, Some(HealthState::Blocked));
+    assert_eq!(health.entities.len(), 4);
+    // The Flow's own node is not one the library names: it stays readable.
+    let own = &health.entities[0];
+    assert_eq!(own.entity_type.as_str(), "FLOW");
+    assert_eq!(own.errors.len(), 2);
+    assert_eq!(own.errors[1].error_code, Some(131_000));
+    let app = health.entity(&HealthEntityType::App).unwrap();
+    assert_eq!(app.can_send_message, Some(HealthState::Limited));
+    assert_eq!(app.additional_info.len(), 1);
+
+    let number = meta_whatsapp_core::ids::PhoneNumberId::new("106540352242922").unwrap();
+    flow.health_status(Some(&number)).await.unwrap();
+    assert_eq!(
+        t.last_request().unwrap().query("fields").as_deref(),
+        Some("health_status.phone_number(106540352242922)")
+    );
+    // An answer without the field is "none", not an error.
+    assert_eq!(flow.health_status(None).await.unwrap(), None);
+    assert_eq!(t.remaining(), 0);
+}
+
+#[test]
+fn flow_details_carry_a_health_status_when_asked() {
+    let details: FlowDetails = serde_json::from_value(json!({
+        "id": "F", "health_status": {"can_send_message": "AVAILABLE", "entities": []}
+    }))
+    .unwrap();
+    assert!(details.health_status.is_some());
+    let plain: FlowDetails = serde_json::from_value(json!({"id": "F"})).unwrap();
+    assert_eq!(plain.health_status, None);
+}
