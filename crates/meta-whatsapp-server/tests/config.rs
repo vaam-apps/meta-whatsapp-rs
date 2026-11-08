@@ -1172,3 +1172,34 @@ fn reads_whether_the_deployment_flow_key_is_a_fallback() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Roadmap M5d2 (design D455): `WA_SERVER_FLOWS_MEDIA_HOSTS` lists host
+/// **names** a Flow's uploaded media may be downloaded from; unset or
+/// blank is the default; an address or a CIDR refuses the start naming the
+/// variable (a CIDR would admit private addresses of a listed name).
+/// Decisive: `flow_media::media_hosts`' refusal of addresses and CIDRs.
+#[test]
+fn reads_the_hosts_a_flows_media_may_come_from() {
+    let hosts = |value: Option<&str>| {
+        let env = match value {
+            Some(v) => production().set("WA_SERVER_FLOWS_MEDIA_HOSTS", v),
+            None => production(),
+        };
+        Config::from_env(&env).unwrap().settings.flows_media_hosts
+    };
+    assert_eq!(hosts(None), None);
+    assert_eq!(hosts(Some("  ")), None);
+    assert_eq!(
+        hosts(Some("*.whatsapp.net, cdn.example")),
+        Some("*.whatsapp.net, cdn.example".to_owned())
+    );
+    for bad in ["10.0.0.0/8", "*.whatsapp.net, 169.254.169.254", "::1", "not a host"] {
+        match refused(&production().set("WA_SERVER_FLOWS_MEDIA_HOSTS", bad)) {
+            ConfigError::Invalid { name, reason } => {
+                assert_eq!(name, "WA_SERVER_FLOWS_MEDIA_HOSTS");
+                assert!(!reason.contains(bad), "{reason}");
+            }
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}
