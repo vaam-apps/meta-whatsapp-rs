@@ -971,3 +971,61 @@ async fn a_hung_send_does_not_hold_the_delivery() {
     deliver(&w.h, &body).await;
     assert_eq!(sent.load(Ordering::SeqCst), 1);
 }
+
+/// A timer over a fake clock whose waits never end: a budget that does not
+/// refill.
+#[derive(Debug)]
+struct Stuck(meta_whatsapp_rs::core::clock::ManualClock);
+
+impl Clock for Stuck {
+    fn now(&self) -> time::OffsetDateTime {
+        self.0.now()
+    }
+}
+
+#[async_trait]
+impl meta_whatsapp_rs::bot::Timer for Stuck {
+    async fn sleep_until(&self, _deadline: time::OffsetDateTime) {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// An answer waits for the number's budget (which broadcasts share) only
+/// so long: past five seconds it is dropped and the delivery goes on, so a
+/// broadcast cannot hold the webhook behind it. Decisive: `MAX_PACE_WAIT`
+/// around `Pacer::acquire` in `BotReplies::answer`; delete it and the
+/// delivery waits for the request deadline.
+#[tokio::test(start_paused = true)]
+async fn an_answer_does_not_wait_for_the_budget_forever() {
+    let clock = meta_whatsapp_rs::core::clock::ManualClock::new(time::OffsetDateTime::now_utc());
+    let settings = meta_whatsapp_server::state::Settings {
+        broadcasts: meta_whatsapp_server_core::broadcasts::BroadcastSettings {
+            rate_per_second: 1,
+            timer: Some(Arc::new(Stuck(clock.clone()))),
+            ..Default::default()
+        },
+        ..common::test_settings()
+    };
+    let h = Harness::with_clock(common::Stores::memory(), settings, clock.clone(), |g| {
+        Arc::new(g)
+    });
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Bot]).await;
+    let w = World { h, key, clock };
+    add(&w, &command("hello", "hi")).await;
+    enable(&w).await;
+    script(&w.h, 3);
+    // The first answer takes the one token; the second finds none, ever.
+    deliver(&w.h, &inbound("wamid.Q1", "/hello")).await;
+    assert_eq!(w.h.graph.requests().len(), 1);
+    let started = tokio::time::Instant::now();
+    deliver(&w.h, &inbound("wamid.Q2", "/hello")).await;
+    let took = started.elapsed();
+    assert_eq!(w.h.graph.requests().len(), 1, "sent without a slot");
+    assert!(
+        took >= meta_whatsapp_server_core::bot::MAX_PACE_WAIT
+            && took < meta_whatsapp_server_core::bot::MAX_PACE_WAIT + Duration::from_secs(2),
+        "the delivery waited {took:?}"
+    );
+}
