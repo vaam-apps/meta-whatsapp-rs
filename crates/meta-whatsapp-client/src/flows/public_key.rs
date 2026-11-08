@@ -109,7 +109,13 @@ fn parse_spki(der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     rest.is_empty().then_some(())?;
     let modulus = magnitude(modulus)?;
     let exponent = magnitude(exponent)?;
-    (modulus.len() == MODULUS_BYTES).then_some(())?;
+    // Exactly 2048 bits (the top bit of the first byte set: a 2047-bit
+    // modulus in 256 bytes is another size) and odd (a product of two odd
+    // primes).
+    (modulus.len() == MODULUS_BYTES
+        && modulus.first().is_some_and(|b| b & 0x80 != 0)
+        && modulus.last().is_some_and(|b| b & 1 == 1))
+    .then_some(())?;
     // A public exponent is odd, at least 3, and fits a word.
     (exponent.len() <= 8 && exponent.last().is_some_and(|b| b & 1 == 1) && exponent != [1])
         .then_some(())?;
@@ -286,5 +292,229 @@ mod tests {
             STANDARD.encode(&der)
         );
         assert!(Rsa2048PublicKey::from_pem(&pem).is_err());
+    }
+
+    /// DER of an SPKI with the given parts, for the hostile cases below.
+    fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        match content.len() {
+            n if n < 0x80 => out.push(u8::try_from(n).unwrap()),
+            n if n < 0x100 => out.extend([0x81, u8::try_from(n).unwrap()]),
+            n => out.extend([0x82, u8::try_from(n >> 8).unwrap(), (n & 0xff) as u8]),
+        }
+        out.extend_from_slice(content);
+        out
+    }
+
+    struct Parts {
+        oid: Vec<u8>,
+        params: Vec<u8>,
+        unused: u8,
+        modulus: Vec<u8>,
+        exponent: Vec<u8>,
+    }
+
+    impl Parts {
+        fn good() -> Self {
+            let mut modulus = vec![0x00, 0xc1];
+            modulus.extend(std::iter::repeat_n(0x5a, 254));
+            modulus.push(0x4b);
+            Self {
+                oid: RSA_ENCRYPTION_OID.to_vec(),
+                params: vec![0x05, 0x00],
+                unused: 0,
+                modulus,
+                exponent: vec![0x01, 0x00, 0x01],
+            }
+        }
+
+        fn der(&self) -> Vec<u8> {
+            let mut algorithm = tlv(0x06, &self.oid);
+            algorithm.extend_from_slice(&self.params);
+            let mut key = tlv(0x02, &self.modulus);
+            key.extend(tlv(0x02, &self.exponent));
+            let mut bits = vec![self.unused];
+            bits.extend(tlv(0x30, &key));
+            let mut spki = tlv(0x30, &algorithm);
+            spki.extend(tlv(0x03, &bits));
+            tlv(0x30, &spki)
+        }
+
+        fn parses(&self) -> bool {
+            parse_spki(&self.der()).is_some()
+        }
+    }
+
+    #[test]
+    fn the_hand_built_good_key_parses_so_the_hostile_cases_fail_for_their_own_reason() {
+        assert!(Parts::good().parses());
+    }
+
+    /// Decisive for the modulus rules: a 2047-bit modulus in 256 bytes (no
+    /// leading zero, top bit clear), 2049 bits (a leading zero and a
+    /// second one), an even modulus, zero, a negative one, a non-minimal
+    /// leading zero.
+    #[test]
+    fn a_modulus_that_is_not_2048_bits_odd_and_positive_is_refused() {
+        let mut p = Parts::good();
+        p.modulus = std::iter::once(0x40)
+            .chain(std::iter::repeat_n(0x5a, 254))
+            .chain([0x4b])
+            .collect();
+        assert!(!p.parses(), "2047 bits");
+        p.modulus = [0x00, 0x00, 0xc1]
+            .into_iter()
+            .chain(std::iter::repeat_n(0x5a, 254))
+            .chain([0x4b])
+            .collect();
+        assert!(!p.parses(), "a leading zero too many");
+        p.modulus = [0x01, 0xc1]
+            .into_iter()
+            .chain(std::iter::repeat_n(0x5a, 254))
+            .chain([0x4b])
+            .collect();
+        assert!(!p.parses(), "2057 bits");
+        p = Parts::good();
+        *p.modulus.last_mut().unwrap() = 0x4a;
+        assert!(!p.parses(), "even");
+        for modulus in [vec![], vec![0x00], vec![0xc1; 256], vec![0xff; 257]] {
+            p.modulus = modulus;
+            assert!(!p.parses(), "empty, zero or negative");
+        }
+    }
+
+    #[test]
+    fn an_exponent_that_is_not_an_odd_word_of_at_least_three_is_refused() {
+        for (exponent, ok) in [
+            (vec![0x01, 0x00, 0x01], true),
+            (vec![0x03], true),
+            (vec![0x00], false),
+            (vec![0x01], false),
+            (vec![0x02], false),
+            (vec![0x01, 0x00, 0x00], false),
+            (vec![], false),
+            (vec![0x80, 0x01], false),
+            (vec![0x00, 0x00, 0x01, 0x01], false),
+            (vec![0x7f; 9], false),
+        ] {
+            let mut p = Parts::good();
+            p.exponent = exponent.clone();
+            assert_eq!(p.parses(), ok, "{exponent:?}");
+        }
+    }
+
+    #[test]
+    fn the_algorithm_its_parameters_and_the_bit_string_are_exact() {
+        let mut p = Parts::good();
+        p.params = vec![];
+        assert!(!p.parses(), "no NULL");
+        p.params = vec![0x05, 0x01, 0x00];
+        assert!(!p.parses(), "a non-empty NULL");
+        p.params = vec![0x30, 0x00];
+        assert!(!p.parses(), "an empty SEQUENCE for parameters");
+        p.params = vec![0x05, 0x00, 0x05, 0x00];
+        assert!(!p.parses(), "two parameters");
+        p = Parts::good();
+        p.oid.push(0);
+        assert!(!p.parses(), "a longer OID");
+        p = Parts::good();
+        for unused in [1, 7, 8, 0xff] {
+            p.unused = unused;
+            assert!(!p.parses(), "{unused} unused bits");
+        }
+    }
+
+    /// Every truncation and every one-byte corruption of a valid key
+    /// either parses to a 2048-bit key or is refused: no panic. A prefix
+    /// never parses.
+    #[test]
+    fn a_truncated_or_corrupted_key_never_panics_and_a_prefix_never_parses() {
+        let der = Parts::good().der();
+        for n in 0..der.len() {
+            assert!(parse_spki(&der[..n]).is_none(), "prefix {n}");
+        }
+        for i in 0..der.len() {
+            for flip in [0x01u8, 0x80, 0xff] {
+                let mut bad = der.clone();
+                bad[i] ^= flip;
+                if let Some((modulus, exponent)) = parse_spki(&bad) {
+                    assert_eq!(modulus.len(), 256);
+                    assert!(modulus[0] & 0x80 != 0 && modulus[255] & 1 == 1);
+                    assert!(exponent.len() <= 8 && exponent[exponent.len() - 1] & 1 == 1);
+                }
+            }
+        }
+    }
+
+    /// The length encodings: indefinite, a long form of a short value, a
+    /// leading zero, wider than three bytes (and past `usize` on 32-bit),
+    /// longer than the data.
+    #[test]
+    fn hostile_lengths_are_refused() {
+        assert!(element(&[0x30, 0x80, 0x00, 0x00]).is_none(), "indefinite");
+        assert!(
+            element(&[0x30, 0x81, 0x05, 1, 2, 3, 4, 5]).is_none(),
+            "long form of 5"
+        );
+        let padded: Vec<u8> = [0x30, 0x82, 0x00, 0x80]
+            .into_iter()
+            .chain(std::iter::repeat_n(7, 128))
+            .collect();
+        assert!(element(&padded).is_none(), "leading zero, data complete");
+        assert!(
+            element(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff]).is_none(),
+            "4 bytes"
+        );
+        assert!(element(&[0x30, 0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]).is_none());
+        assert!(element(&[0x30, 0xff, 0xff]).is_none(), "127 length bytes");
+        assert!(
+            element(&[0x30, 0x82, 0xff, 0xff, 1]).is_none(),
+            "longer than the data"
+        );
+        assert!(element(&[0x30, 0x81]).is_none(), "cut in the length");
+        assert!(element(&[0x30]).is_none());
+        assert!(element(&[]).is_none());
+        assert_eq!(
+            element(
+                &[0x04, 0x81, 0x80]
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat_n(7, 128))
+                    .collect::<Vec<_>>()
+            )
+            .map(|(t, c, r)| (t, c.len(), r.len())),
+            Some((0x04, 128, 0))
+        );
+    }
+
+    /// A SEQUENCE where the key's SEQUENCE belongs, nested one level too
+    /// deep, or the integers outside it.
+    #[test]
+    fn nesting_confusion_is_refused() {
+        let good = Parts::good();
+        let mut key = tlv(0x02, &good.modulus);
+        key.extend(tlv(0x02, &good.exponent));
+        let wrapped = tlv(0x30, &tlv(0x30, &key));
+        let mut algorithm = tlv(0x06, &good.oid);
+        algorithm.extend_from_slice(&good.params);
+        let mut bits = vec![0u8];
+        bits.extend(wrapped);
+        let mut spki = tlv(0x30, &algorithm);
+        spki.extend(tlv(0x03, &bits));
+        assert!(parse_spki(&tlv(0x30, &spki)).is_none(), "doubly nested");
+        // Trailing bytes inside the key's SEQUENCE, a third integer.
+        let mut three = key.clone();
+        three.extend(tlv(0x02, &[1]));
+        let mut bits = vec![0u8];
+        bits.extend(tlv(0x30, &three));
+        let mut spki = tlv(0x30, &algorithm);
+        spki.extend(tlv(0x03, &bits));
+        assert!(parse_spki(&tlv(0x30, &spki)).is_none(), "a third integer");
+        // An OCTET STRING in the BIT STRING's place.
+        let mut bits = vec![0u8];
+        bits.extend(tlv(0x30, &key));
+        let mut spki = tlv(0x30, &algorithm);
+        spki.extend(tlv(0x04, &bits));
+        assert!(parse_spki(&tlv(0x30, &spki)).is_none(), "an OCTET STRING");
     }
 }
