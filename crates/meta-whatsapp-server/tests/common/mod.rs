@@ -1043,7 +1043,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 24] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 25] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1464,6 +1464,11 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"client_encryption_key": SAMPLE_CLIENT_KEY})
         }
         ("PUT", "/v1/numbers/{pn}/username") => serde_json::json!({"username": "lucky_shrub"}),
+        // Roadmap M5c6: the override is off in the harnesses that call
+        // every operation, so this asks Meta nothing there.
+        ("PUT", "/v1/numbers/{pn}/webhook-override") => {
+            serde_json::json!({"url": "https://93.184.216.34/wa", "verify_token": "t"})
+        }
         ("POST", "/v1/numbers/{pn}/official-business-account") => sample_oba_application(),
         ("PUT", "/v1/numbers/{pn}/compliance-info") => sample_compliance_info(),
         ("PUT", "/v1/numbers/{pn}/conversational-components") => serde_json::json!({

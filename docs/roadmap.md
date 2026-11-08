@@ -6828,9 +6828,9 @@ or WABA fails the family's own cross-tenant test).
     service follow-up, D310-D313). The marketing send (M5h, landed) names none: Meta's pages
     for `/marketing_messages` document no such field; pinned by the walk. Several bindings per number
     wait for OPEN_QUESTIONS #46.
-- [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,
-  156): the per-number webhook override, the `connection_status` and
-  `webhook_url` setters, a WABA's health status and bot details.
+- [ ] **M5c6. Number settings: what M5c3 left** (rows 133, 156):
+  the per-number webhook override, the `connection_status` and `webhook_url`
+  setters, a WABA's health status and bot details.
   - **After:** M5c3.
   - **Scope:** each is a decision before it is a route. The webhook
     override and the `webhook_url` setter would let a tenant divert or hide
@@ -6844,6 +6844,51 @@ or WABA fails the family's own cross-tenant test).
   - **Decisive:** M5.1, M5.2; the override's destination refused as a
     webhook endpoint's is; a WABA of another tenant's health status is
     `404`, nothing asked of Meta.
+  - **Slice landed (the item stays open):** a WABA's health status and the
+    per-number webhook override. `GET /v1/wabas/{waba_id}/health-status`
+    (`server_core::numbers::Waba::health_status`; operation
+    `get_waba_health_status`, scope `numbers`, class `read`): the caller's
+    own WABA only, and the answer withholds the entities the tenant does not
+    own (a number not bound to it, another WABA, a type unknown to this
+    version; D440). `GET`, `PUT`, `DELETE /v1/numbers/{pn}/webhook-override`
+    (`NumberSettings::webhook_override`, `set_webhook_override`,
+    `clear_webhook_override`; D441 to D444): the `PUT` takes a scope of
+    its own, `webhook_override` (`Scope::WebhookOverride`: `numbers` does not
+    grant it, and `GET` and `DELETE` stay `numbers`'; D441, the coordinator's
+    swap), and is `403 feature_not_available` with nothing asked of Meta
+    unless `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE=on` (default `off`;
+    `Settings::number_webhook_override`; the gate is an extractor before the
+    vault and again in the core), its URL goes through the same
+    `server_core::webhooks_out::destination::pin` as a webhook endpoint's before anything
+    is sent, in the serialization the check read (`422` on `url`; `409
+    webhooks_not_configured` without webhooks out), the token and the URL are in no log or audit event
+    (`webhook_override_set`, `webhook_override_refused`), and clearing
+    (`webhook_override_cleared`) is never gated. The library needed nothing
+    new (`PhoneNumber::set_webhook_override`, `clear_webhook_override`,
+    `get(&["webhook_configuration"])`). Tests:
+    `tests/webhook_override.rs` (another tenant's WABA `404` with the vault
+    unread; the same URLs refused by both the endpoint route and the
+    override: private, loopback, metadata, `http`, a name resolving inside,
+    credentials; the setting off; clearing in all four settings states;
+    exact requests), `tests/common/capture.rs` (a planted verify token and
+    URL path, the audit events), `tests/config.rs`, `tests/authz.rs`,
+    `tests/errors.rs`. The parity rows of the override and of a WABA's
+    health are done on both sides; the rows of bot details and of the
+    two setters stay partial.
+  - **Decided:** D440 to D445, by the coordinator on 2026-11-07 under the
+    owner's delegation, swappable (D441 changed: the set's own scope instead
+    of the setting alone; its swap folds the scope back into `numbers`). New
+    names pending the owner's confirmation before the first release: the
+    scope `webhook_override`, the setting
+    `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, the operation ids
+    `get_waba_health_status`, `get_webhook_override`,
+    `set_webhook_override` and `clear_webhook_override`, the two paths, and
+    the audit actions `webhook_override_set`, `webhook_override_cleared` and
+    `webhook_override_refused` (and its reasons).
+  - **Still open:** the `connection_status` setter (no documented effect),
+    bot details by id (no page says where a bot id comes from), the
+    `webhook_url` setter, the WABA-level callback override, and
+    `cloud_encryption_key` (the owner's, D191).
 - [x] **M5d. Flows** (rows 61, 62): management and the data endpoint.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request

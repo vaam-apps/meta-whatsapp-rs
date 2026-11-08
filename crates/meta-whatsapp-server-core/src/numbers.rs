@@ -24,6 +24,7 @@
 
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::business_profile::{Profile, ProfileField, ProfileUpdate, Vertical};
+use meta_whatsapp_rs::client::common::{HealthEntityType, HealthStatus};
 use meta_whatsapp_rs::client::phone_numbers::PhoneNumberInfo;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -420,6 +421,35 @@ impl std::fmt::Debug for Waba<'_> {
     }
 }
 
+/// The shortest run of digits taken for an id (a phone number id, a WABA
+/// id, a business id are 15 or 16; error codes and counts are shorter).
+const ID_DIGITS: usize = 8;
+
+/// `text` with every run of [`ID_DIGITS`] or more digits that is not in
+/// `known` replaced by `[id]`.
+fn withhold_unknown_ids(text: &str, known: &std::collections::HashSet<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() >= ID_DIGITS && !known.contains(run.as_str()) {
+            out.push_str("[id]");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
 impl<'a> Waba<'a> {
     /// The operations on `waba`, once `authz` admits it
     /// ([`Authorizer::admit_waba`]). Failed Graph calls are reported to
@@ -458,6 +488,92 @@ impl<'a> Waba<'a> {
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
         self
+    }
+
+    /// The WABA's health status (`GET /{waba_id}?fields=health_status`,
+    /// roadmap M5c6, design D440), for `caller`, whose tenant must be the
+    /// WABA's: another's is `404 not_found` **before** anything is asked of
+    /// Meta (the capability was made for the WABA's tenant; this checks it
+    /// is the caller's, so a capability handed to the wrong caller reads
+    /// nothing).
+    ///
+    /// Meta answers every node a message through the WABA involves; the
+    /// answer keeps what the tenant owns or already holds, and drops what
+    /// it might not: an entity of the WABA is kept for this WABA only, a
+    /// phone number for a number bound to the caller's tenant only (a
+    /// record read each), a template, the business portfolio and the app
+    /// as Meta names them, and an entity of a type this version does not
+    /// know is dropped (it could be anyone's). The overall
+    /// `can_send_message` is Meta's and carries no id.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` for a WABA that is not `caller`'s; `403 forbidden`
+    /// for a `caller` another [`Authorizer`] made; Meta's refusal or
+    /// failure, with its `details`; `503` from the records.
+    pub async fn health_status(&self, caller: &Caller) -> Result<HealthStatus, ServiceError> {
+        self.authz.admit(caller)?;
+        if caller.tenant() != self.owned.tenant() {
+            return Err(ServiceError::not_found());
+        }
+        let status = self
+            .owned
+            .client()
+            .waba(self.owned.waba_id().clone())
+            .health_status()
+            .await;
+        let mut status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                let api = self.owned.failed(self.authz, &error).await;
+                if error.graph().is_some() {
+                    self.observer.graph_error(api.code());
+                }
+                return Err(api.with_details(&error));
+            }
+        };
+        let mut kept = Vec::with_capacity(status.entities.len());
+        for entity in std::mem::take(&mut status.entities) {
+            let keep = match &entity.entity_type {
+                HealthEntityType::Waba => entity.id == self.owned.waba_id().as_str(),
+                HealthEntityType::PhoneNumber => match PhoneNumberId::new(&entity.id) {
+                    Ok(pn) => match self.authz.tenant_number(caller, &pn).await {
+                        Ok(()) => true,
+                        Err(refused) if refused.code() == "not_found" => false,
+                        Err(other) => return Err(other),
+                    },
+                    Err(_) => false,
+                },
+                HealthEntityType::MessageTemplate
+                | HealthEntityType::Business
+                | HealthEntityType::App => true,
+                _ => false,
+            };
+            if keep {
+                kept.push(entity);
+            }
+        }
+        // A kept node's texts may name another node ("number 1055… is
+        // blocked"): an id they carry that is not a kept node's is
+        // withheld, so no other tenant's number or WABA id leaves in a
+        // description either.
+        let known: std::collections::HashSet<String> =
+            kept.iter().map(|entity| entity.id.clone()).collect();
+        for entity in &mut kept {
+            for text in &mut entity.additional_info {
+                *text = withhold_unknown_ids(text, &known);
+            }
+            for error in &mut entity.errors {
+                for text in [&mut error.error_description, &mut error.possible_solution]
+                    .into_iter()
+                    .flatten()
+                {
+                    *text = withhold_unknown_ids(text, &known);
+                }
+            }
+        }
+        status.entities = kept;
+        Ok(status)
     }
 
     /// Disconnect the WABA: unsubscribe the app from it with its token;
@@ -533,6 +649,24 @@ impl<'a> Waba<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    #[test]
+    fn unknown_ids_in_a_health_text_are_withheld() {
+        let known: HashSet<String> = ["102290129340398".to_owned()].into();
+        assert_eq!(
+            withhold_unknown_ids(
+                "WABA 102290129340398 and 102290129340399; number 106540352242923 (code 141002).",
+                &known
+            ),
+            "WABA 102290129340398 and [id]; number [id] (code 141002)."
+        );
+        assert_eq!(withhold_unknown_ids("", &known), "");
+        assert_eq!(withhold_unknown_ids("1234567", &known), "1234567");
+        assert_eq!(withhold_unknown_ids("12345678", &known), "[id]");
+        assert_eq!(withhold_unknown_ids("x99999999", &known), "x[id]");
+    }
+
     use super::*;
 
     /// A website is an `http` or `https` URL with a host and no

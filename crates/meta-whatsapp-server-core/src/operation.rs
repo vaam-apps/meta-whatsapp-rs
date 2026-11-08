@@ -66,6 +66,14 @@ pub enum Operation {
     GetConversationalComponents,
     /// `set_conversational_components`: a number's welcome message flag, ice breakers and commands set (roadmap M5c3; pending the owner's confirmation before the first release).
     SetConversationalComponents,
+    /// `get_waba_health_status`: a WABA's health status, without another tenant's entity ids (roadmap M5c6; pending the owner's confirmation before the first release).
+    GetWabaHealthStatus,
+    /// `get_webhook_override`: whether a number has its own webhook callback, and its URL (roadmap M5c6; pending the owner's confirmation before the first release).
+    GetWebhookOverride,
+    /// `set_webhook_override`: a number's webhook callback overridden (scope `webhook_override`, which `numbers` does not grant; off until the deployment enables `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`; its URL checked as a webhook endpoint's is) (roadmap M5c6; pending the owner's confirmation before the first release).
+    SetWebhookOverride,
+    /// `clear_webhook_override`: a number's webhook callback override removed, so Meta delivers to the service again (always allowed to the number's owner) (roadmap M5c6; pending the owner's confirmation before the first release).
+    ClearWebhookOverride,
     /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (irreversible, an explicit erasure under the scope `erasure`, not gated by `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
     DeleteContactBookEntry,
     /// `get_business_verification`: a WABA's business verification status (roadmap M5j; pending the owner's confirmation before the first release).
@@ -416,7 +424,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 181] = [
+    pub const ALL: [Self; 185] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -439,6 +447,10 @@ impl Operation {
         Self::GetHealthStatus,
         Self::GetConversationalComponents,
         Self::SetConversationalComponents,
+        Self::GetWabaHealthStatus,
+        Self::GetWebhookOverride,
+        Self::SetWebhookOverride,
+        Self::ClearWebhookOverride,
         Self::DeleteContactBookEntry,
         Self::GetBusinessVerification,
         Self::CreateSolutionMigrationIntent,
@@ -626,6 +638,10 @@ impl Operation {
             Self::GetHealthStatus => "get_health_status",
             Self::GetConversationalComponents => "get_conversational_components",
             Self::SetConversationalComponents => "set_conversational_components",
+            Self::GetWabaHealthStatus => "get_waba_health_status",
+            Self::GetWebhookOverride => "get_webhook_override",
+            Self::SetWebhookOverride => "set_webhook_override",
+            Self::ClearWebhookOverride => "clear_webhook_override",
             Self::DeleteContactBookEntry => "delete_contact_book_entry",
             Self::GetBusinessVerification => "get_business_verification",
             Self::CreateSolutionMigrationIntent => "create_solution_migration_intent",
@@ -819,6 +835,9 @@ impl Operation {
             | Self::GetHealthStatus
             | Self::GetConversationalComponents
             | Self::SetConversationalComponents
+            | Self::GetWabaHealthStatus
+            | Self::GetWebhookOverride
+            | Self::ClearWebhookOverride
             | Self::DisconnectWaba
             | Self::RequestVerificationCode
             | Self::VerifyCode
@@ -969,6 +988,7 @@ impl Operation {
             | Self::TerminateCall
             | Self::UploadCallVoicemailAnnouncement => Scope::Calls,
             Self::GetCallSipCredentials => Scope::CallCredentials,
+            Self::SetWebhookOverride => Scope::WebhookOverride,
         }
     }
 }

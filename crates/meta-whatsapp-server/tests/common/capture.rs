@@ -332,6 +332,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // declarations and the contact book's id are secrets.
     secrets.section("number_settings");
     secrets.extend(number_settings(h, &admin).await);
+    // A number's webhook override and a WABA's health (roadmap M5c6): the
+    // verify token and the URL's path are secrets.
+    secrets.section("webhook_override");
+    secrets.extend(webhook_override(h, &admin).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.section("payments");
     secrets.extend(payments(h, &admin).await);
@@ -911,8 +915,25 @@ pub fn with_uploads(
         // Roadmap M5e2: the SIP password read answers, so that its route
         // runs through (it is off by default).
         call_sip_credentials: true,
+        // Roadmap M5c6: a number's webhook override can be set, so that
+        // its route runs through (it is off by default).
+        number_webhook_override: true,
         ..settings
     }
+}
+
+/// Webhooks out for a test that sets a number's webhook override with a URL
+/// that is an address (no lookup): `93.184.216.0/24` listed, `https` only.
+pub fn webhooks_out_for_an_address()
+-> meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut {
+    use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+    use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
+    meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut::new(
+        DataKeys::new(DataKey::generate("k1").unwrap()),
+        DestinationPolicy::parse("93.184.216.0/24", false).unwrap(),
+        std::sync::Arc::new(meta_whatsapp_server_http::webhooks_out::SystemResolver),
+        std::sync::Arc::new(meta_whatsapp_server_http::webhooks_out::HyperSender::new().unwrap()),
+    )
 }
 
 /// Webhooks out for a log test: a throwaway data key, loopback listed,
@@ -3546,6 +3567,193 @@ const PROMPT: &str = "PROMPT-LOG-SECRET-7XK";
 const COMMAND: &str = "cmdlogsecret7xk";
 const COMMAND_HINT: &str = "COMMAND-HINT-LOG-SECRET-7XK";
 
+/// The verify token of a number's webhook override and a secret in the
+/// path of its URL (roadmap M5c6), and an entity another tenant holds in
+/// a WABA's health status: in no log line.
+const OVERRIDE_TOKEN: &str = "OVERRIDE-VERIFY-TOKEN-LOG-SECRET-7XK";
+const OVERRIDE_PATH: &str = "override-path-log-secret-7xk";
+const FOREIGN_ENTITY: &str = "777000111222333";
+const FOREIGN_TEXT: &str = "FOREIGN-ENTITY-TEXT-LOG-SECRET-7XK";
+
+/// The audit actions of a number's webhook override (roadmap M5c6), in
+/// the order the scenario `webhook_override` takes them, with the outcome.
+const OVERRIDE_ACTIONS: [(&str, &str); 3] = [
+    ("webhook_override_set", "answered"),
+    ("webhook_override_set", "unknown"),
+    ("webhook_override_cleared", "answered"),
+];
+
+/// A number's webhook override (roadmap M5c6), the setting on: refused at a
+/// private address (audited as a refusal), set, read, set again with the
+/// call cut, cleared; and a WABA's health status with an entity of
+/// another tenant's in Meta's answer. Returns what must not be logged.
+async fn webhook_override(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["numbers", "webhook_override"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let url = format!("/v1/numbers/{PN}/webhook-override");
+    let hook = format!("http://127.0.0.1:9/{OVERRIDE_PATH}");
+    let put = |hook: &str| {
+        Call::new(Method::PUT, url.clone())
+            .key(&key)
+            .json(&json!({"url": hook, "verify_token": OVERRIDE_TOKEN}))
+    };
+    // Refused before anything is sent: a private address outside the list.
+    // Without webhooks out (a harness that has none) every set is `409
+    // webhooks_not_configured`, audited as a refusal, nothing sent.
+    let configured = h.state.settings().webhooks_out.is_some();
+    let refused = h
+        .call(put(&format!("http://10.0.0.1/{OVERRIDE_PATH}")))
+        .await;
+    assert_eq!(
+        refused.status.as_u16(),
+        if configured { 422 } else { 409 },
+        "{}",
+        refused.text
+    );
+    // Set.
+    if configured {
+        h.graph.push_json(200, json!({"success": true}));
+    }
+    assert_eq!(
+        h.call(put(&hook)).await.status.as_u16(),
+        if configured { 204 } else { 409 }
+    );
+    // Read: the number's own override, not the WABA's or the app's.
+    h.graph.push_json(
+        200,
+        json!({"webhook_configuration": {
+            "phone_number": hook,
+            "whatsapp_business_account": "https://waba-callback-log-secret-7xk.example/",
+            "application": "https://app-callback-log-secret-7xk.example/"
+        }, "id": PN}),
+    );
+    let read = h.call(Call::get(url.clone()).key(&key)).await;
+    assert_eq!(read.json(), json!({"url": hook}), "{}", read.text);
+    // Set again, with the call cut.
+    if configured {
+        h.graph
+            .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    }
+    assert_eq!(
+        h.call(put(&hook)).await.status.as_u16(),
+        if configured { 504 } else { 409 }
+    );
+    // Cleared.
+    h.graph.push_json(200, json!({"success": true}));
+    assert_eq!(
+        h.call(Call::new(Method::DELETE, url.clone()).key(&key))
+            .await
+            .status
+            .as_u16(),
+        204
+    );
+    // A WABA's health: another tenant's number is not in the answer.
+    h.graph.push_json(
+        200,
+        json!({"health_status": {"can_send_message": "BLOCKED", "entities": [
+            {"entity_type": "WABA", "id": "102290129340398", "can_send_message": "AVAILABLE"},
+            {"entity_type": "PHONE_NUMBER", "id": PN, "can_send_message": "AVAILABLE"},
+            {"entity_type": "PHONE_NUMBER", "id": FOREIGN_ENTITY, "can_send_message": "BLOCKED",
+             "errors": [{"error_code": 1, "error_description": FOREIGN_TEXT}]}
+        ]}, "id": "102290129340398"}),
+    );
+    let health = h
+        .call(Call::get("/v1/wabas/102290129340398/health-status").key(&key))
+        .await;
+    assert_eq!(health.status.as_u16(), 200, "{}", health.text);
+    assert!(!health.text.contains(FOREIGN_ENTITY), "{}", health.text);
+    assert!(!health.text.contains(FOREIGN_TEXT), "{}", health.text);
+    vec![
+        OVERRIDE_TOKEN.to_owned(),
+        OVERRIDE_PATH.to_owned(),
+        "waba-callback-log-secret-7xk".to_owned(),
+        "app-callback-log-secret-7xk".to_owned(),
+        FOREIGN_ENTITY.to_owned(),
+        FOREIGN_TEXT.to_owned(),
+    ]
+}
+
+/// The webhook override's audit events (roadmap M5c6; design D443): the
+/// set (answered, then cut), the clear, each with the tenant, the WABA,
+/// the number by id, the key and the outcome, and nothing else; and the
+/// refusal at a private address, with its reason, as a warning.
+fn check_override_audit(events: &[serde_json::Value], changes: &[&serde_json::Value]) {
+    let ours: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|action| action.starts_with("webhook_override_"))
+        })
+        .collect();
+    let seen: Vec<(&str, &str)> = ours
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    // A harness without webhooks out refuses every set (`not_configured`),
+    // and none is audited as a change.
+    let configured = !seen.is_empty() && seen[0].0 == "webhook_override_set";
+    let expected: Vec<(&str, &str)> = if configured {
+        OVERRIDE_ACTIONS.to_vec()
+    } else {
+        vec![("webhook_override_cleared", "answered")]
+    };
+    assert_eq!(seen, expected, "the webhook override's audit events");
+    for fields in ours {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "phone_number_id"
+                        | "setting"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
+    let refused: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["action"] == "webhook_override_refused")
+        .map(|e| &e["fields"])
+        .collect();
+    let reasons: Vec<&str> = refused
+        .iter()
+        .map(|fields| fields["reason"].as_str().unwrap_or_default())
+        .collect();
+    let expected: &[&str] = if configured {
+        &["destination"]
+    } else {
+        &["not_configured"; 3]
+    };
+    assert_eq!(reasons, expected, "the refusals' audit events: {refused:?}");
+    assert_eq!(refused[0]["tenant"], "merchant-42", "{}", refused[0]);
+    assert_eq!(refused[0]["phone_number_id"], "1972385232742141");
+    assert!(refused[0]["key_id"].is_string(), "{}", refused[0]);
+}
+
 /// The audit actions of a number's settings (roadmap M5c3), in the order
 /// the scenario `number_settings` takes them.
 const SETTINGS_ACTIONS: [&str; 10] = [
@@ -4601,6 +4809,7 @@ fn check_audit(logs: &str) {
     check_call_audit(&changes);
     check_display_name_audit(&changes);
     check_settings_audit(&changes);
+    check_override_audit(&events, &changes);
     check_partner_audit(&events, &changes);
     check_marketing_audit(&events, &changes);
     let deletions: Vec<&serde_json::Value> = changes
@@ -4610,6 +4819,9 @@ fn check_audit(logs: &str) {
                 && fields["action"] != "signup_completed"
                 && fields["action"] != "customer_erased"
                 && fields["action"] != "display_name_change_requested"
+                && !fields["action"]
+                    .as_str()
+                    .is_some_and(|action| action.starts_with("webhook_override_"))
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| SETTINGS_ACTIONS.contains(&action))

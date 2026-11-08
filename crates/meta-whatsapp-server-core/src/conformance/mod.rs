@@ -44,6 +44,7 @@
 //! | [`webhooks_out`] | the bundle's [`WebhookStore`] and the core's webhooks-out services and dispatcher over it (roadmap M2c), with a recording sender and a stub resolver: an endpoint is its tenant's through every call, its limit counted at the insert, its deliveries gone with it and with its tenant; a fan-out moves its cursor once, two racing record each event once, two dispatchers send each once; a claim is exclusive until its lease ends, one per tenant a claim, never a busy, disabled or suspended one's; acceptance test M2.4 (Standard Webhooks signatures verified with the secret shown once, the retry schedule under a fake clock ending `failed` with the endpoint disabled, a destination refused at creation and, after a lookup turned private, at delivery with nothing sent, two signatures during a rotation, an event over 256 KiB delivered truncated and read whole by its tenant alone, each delivery its tenant's event only); a slow endpoint holding only its own bound of attempts |
 //! | [`token_expiry`] | the token-expiry event (roadmap M3e) over the bundle's records, vault key/value store, outbox and leader lock, on a fake clock the vault and the authorizer share: a token inside the lead time told to its tenant once and to no other, again only when stored anew with a new expiry (not on a new binding generation), never outside the lead, never expiring or already expired; one replica's turn at a time; no token in the event |
 //! | [`groups`] | the records of the groups each number holds (roadmap M5f3) over the bundle's key/value store: a purge takes a number's records and its index and no other number's (the index naming neither a number nor a group), and an operator's unbind of a WABA (with a token that opens and with none), a tenant's deletion and the operator's request for one number each leave no key of the two namespaces that names the number |
+//! | [`webhook_override`] | a WABA's health status and a number's webhook override in the core alone (roadmap M5c6): the health of a WABA that is not the caller's tenant's is `404` with nothing sent, and the tenant's own is filtered; a set with the deployment's setting off is `403 feature_not_available` and sends nothing, with no webhooks out `409`, a destination a webhook endpoint would be refused at `422` on `url`, a good one the documented request; clearing is allowed in every state |
 //! | [`number_events`] | the service's own number events (roadmap M2d) through [`NumberEvents`] over the bundle's outbox and notifier: their number's tenant only (poll, streams, by id), a number not the binding's or a binding that moved (or was made again later under a tenant created again) giving the row to nobody, once per binding generation, after a move the new holder's own at once, and a previous binding's event writing no row about the new holder's numbers |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
@@ -81,6 +82,7 @@ pub mod records;
 pub mod signup;
 pub mod templates;
 pub mod token_expiry;
+pub mod webhook_override;
 pub mod webhooks;
 pub mod webhooks_out;
 
@@ -130,6 +132,10 @@ where
 
     let backend = fresh().await;
     Box::pin(numbers::run(backend.as_ref())).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    Box::pin(webhook_override::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;

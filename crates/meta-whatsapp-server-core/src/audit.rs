@@ -425,6 +425,30 @@ pub fn number_setting_audit(
     );
 }
 
+/// A tenant's change refused before anything was sent to Meta, where the
+/// refusal is itself worth a record (a number's webhook override asked for
+/// while the deployment has not enabled it, or at a destination the
+/// allow-list does not admit; roadmap M5c6). Logged at `warn` with the
+/// target `audit`: `action`, the key's public id, the ids, and `reason`, a
+/// name the service chose. Never the URL, the token or any value asked for.
+pub fn number_setting_refused_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    reason: &'static str,
+) {
+    tracing::warn!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        reason,
+        "tenant change refused"
+    );
+}
+
 /// A tenant's marketing change (roadmap M5h; docs/design/server.md, D232):
 /// a template duplicated at another max price or its max price set or
 /// cleared, the Cloud API marketing switch, a welcome message sequence
