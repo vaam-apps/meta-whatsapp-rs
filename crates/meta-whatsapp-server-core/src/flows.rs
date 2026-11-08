@@ -183,7 +183,9 @@ impl From<FlowDetails> for FlowInfo {
             endpoint_uri,
             // Left out: the preview (it has its own call), the WABA (the
             // ownership check's), the application ("an object" no page
-            // types) and whatever Meta adds.
+            // types), the health status (a read does not ask for it: its
+            // own call, `Flow::health_status`, roadmap M5d2) and whatever
+            // Meta adds.
             ..
         } = flow;
         Self {

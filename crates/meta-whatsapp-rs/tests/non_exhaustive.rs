@@ -589,6 +589,7 @@ const SERVICE_MAPPED: &[(&str, &str, &[&str])] = &[
             "preview",
             "whatsapp_business_account",
             "application",
+            "health_status",
         ],
     ),
     (

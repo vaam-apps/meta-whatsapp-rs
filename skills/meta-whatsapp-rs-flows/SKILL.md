@@ -39,12 +39,9 @@ client.flow(created.id.clone()).publish().await?; // published Flows cannot be e
 
 Also on `Flow`: `get`, `preview(invalidate)`, `update(&UpdateFlow)`,
 `upload_flow_json(bytes)` (≤ 10 MiB, `MAX_FLOW_JSON_BYTES`), `assets`
-(`preview_url`, `download_url` are `SecretUrl`s: `expose_secret()`),
-`health_status(None)` (or `Some(&phone_number_id)`: can this Flow be sent,
-node by node, and why not), `deprecate`, `delete` (drafts only). A Flow
-with an endpoint needs a Meta app connected:
-`update(&UpdateFlow::new().application_id("<APP_ID>"))`. Status changes
-arrive as `WebhookEvent::FlowUpdated`.
+(`download_url` is a `SecretUrl`), `health_status(None)` (can it be sent?),
+`deprecate`, `delete` (drafts). An endpoint Flow needs a Meta app
+(`UpdateFlow::application_id`). Status changes: `WebhookEvent::FlowUpdated`.
 
 ## Build the Flow JSON
 
@@ -90,11 +87,6 @@ client
     .set_public_key(&pem)
     .await?;
 ```
-
-`Rsa2048PublicKey::from_pem` checks a public key before it is sent (one
-`PUBLIC KEY` block, 2048-bit RSA) and compares equal to the public half of
-a `FlowEndpointKey` (`Rsa2048PublicKey::from_pem(&key.public_key_pem()?)`),
-for a check that the key at Meta is the one you serve.
 
 `FlowEndpointKey::from_pem` takes an **unencrypted** PKCS#8 or PKCS#1
 PEM; Meta's `openssl genrsa -des3` produces a password-protected one:
