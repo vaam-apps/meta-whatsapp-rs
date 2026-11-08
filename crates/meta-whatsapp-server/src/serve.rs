@@ -43,6 +43,7 @@ use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::erasure::{ErasureDeployment, ErasureKey};
+use meta_whatsapp_server_core::flow_media::FlowMediaDeployment;
 use meta_whatsapp_server_core::flows_endpoint::{
     DeploymentKey, FlowKeys, FlowsDeployment, NoDeploymentKey, NoHandler,
 };
@@ -53,6 +54,7 @@ use meta_whatsapp_server_core::token_expiry::TOKEN_EXPIRY_INTERVAL;
 use meta_whatsapp_server_core::webhooks_out::DELIVERY_TIMEOUT;
 use meta_whatsapp_server_core::webhooks_out::dispatch::{Dispatcher, WebhooksOut};
 use meta_whatsapp_server_http::api::public_router;
+use meta_whatsapp_server_http::flow_media::HyperFetcher;
 use meta_whatsapp_server_http::webhooks_out::{HyperSender, SystemResolver};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -523,6 +525,9 @@ async fn run<S: Future<Output = ()>>(
         &app_secrets,
         settings.flows_deployment_key_fallback,
     ));
+    settings.flow_media = Some(flow_media_deployment(
+        settings.flows_media_hosts.as_deref(),
+    )?);
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.
@@ -693,6 +698,21 @@ async fn end_dispatcher(dispatcher: Option<tokio::task::JoinHandle<()>>) {
             .is_err()
     {
         tracing::warn!("webhook deliveries in flight were cut by the shutdown");
+    }
+}
+
+/// The Flow media download's deployment (roadmap M5d2, design D454): the
+/// system's resolver and the TCP and TLS fetcher, on the hosts the
+/// configuration lists (`*.whatsapp.net` unless it lists others).
+fn flow_media_deployment(hosts: Option<&str>) -> anyhow::Result<FlowMediaDeployment> {
+    let fetcher =
+        HyperFetcher::new().context("building the Flow media fetcher's TLS configuration")?;
+    let deployment = FlowMediaDeployment::new(Arc::new(SystemResolver), Arc::new(fetcher));
+    match hosts {
+        None => Ok(deployment),
+        Some(list) => deployment
+            .with_hosts(list)
+            .map_err(|error| anyhow::anyhow!("WA_SERVER_FLOWS_MEDIA_HOSTS: {error}")),
     }
 }
 

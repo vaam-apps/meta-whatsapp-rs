@@ -22,12 +22,14 @@ pub mod admin;
 pub mod analytics;
 pub mod blocked_users;
 pub mod broadcasts;
+pub mod business_key;
 pub mod calls;
 pub mod commerce;
 pub mod display_name;
 pub mod erasure;
 pub mod events;
 pub mod flow_key;
+pub mod flow_media;
 pub mod flows;
 pub mod groups;
 pub mod inbox;
@@ -113,7 +115,7 @@ impl Modify for Security {
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
         (name = "groups", description = "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"),
         (name = "calls", description = "Calling (scope `calls`; roadmap M5e): a number's calling settings, a user's call permission, the call a business places and the actions on a call (pre-accept, accept, reject, terminate); a call is the number's or it does not exist. SDP and SIP passwords are secrets: in no log, error or audit event, and a SIP password is never answered. Call analytics are the WABA's (tag `analytics`)"),
-        (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. A WABA's Flow private key is set, read (its public half) and deleted by its tenant (roadmap M5d2). The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
+        (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. A WABA's Flow private key is set, read (its public half) and deleted by its tenant, a number's business public key (the key WhatsApp encrypts its Flow traffic to) is set and read, checked against that key, and a user's uploaded file is downloaded from the CDN, verified and decrypted (roadmap M5d2). The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "commerce", description = "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"),
         (name = "marketing", description = "The Marketing Messages API, max price and Click-to-WhatsApp welcome message sequences, each template or sequence checked to be the WABA's own (scope `marketing`)"),
@@ -406,14 +408,22 @@ fn flows_routes() -> OpenApiRouter<Grant> {
         .layer(DefaultBodyLimit::max(flows::MAX_FLOW_BODY_BYTES))
 }
 
-/// Roadmap M5d2: a WABA's Flow private key. A key is under 2 KiB: the
-/// internal listener's default body limit applies.
+/// Roadmap M5d2: a WABA's Flow private key, a number's business public
+/// key and a Flow's uploaded media. A key is under 2 KiB and a media
+/// request a few hundred bytes: the internal listener's default body limit
+/// applies.
 fn flow_key_routes() -> OpenApiRouter<Grant> {
-    OpenApiRouter::new().routes(routes!(
-        flow_key::set_flow_key,
-        flow_key::get_flow_key,
-        flow_key::delete_flow_key
-    ))
+    OpenApiRouter::new()
+        .routes(routes!(
+            flow_key::set_flow_key,
+            flow_key::get_flow_key,
+            flow_key::delete_flow_key
+        ))
+        .routes(routes!(
+            business_key::set_business_public_key,
+            business_key::get_business_public_key
+        ))
+        .routes(routes!(flow_media::download_flow_media))
 }
 
 fn commerce_routes() -> OpenApiRouter<Grant> {

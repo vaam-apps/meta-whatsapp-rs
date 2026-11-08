@@ -54,6 +54,7 @@
 //! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
 //! | `WA_SERVER_FLOWS_PRIVATE_KEY` (secret) | unset: no deployment key | the deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM (roadmap M5d; design D133). Since roadmap M5d2 a tenant sets its own per WABA (`PUT /v1/wabas/{waba_id}/flow-key`), read first; unset, a tenant with none is answered `404`. Its public half is what each number's business public key is set to |
 //! | `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` | `allow` | `allow`: a tenant with no Flow key of its own is decrypted with the deployment's (`WA_SERVER_FLOWS_PRIVATE_KEY`), as before tenants could set keys; `deny`: such a tenant's Flow requests are `404`, so that no tenant's traffic is decrypted with a key shared with others (roadmap M5d2, design D371); pending the owner's confirmation before the first release |
+//! | `WA_SERVER_FLOWS_MEDIA_HOSTS` | `*.whatsapp.net` | the host names a Flow's uploaded media (a `PhotoPicker` or `DocumentPicker` file) may be downloaded from by `POST /v1/wabas/{waba_id}/flows/media`: comma-separated host names and `*.`-prefixed ones, **names only** (an address or a CIDR is refused at start-up). Meta publishes no list of its CDN's hosts; the default is the host of its example. The URL must also be `https` on the default port and its host must resolve to public addresses only (roadmap M5d2, design D455); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //! | `WA_SERVER_TOKEN_EXPIRY_LEAD` | `7d`, or `WA_SERVER_OUTBOX_RETENTION` when that is shorter | how long before a stored token's expiry the tenant is told (`token_expiring`, once per token and expiry; roadmap M3e): a positive duration no longer than `WA_SERVER_OUTBOX_RETENTION` (set past it, the start is refused), or `off` |
 //!
@@ -1095,6 +1096,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         media_converter: media_converter(r)?,
         legal_acts: legal_acts(r)?,
         flows_deployment_key_fallback: flows_deployment_key_fallback(r)?,
+        flows_media_hosts: flows_media_hosts(r)?,
         send_messaging_account_id: send_messaging_account_id(r)?,
         broadcasts: broadcast_settings(r)?,
         call_sip_credentials: call_sip_credentials(r)?,
@@ -1194,6 +1196,23 @@ fn flows_deployment_key_fallback(r: &Reader<'_>) -> Result<bool, ConfigError> {
             reason: "expected `allow` or `deny`",
         }),
     }
+}
+
+/// `WA_SERVER_FLOWS_MEDIA_HOSTS` (roadmap M5d2, design D455): host names
+/// only; unset or blank, the default (`*.whatsapp.net`).
+fn flows_media_hosts(r: &Reader<'_>) -> Result<Option<String>, ConfigError> {
+    const NAME: &str = "WA_SERVER_FLOWS_MEDIA_HOSTS";
+    let Some(list) = r.plain(NAME)? else {
+        return Ok(None);
+    };
+    if list.trim().is_empty() {
+        return Ok(None);
+    }
+    meta_whatsapp_server_core::flow_media::media_hosts(&list).map_err(|_| ConfigError::Invalid {
+        name: NAME,
+        reason: "expected host names and *.-prefixed host names, comma-separated (no address, no CIDR)",
+    })?;
+    Ok(Some(list))
 }
 
 /// `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (roadmap M5c5): `on` (the

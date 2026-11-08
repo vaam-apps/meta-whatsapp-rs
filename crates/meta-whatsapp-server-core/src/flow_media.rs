@@ -137,6 +137,29 @@ pub trait CdnFetcher: Send + Sync + 'static {
     ) -> Result<Vec<u8>, FetchError>;
 }
 
+/// `list` as the hosts a download may connect to: comma-separated host
+/// names, `*.`-prefixed ones allowed, and nothing else (see
+/// [`FlowMediaDeployment::with_hosts`]); what `WA_SERVER_FLOWS_MEDIA_HOSTS`
+/// is checked with at start-up.
+///
+/// # Errors
+///
+/// [`InvalidAllowList`]: an entry is not a host name, or is an address or
+/// a CIDR (its position, never its text).
+pub fn media_hosts(list: &str) -> Result<DestinationPolicy, InvalidAllowList> {
+    for (i, entry) in list
+        .split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .enumerate()
+    {
+        if entry.contains('/') || entry.parse::<std::net::IpAddr>().is_ok() {
+            return Err(InvalidAllowList(i + 1));
+        }
+    }
+    DestinationPolicy::parse(list, false)
+}
+
 /// What a deployment gives the download: the host list, the lookup, the
 /// fetcher and the slots. `Debug` shows nothing but the slots.
 #[derive(Clone)]
@@ -182,17 +205,7 @@ impl FlowMediaDeployment {
     /// [`InvalidAllowList`]: an entry is not a host name, or is an address
     /// or a CIDR (its position, never its text).
     pub fn with_hosts(mut self, list: &str) -> Result<Self, InvalidAllowList> {
-        for (i, entry) in list
-            .split(',')
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .enumerate()
-        {
-            if entry.contains('/') || entry.parse::<std::net::IpAddr>().is_ok() {
-                return Err(InvalidAllowList(i + 1));
-            }
-        }
-        self.hosts = DestinationPolicy::parse(list, false)?;
+        self.hosts = media_hosts(list)?;
         Ok(self)
     }
 
