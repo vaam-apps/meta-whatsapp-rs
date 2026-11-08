@@ -96,7 +96,10 @@ async fn a_downloaded_file_and_its_keys_are_in_no_log_line_or_error() {
     for (call, status) in [
         (post(&url("v/a", "evil.example"), nothing), 422),
         (post(&url("v/a", "private.whatsapp.net"), nothing), 422),
-        (post(&format!("http://mmg.whatsapp.net/v/a?{TOKEN}"), nothing), 422),
+        (
+            post(&format!("http://mmg.whatsapp.net/v/a?{TOKEN}"), nothing),
+            422,
+        ),
         (post(&url("redirect", "mmg.whatsapp.net"), nothing), 502),
         (post(&url("big", "mmg.whatsapp.net"), nothing), 413),
         (post(&url("tampered", "mmg.whatsapp.net"), nothing), 502),

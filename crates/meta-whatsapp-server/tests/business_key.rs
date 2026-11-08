@@ -107,10 +107,9 @@ async fn a_tenant_sets_and_reads_a_numbers_key() {
     let one_line: String = public.lines().filter(|l| !l.starts_with("-----")).collect();
     let sloppy = format!("  -----BEGIN PUBLIC KEY-----\n{one_line}\n-----END PUBLIC KEY-----\n\n");
     r.h.graph.push_json(200, json!({"success": true}));
-    let set = r
-        .h
-        .call(put(PN_A, &r.key_a, &json!({"business_public_key": sloppy})))
-        .await;
+    let set =
+        r.h.call(put(PN_A, &r.key_a, &json!({"business_public_key": sloppy})))
+            .await;
     assert_eq!(set.status, StatusCode::OK, "{}", set.text);
     assert_eq!(
         set.json(),
@@ -121,7 +120,10 @@ async fn a_tenant_sets_and_reads_a_numbers_key() {
         panic!("{requests:?}")
     };
     assert_eq!(asked.method, Method::POST);
-    assert_eq!(asked.path(), "/v25.0/106540352242922/whatsapp_business_encryption");
+    assert_eq!(
+        asked.path(),
+        "/v25.0/106540352242922/whatsapp_business_encryption"
+    );
     assert_eq!(asked.bearer(), Some("TOKEN-A"));
     assert_eq!(
         form(asked),
@@ -150,7 +152,10 @@ async fn a_tenant_sets_and_reads_a_numbers_key() {
     );
     let asked = r.h.graph.last_request().unwrap();
     assert_eq!(asked.method, Method::GET);
-    assert_eq!(asked.path(), "/v25.0/106540352242922/whatsapp_business_encryption");
+    assert_eq!(
+        asked.path(),
+        "/v25.0/106540352242922/whatsapp_business_encryption"
+    );
     assert_eq!(asked.bearer(), Some("TOKEN-A"));
 
     r.h.graph.push_json(
@@ -185,11 +190,15 @@ async fn a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_reque
     let r = rig().await;
     r.flow_key(KEY_PEM).await;
     let other = public_of(OTHER_KEY_PEM);
-    let refused = r
-        .h
-        .call(put(PN_A, &r.key_a, &json!({"business_public_key": other})))
-        .await;
-    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text);
+    let refused =
+        r.h.call(put(PN_A, &r.key_a, &json!({"business_public_key": other})))
+            .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.text
+    );
     assert_eq!(refused.code(), "invalid_request");
     assert_eq!(refused.json()["error"]["field"], "flow_key");
     assert!(r.h.graph.requests().is_empty(), "Meta was asked");
@@ -197,9 +206,8 @@ async fn a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_reque
 
     // The caller means it.
     r.h.graph.push_json(200, json!({"success": true}));
-    let allowed = r
-        .h
-        .call(put(
+    let allowed =
+        r.h.call(put(
             PN_A,
             &r.key_a,
             &json!({"business_public_key": other, "allow_flow_key_mismatch": true}),
@@ -211,9 +219,8 @@ async fn a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_reque
 
     // Rotated Flow key: the other key is now the match, the first is not.
     r.flow_key(OTHER_KEY_PEM).await;
-    let stale = r
-        .h
-        .call(put(
+    let stale =
+        r.h.call(put(
             PN_A,
             &r.key_a,
             &json!({"business_public_key": public_of(KEY_PEM)}),
@@ -221,22 +228,19 @@ async fn a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_reque
         .await;
     assert_eq!(stale.json()["error"]["field"], "flow_key", "{}", stale.text);
     r.h.graph.push_json(200, json!({"success": true}));
-    let fresh = r
-        .h
-        .call(put(PN_A, &r.key_a, &json!({"business_public_key": other})))
-        .await;
+    let fresh =
+        r.h.call(put(PN_A, &r.key_a, &json!({"business_public_key": other})))
+            .await;
     assert_eq!(fresh.json()["matches_flow_key"], true, "{}", fresh.text);
 
     // Deleted: there is nothing to compare, and the key goes through.
-    let deleted = r
-        .h
-        .call(Call::new(Method::DELETE, format!("/v1/wabas/{WABA_A}/flow-key")).key(&r.key_a))
-        .await;
+    let deleted =
+        r.h.call(Call::new(Method::DELETE, format!("/v1/wabas/{WABA_A}/flow-key")).key(&r.key_a))
+            .await;
     assert_eq!(deleted.status, StatusCode::NO_CONTENT);
     r.h.graph.push_json(200, json!({"success": true}));
-    let free = r
-        .h
-        .call(put(
+    let free =
+        r.h.call(put(
             PN_A,
             &r.key_a,
             &json!({"business_public_key": public_of(KEY_PEM)}),
@@ -253,9 +257,8 @@ async fn a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_reque
 #[tokio::test]
 async fn another_tenants_flow_key_is_not_compared() {
     let r = rig().await;
-    let reply = r
-        .h
-        .call(
+    let reply =
+        r.h.call(
             Call::new(Method::PUT, format!("/v1/wabas/{WABA_B}/flow-key"))
                 .key(&r.key_b)
                 .json(&json!({"private_key": KEY_PEM})),
@@ -263,9 +266,8 @@ async fn another_tenants_flow_key_is_not_compared() {
         .await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     r.h.graph.push_json(200, json!({"success": true}));
-    let set = r
-        .h
-        .call(put(
+    let set =
+        r.h.call(put(
             PN_A,
             &r.key_a,
             &json!({"business_public_key": public_of(OTHER_KEY_PEM)}),
@@ -287,11 +289,11 @@ async fn a_key_that_is_not_a_2048_bit_rsa_public_key_is_refused_before_any_reque
     let bodies = [
         ("a private key", json!({"business_public_key": KEY_PEM})),
         ("empty", json!({"business_public_key": ""})),
-        ("a placeholder", json!({"business_public_key": "<2048_bit_RSA_key>"})),
         (
-            "no armor",
-            json!({"business_public_key": body}),
+            "a placeholder",
+            json!({"business_public_key": "<2048_bit_RSA_key>"}),
         ),
+        ("no armor", json!({"business_public_key": body})),
         (
             "a bundle with a private key",
             json!({"business_public_key": format!("{public}\n{KEY_PEM}")}),
@@ -342,10 +344,9 @@ async fn another_tenants_number_is_not_found_and_nothing_is_sent() {
     assert_eq!(r.h.kv.vault_reads(), reads);
     assert!(r.h.graph.requests().is_empty());
     let narrow = r.h.tenant_key(A, &[Scope::Numbers]).await;
-    let denied = r
-        .h
-        .call(put(PN_A, &narrow, &json!({"business_public_key": public})))
-        .await;
+    let denied =
+        r.h.call(put(PN_A, &narrow, &json!({"business_public_key": public})))
+            .await;
     assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text);
     assert!(r.h.graph.requests().is_empty());
 }
@@ -364,9 +365,8 @@ async fn metas_refusal_is_passed_on() {
             "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"
         }}),
     );
-    let reply = r
-        .h
-        .call(put(
+    let reply =
+        r.h.call(put(
             PN_A,
             &r.key_a,
             &json!({"business_public_key": public_of(KEY_PEM)}),

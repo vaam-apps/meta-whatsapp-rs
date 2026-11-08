@@ -82,9 +82,11 @@ fn expect(input: &[u8], tag: u8) -> Option<(&[u8], &[u8])> {
 /// A positive INTEGER's magnitude, without its sign byte.
 fn magnitude(content: &[u8]) -> Option<&[u8]> {
     match content {
-        [] => None,
+        // A leading zero is there when, and only when, the next byte's high
+        // bit is set (a minimal positive INTEGER).
         [0, rest @ ..] => rest.first().is_some_and(|b| b & 0x80 != 0).then_some(rest),
         [first, ..] if first & 0x80 == 0 => Some(content),
+        // Empty, or negative.
         _ => None,
     }
 }

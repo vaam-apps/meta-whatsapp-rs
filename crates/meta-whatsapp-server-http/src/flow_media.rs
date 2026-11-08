@@ -271,7 +271,9 @@ mod tests {
         .await;
         assert_eq!(got.unwrap(), b"hello");
         let seen = seen.lock().unwrap();
-        let [head] = &seen[..] else { panic!("{seen:?}") };
+        let [head] = &seen[..] else {
+            panic!("{seen:?}")
+        };
         let lower = head.to_ascii_lowercase();
         assert!(head.starts_with("GET /v/f?oh=TOKEN HTTP/1.1\r\n"), "{head}");
         assert!(lower.contains("\r\nhost: media.test:"), "{head}");
@@ -291,7 +293,11 @@ mod tests {
             false,
         )
         .await;
-        for status in ["301 Moved Permanently", "302 Found", "307 Temporary Redirect"] {
+        for status in [
+            "301 Moved Permanently",
+            "302 Found",
+            "307 Temporary Redirect",
+        ] {
             let redirect = format!(
                 "HTTP/1.1 {status}\r\nlocation: http://{target}/stolen\r\ncontent-length: 0\r\n\r\n"
             );

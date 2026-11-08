@@ -57,6 +57,9 @@ fn plaintext() -> Vec<u8> {
         .unwrap()
 }
 
+/// An edit to a media object.
+type Edit = Box<dyn Fn(&mut Value)>;
+
 /// What a fetch was asked.
 #[derive(Debug, Clone)]
 struct Fetched {
@@ -425,7 +428,6 @@ async fn a_file_that_fails_a_check_is_refused_and_nothing_is_returned() {
     *flipped_tag.last_mut().unwrap() ^= 1;
     let wrong32 = STANDARD.encode([9u8; 32]);
     let wrong16 = STANDARD.encode([9u8; 16]);
-    type Edit = Box<dyn Fn(&mut Value)>;
     let rows: Vec<(&str, Vec<u8>, Edit)> = vec![
         ("one byte of the file altered", flipped, Box::new(|_| {})),
         ("the HMAC altered", flipped_tag, Box::new(|_| {})),
@@ -475,7 +477,10 @@ async fn a_file_that_fails_a_check_is_refused_and_nothing_is_returned() {
         let reply = r.h.call(post(WABA_A, &r.key_a, &media(|m| edit(m)))).await;
         assert_eq!(reply.status.as_u16(), 502, "{name}: {}", reply.text);
         assert_eq!(reply.code(), "integrity", "{name}");
-        assert!(!reply.text.contains("not really a JPEG"), "{name}: bytes answered");
+        assert!(
+            !reply.text.contains("not really a JPEG"),
+            "{name}: bytes answered"
+        );
         assert!(
             !reply.headers.contains_key(header::CONTENT_DISPOSITION),
             "{name}"
