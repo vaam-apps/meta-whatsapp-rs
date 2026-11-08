@@ -35,6 +35,7 @@
 //! | `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `ffmpeg` from `PATH` | with `ffmpeg` only: the program to run (an absolute path is safest); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply) names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches (roadmap M5c5, design D37); `off`: a send names none and Meta resolves the account from the token; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_BROADCAST_RATE`, `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`, `WA_SERVER_BROADCAST_WORKERS` | 10, 1000, 3, 2 | broadcasts (roadmap M5k, design D421, D425): messages a second for each number, shared by every replica; the most people one broadcast may be for; the most broadcasts a tenant may have queued or running at once; the broadcasts a replica sends at once; pending the owner's confirmation before the first release |
+//! | `WA_SERVER_BOT_MAX_RULES` | 50 | the most rules one number's bot may have (roadmap M5k, slice 2, design D463); its answers are paced in the broadcasts' budget (`WA_SERVER_BROADCAST_RATE`); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow: the India compliance information declaration (`PUT /v1/numbers/{pn}/compliance-info`; roadmap M5c3, design D192), and the operator the max price agreement's signing (`POST /v1/admin/businesses/{business_id}/max-price-agreement`; roadmap M5h, design D231) and the Marketing Messages API onboarding invitation (`POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding`; roadmap M5h2, design D431); off, each is `403 feature_not_available` with nothing asked of Meta (the Official Business Account application and the contact book erasure are not gated by it); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on` lets a key holding the scope `call_credentials` read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`; roadmap M5e2, design D410); off, it is `403 feature_not_available` with nothing asked of Meta, whichever key asks; pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
@@ -104,6 +105,7 @@ use meta_whatsapp_rs::core::ids::{AppId, BusinessId};
 use meta_whatsapp_rs::core::media::MediaConverter;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
+use meta_whatsapp_server_core::bot::BotSettings;
 use meta_whatsapp_server_core::broadcasts::BroadcastSettings;
 use meta_whatsapp_server_core::erasure::ErasureKey;
 use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
@@ -1097,6 +1099,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         flows_deployment_key_fallback: flows_deployment_key_fallback(r)?,
         send_messaging_account_id: send_messaging_account_id(r)?,
         broadcasts: broadcast_settings(r)?,
+        bot: bot_settings(r)?,
         call_sip_credentials: call_sip_credentials(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
@@ -1148,6 +1151,21 @@ fn broadcast_settings(r: &Reader<'_>) -> Result<BroadcastSettings, ConfigError> 
         )?,
         workers: number(r, "WA_SERVER_BROADCAST_WORKERS", defaults.workers)?,
         ..defaults
+    })
+}
+
+/// `WA_SERVER_BOT_MAX_RULES` (roadmap M5k, slice 2, design D463): a
+/// positive whole number, 50 by default ([`BotSettings::default`]).
+fn bot_settings(r: &Reader<'_>) -> Result<BotSettings, ConfigError> {
+    let defaults = BotSettings::default();
+    Ok(BotSettings {
+        max_rules: match positive(r, "WA_SERVER_BOT_MAX_RULES")? {
+            None => defaults.max_rules,
+            Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+                name: "WA_SERVER_BOT_MAX_RULES",
+                reason: "too large",
+            })?,
+        },
     })
 }
 

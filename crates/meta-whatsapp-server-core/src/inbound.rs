@@ -93,6 +93,7 @@ use crate::groups::GroupRecords;
 use crate::notify::{EventNotifier, Wakeup};
 use crate::number_events::NumberEvents;
 use crate::observe::Observer;
+use crate::model::TenantId;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
 
@@ -315,6 +316,29 @@ pub trait AccountActions: Send + Sync + 'static {
     async fn on_event(&self, event: &WebhookEvent) -> Result<(), meta_whatsapp_rs::Error>;
 }
 
+/// What the service does about an inbound message besides recording it
+/// (roadmap M5k, slice 2: the bot, [`crate::bot::BotReplies`]). The
+/// pipeline hands it each `message_received` event of a signed delivery,
+/// under its dedup lease, **once the event is recorded** and only when a
+/// tenant sees it (the tenant holding its number since before the event,
+/// not a replay, not before the binding): the tenant is the pipeline's
+/// routing, never the payload's.
+///
+/// An `Err` means "run me again": the delivery fails (`500`, the lease
+/// released) and Meta's redelivery finds the message recorded and calls
+/// this again, so what it does must be safe to repeat (the bot's answers
+/// are claimed once). Anything it settles for good is `Ok`, logged by
+/// itself.
+#[async_trait]
+pub trait MessageActions: Send + Sync + 'static {
+    /// Act on `event`, a `message_received` of `tenant`'s number.
+    async fn on_message(
+        &self,
+        tenant: &TenantId,
+        event: &WebhookEvent,
+    ) -> Result<(), meta_whatsapp_rs::Error>;
+}
+
 /// The webhook pipeline over one backend's stores: Meta's deliveries
 /// verified, deduplicated, routed and recorded ([module](self)).
 pub struct Pipeline {
@@ -356,6 +380,7 @@ impl Pipeline {
             clock: inbound.clock,
             moves: inbound.moves,
             actions: None,
+            messages: None,
             groups: GroupRecords::new(backend.kv()),
             calls: CallRecords::new(backend.kv()),
         };
@@ -440,6 +465,15 @@ impl Pipeline {
         self
     }
 
+    /// Hand each recorded `message_received` event of a tenant's number to
+    /// `actions` (roadmap M5k, slice 2: the bot's replies). See
+    /// [`MessageActions`] for when, and what its failure does.
+    #[must_use]
+    pub fn with_message_actions(mut self, actions: Arc<dyn MessageActions>) -> Self {
+        self.sink.messages = Some(actions);
+        self
+    }
+
     /// The outbox the events are recorded in (what polling reads).
     pub fn outbox(&self) -> &dyn Outbox {
         self.outbox.as_ref()
@@ -518,6 +552,9 @@ struct ServiceSink {
     /// What is done about an `account_updated` event once it is recorded
     /// (roadmap M3a).
     actions: Option<Arc<dyn AccountActions>>,
+    /// What is done about an inbound message once it is recorded (roadmap
+    /// M5k, slice 2).
+    messages: Option<Arc<dyn MessageActions>>,
     /// The groups each number holds (roadmap M5f): a group created for a
     /// tenant's number is kept, a group deleted forgotten, so that the
     /// group routes decide ownership before any token is opened.
@@ -549,7 +586,23 @@ impl ServiceSink {
             }
             _ => None,
         };
-        self.record_event(event, key).await?;
+        let tenant = self.record_event(event.clone(), key).await?;
+        if let (Some(messages), Some(tenant), WebhookEvent::MessageReceived { .. }) =
+            (&self.messages, &tenant, &event)
+        {
+            // Also for an event recorded already: a redelivery after the
+            // bot failed runs it again, and its answers are claimed once.
+            if let Err(error) = messages.on_message(tenant, &event).await {
+                return Err(self.failed(
+                    "bot",
+                    event.kind(),
+                    SinkError::Delivery(anyhow::Error::msg(format!(
+                        "the bot could not act on a message ({}): retried on Meta's redelivery",
+                        error.kind().as_str()
+                    ))),
+                ));
+            }
+        }
         let Some((actions, event)) = to_act else {
             return Ok(());
         };
@@ -579,7 +632,13 @@ impl ServiceSink {
 
     /// Record `event`, keyed `key`: route it, then the inbox, then the
     /// outbox.
-    async fn record_event(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
+    ///
+    /// The tenant that saw it (the outbox row's), if any.
+    async fn record_event(
+        &self,
+        event: WebhookEvent,
+        key: &EventKey,
+    ) -> Result<Option<TenantId>, SinkError> {
         let kind = event.kind();
         let now = self.clock.now();
         let at = Routing {
@@ -640,7 +699,7 @@ impl ServiceSink {
                 event_type = kind,
                 "the event was already in the outbox"
             );
-            return Ok(());
+            return Ok(route.tenant);
         };
         if let Some(tenant) = &route.tenant {
             self.observer.webhook_event(kind, "tenant");
@@ -681,7 +740,7 @@ impl ServiceSink {
                 "operator-only event recorded"
             );
         }
-        Ok(())
+        Ok(route.tenant)
     }
 }
 

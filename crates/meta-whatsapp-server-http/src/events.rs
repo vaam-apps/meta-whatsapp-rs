@@ -46,7 +46,9 @@ pub use meta_whatsapp_server_core::events::{
     UndatedAfterMove, event_data, event_number, meta_time, outbox_key, outbox_row, owner, poll,
     purge_outbox, route, tenant_visible,
 };
-use meta_whatsapp_server_core::inbound::{AccountActions, Delivered, Pipeline, Refused};
+use meta_whatsapp_server_core::inbound::{
+    AccountActions, Delivered, MessageActions, Pipeline, Refused,
+};
 pub use meta_whatsapp_server_core::inbound::{
     Inbound, MAX_DELIVERIES_RECORDING, MAX_WEBHOOK_BODY_BYTES, RECORDING_WAIT,
 };
@@ -156,12 +158,14 @@ impl Events {
         backend: &dyn Backend,
         metrics: Metrics,
         actions: Option<Arc<dyn AccountActions>>,
+        messages: Arc<dyn MessageActions>,
     ) -> Self {
         let pipeline = Pipeline::new(inbound, backend, Arc::new(metrics));
         let pipeline = match actions {
             Some(actions) => pipeline.with_account_actions(actions),
             None => pipeline,
         };
+        let pipeline = pipeline.with_message_actions(messages);
         Self {
             pipeline,
             in_flight: Arc::new(Semaphore::new(MAX_DELIVERIES_IN_FLIGHT)),
