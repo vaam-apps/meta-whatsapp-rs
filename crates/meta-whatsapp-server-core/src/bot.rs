@@ -60,7 +60,7 @@
 //! # What is logged
 //!
 //! Rule ids, outcomes and counts. Never a message, a reply text, a trigger
-//! word or a person ([`LOG_TARGET`]).
+//! word or a person (target `meta_whatsapp_server::api::bot`).
 
 use std::collections::BTreeSet;
 use std::fmt;
