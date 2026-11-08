@@ -800,7 +800,8 @@ async fn what_is_not_a_message_to_answer_is_never_answered() {
         &edited("wamid.X3", |m| {
             strip(m);
             m["type"] = json!("system");
-            m["system"] = json!({"body": "changed", "type": "user_changed_number", "wa_id": "16505550000"});
+            m["system"] =
+                json!({"body": "changed", "type": "user_changed_number", "wa_id": "16505550000"});
         }),
     )
     .await;
@@ -878,13 +879,23 @@ async fn senders_are_known_by_their_bsuid() {
             &json!({"enabled": true, "owners": owners, "banned": banned}),
         )
     };
-    assert_eq!(w.h.call(on(&[CUSTOMER_BSUID], &[])).await.status, StatusCode::OK);
+    assert_eq!(
+        w.h.call(on(&[CUSTOMER_BSUID], &[])).await.status,
+        StatusCode::OK
+    );
     deliver(&w.h, &from_user("wamid.U1", "/admin", CUSTOMER_BSUID)).await;
     assert_eq!(w.h.graph.requests().len(), 1, "an owner by BSUID");
     deliver(&w.h, &from_user("wamid.U2", "/admin", "US.99999999999")).await;
     // The phone of this message is the customer's, not an owner's entry.
-    assert_eq!(w.h.graph.requests().len(), 1, "a stranger ran an owner rule");
-    assert_eq!(w.h.call(on(&[], &[CUSTOMER_BSUID])).await.status, StatusCode::OK);
+    assert_eq!(
+        w.h.graph.requests().len(),
+        1,
+        "a stranger ran an owner rule"
+    );
+    assert_eq!(
+        w.h.call(on(&[], &[CUSTOMER_BSUID])).await.status,
+        StatusCode::OK
+    );
     deliver(&w.h, &from_user("wamid.U3", "/hello", CUSTOMER_BSUID)).await;
     assert_eq!(w.h.graph.requests().len(), 1, "a banned BSUID was answered");
     deliver(&w.h, &from_user("wamid.U4", "/hello", "US.99999999999")).await;
