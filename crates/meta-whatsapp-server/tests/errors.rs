@@ -407,6 +407,11 @@ const CALLS_META: &[&str] = &[
     "GET /v1/numbers/{pn}/health-status",
     "GET /v1/numbers/{pn}/conversational-components",
     "PUT /v1/numbers/{pn}/conversational-components",
+    // Roadmap M5d2: a number's business public key (a public key: Meta's
+    // `details` are kept). The Flow media download asks the CDN, never
+    // Meta's API.
+    "GET /v1/numbers/{pn}/business-public-key",
+    "PUT /v1/numbers/{pn}/business-public-key",
     // Roadmap M5f: the group routes, on a group the number holds.
     "POST /v1/numbers/{pn}/groups",
     "GET /v1/numbers/{pn}/groups",
@@ -558,6 +563,8 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/numbers/{pn}/health-status",
     "GET /v1/numbers/{pn}/conversational-components",
     "PUT /v1/numbers/{pn}/conversational-components",
+    "GET /v1/numbers/{pn}/business-public-key",
+    "PUT /v1/numbers/{pn}/business-public-key",
     "DELETE /v1/numbers/{pn}/contact-book/{bsuid}",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",

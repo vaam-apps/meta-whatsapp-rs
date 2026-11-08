@@ -208,6 +208,11 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::PUT, "/v1/wabas/{waba_id}/flow-key"),
         (Method::GET, "/v1/wabas/{waba_id}/flow-key"),
         (Method::DELETE, "/v1/wabas/{waba_id}/flow-key"),
+        // Roadmap M5d2 (slice 2): a number's business public key, and a
+        // Flow's uploaded media.
+        (Method::PUT, "/v1/numbers/{pn}/business-public-key"),
+        (Method::GET, "/v1/numbers/{pn}/business-public-key"),
+        (Method::POST, "/v1/wabas/{waba_id}/flow-media"),
         (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
         // Roadmap M5g (the design's M5.1): commerce, QR codes, analytics
         // and the block list. A catalog is its WABA's, a code its number's.
@@ -643,7 +648,15 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 18] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 19] = [
+    // Roadmap M5d2: a Flow's uploaded media is fetched from the CDN, never
+    // Meta's API; this harness configures no download, so after the vault
+    // read the route is `feature_not_available`.
+    (
+        Method::POST,
+        "/v1/wabas/{waba_id}/flow-media",
+        StatusCode::FORBIDDEN,
+    ),
     // Roadmap M5k: a broadcast is queued in the service's own records;
     // the vault is read for the capability, Meta is asked when a worker
     // sends.

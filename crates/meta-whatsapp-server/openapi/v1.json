@@ -6265,6 +6265,302 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/business-public-key": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/business-public-key`: the key Meta holds for the\nnumber, its signature status, and whether it is the Flow key's public\nhalf.",
+        "operationId": "get_business_public_key",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The key, or `configured: false`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessPublicKey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`; the Flow key record cannot be opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/business-public-key`: set the number's business\npublic key at Meta (replacing any). Audited\n(`business_public_key_set`) with the key's digest.",
+        "operationId": "set_business_public_key",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BusinessPublicKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set: the key's digest and whether it is the Flow key's public half",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessPublicKeySet"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant (another tenant's number looks like a missing one; nothing is sent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `business_public_key` (not one PEM block holding a 2048-bit RSA public key; a private key is refused; never quoted) or `body`, or on `flow_key`: the tenant's Flow key for the WABA exists and the key is not its public half (`allow_flow_key_mismatch`); nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`; the Flow key record cannot be opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the key before asking again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/call-permissions": {
       "get": {
         "tags": [
@@ -22603,6 +22899,165 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/flow-media": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/flow-media`: download, verify and decrypt a\nFlow's uploaded file. Audited (`flow_media_downloaded`: tenant, WABA,\nsize).",
+        "operationId": "download_flow_media",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowMediaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The decrypted file, only after every check passed (the CDN file's SHA-256 and HMAC, the result's SHA-256)",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowMediaBytes"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or `feature_not_available`: this deployment has no download",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant; nothing was looked up or fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`media_too_large`: the file is past 25 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `cdn_url` (not an `https` URL of a listed host name on the default port without user info, or a host that resolves to a non-public address; the reason is not said) or on a value of `encryption_metadata` (`encryption_metadata.iv`, …: not base64 of the documented length); never quoted; nothing was fetched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's budget, or four downloads in flight on the replica (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`media_download_failed` (lookup, connection, TLS, time limit, or the CDN answered other than 200: a redirect is never followed; retryable) or `integrity` (a hash or the HMAC did not match: nothing is returned)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/flows": {
       "get": {
         "tags": [
@@ -31406,6 +31861,90 @@
         },
         "additionalProperties": false
       },
+      "BusinessPublicKey": {
+        "type": "object",
+        "description": "The business public key Meta holds for a number.",
+        "required": [
+          "configured",
+          "public_key",
+          "public_key_sha256",
+          "signature_status",
+          "matches_flow_key"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether Meta holds a key for the number."
+          },
+          "matches_flow_key": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "As `matches_flow_key` of the `PUT`'s answer, for the key Meta holds."
+          },
+          "public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key, as Meta answered."
+          },
+          "public_key_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SHA-256 of the key's canonical PEM, lowercase hex, when it\nparses as a 2048-bit RSA public key."
+          },
+          "signature_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's check of its signature over the key, as it wrote it\n(`VALID`, `MISMATCH`: upload the key again)."
+          }
+        }
+      },
+      "BusinessPublicKeyRequest": {
+        "type": "object",
+        "description": "The key to set.",
+        "required": [
+          "business_public_key"
+        ],
+        "properties": {
+          "allow_flow_key_mismatch": {
+            "type": "boolean",
+            "description": "`true` to set a key that is **not** the public half of the WABA's\nFlow key although the tenant has set one: for a key the\nintegrating app holds elsewhere. Default `false`: a mismatch is\n`422` on `flow_key` and nothing is sent."
+          },
+          "business_public_key": {
+            "type": "string",
+            "description": "The public key as PEM: one `-----BEGIN PUBLIC KEY-----` block, a\n2048-bit RSA key (`openssl rsa -pubout`, or the `public_key` of\n`GET /v1/wabas/{waba_id}/flow-key`). A private key is refused\nwithout being quoted. At most 4 KiB."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessPublicKeySet": {
+        "type": "object",
+        "description": "What was set.",
+        "required": [
+          "public_key_sha256",
+          "matches_flow_key"
+        ],
+        "properties": {
+          "matches_flow_key": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true`: the key is the public half of the tenant's Flow key for the\nWABA. `false`: it is not (`allow_flow_key_mismatch` was set).\n`null`: the tenant has set no Flow key, so there was nothing to\ncompare."
+          },
+          "public_key_sha256": {
+            "type": "string",
+            "description": "The SHA-256 of the key as sent (canonical PEM), lowercase hex: the\n`public_key_sha256` of the Flow key's answer, when they match."
+          }
+        }
+      },
       "BusinessUsername": {
         "type": "object",
         "description": "A number's business username.",
@@ -34604,6 +35143,80 @@
             "description": "Pass as `cursor` for the page after; absent on the last."
           }
         }
+      },
+      "FlowMediaBytes": {
+        "type": "string",
+        "format": "binary",
+        "description": "A decrypted file's bytes."
+      },
+      "FlowMediaEncryptionMetadata": {
+        "type": "object",
+        "description": "The keys and hashes that open the file: `encryption_metadata` of\nMeta's object.",
+        "required": [
+          "encrypted_hash",
+          "iv",
+          "encryption_key",
+          "hmac_key",
+          "plaintext_hash"
+        ],
+        "properties": {
+          "encrypted_hash": {
+            "type": "string",
+            "description": "SHA-256 of the file on the CDN, base64 (32 bytes)."
+          },
+          "encryption_key": {
+            "type": "string",
+            "format": "password",
+            "description": "The AES-256 key, base64 (32 bytes). A secret."
+          },
+          "hmac_key": {
+            "type": "string",
+            "format": "password",
+            "description": "The HMAC-SHA256 key, base64 (16 to 64 bytes; Meta's example 32). A\nsecret."
+          },
+          "iv": {
+            "type": "string",
+            "description": "The AES-CBC initialization vector, base64 (16 bytes)."
+          },
+          "plaintext_hash": {
+            "type": "string",
+            "description": "SHA-256 of the decrypted file, base64 (32 bytes)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FlowMediaRequest": {
+        "type": "object",
+        "description": "One uploaded file, as Meta's data exchange request carries it.",
+        "required": [
+          "cdn_url",
+          "encryption_metadata"
+        ],
+        "properties": {
+          "cdn_url": {
+            "type": "string",
+            "description": "Where the encrypted file is: `https`, a host name this deployment\nlists (`*.whatsapp.net` by default), the default port, no user\ninfo, at most 2,048 characters. Never an address. Anything else is\n`422` on `cdn_url` before any lookup or connection."
+          },
+          "encryption_metadata": {
+            "$ref": "#/components/schemas/FlowMediaEncryptionMetadata",
+            "description": "The keys and hashes."
+          },
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file's name. Accepted for the same reason; not used (it is\nnever put in a header)."
+          },
+          "media_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's id of the upload. Accepted so that the object Meta sent can\nbe posted whole; not used."
+          }
+        },
+        "additionalProperties": false
       },
       "FlowParameters": {
         "type": "object",
@@ -42471,7 +43084,7 @@
     },
     {
       "name": "flows",
-      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. A WABA's Flow private key is set, read (its public half) and deleted by its tenant (roadmap M5d2). The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
+      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. A WABA's Flow private key is set, read (its public half) and deleted by its tenant, a number's business public key (the key WhatsApp encrypts its Flow traffic to) is set and read, checked against that key, and a user's uploaded file is downloaded from the CDN, verified and decrypted (roadmap M5d2). The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
     },
     {
       "name": "payments",
