@@ -1134,7 +1134,7 @@ pub(crate) async fn get_webhook_override(
     responses(
         (status = 204, description = "The override is set. Audited as `webhook_override_set` (who and which number, never the URL or the token)"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, `feature_not_available` (the deployment has not enabled overrides, `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`: nothing was asked of Meta), or Meta's refusal (its texts are withheld)", body = ErrorBody),
+        (status = 403, description = "`forbidden` (the key lacks the scope `webhook_override`), `tenant_suspended`, `feature_not_available` (the deployment has not enabled overrides, `WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`: nothing was asked of Meta), or Meta's refusal (its texts are withheld)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`webhooks_not_configured` (no allow-list to check the URL against), `number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `url` (not `https`, over 200 characters, credentials in it, not listed, an address it resolves to not allowed, or unresolvable: as a webhook endpoint's) or `verify_token` (empty) or `body`: nothing was sent", body = ErrorBody),

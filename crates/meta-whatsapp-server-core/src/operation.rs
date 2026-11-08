@@ -809,7 +809,6 @@ impl Operation {
             | Self::SetConversationalComponents
             | Self::GetWabaHealthStatus
             | Self::GetWebhookOverride
-            | Self::SetWebhookOverride
             | Self::ClearWebhookOverride
             | Self::DisconnectWaba
             | Self::RequestVerificationCode
@@ -954,6 +953,7 @@ impl Operation {
             | Self::TerminateCall
             | Self::UploadCallVoicemailAnnouncement => Scope::Calls,
             Self::GetCallSipCredentials => Scope::CallCredentials,
+            Self::SetWebhookOverride => Scope::WebhookOverride,
         }
     }
 }

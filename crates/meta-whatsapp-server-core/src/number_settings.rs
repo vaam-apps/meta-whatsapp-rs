@@ -1002,6 +1002,24 @@ impl<'a> NumberSettings<'a> {
             self.refused("shape");
             return Err(ServiceError::invalid("verify_token"));
         }
+        if CallbackOverride::new(url, verify_token.clone())
+            .validate()
+            .is_err()
+        {
+            self.refused("shape");
+            return Err(ServiceError::invalid("url"));
+        }
+        // Meta, not the service, parses the URL later: what is checked is
+        // what is sent, in the one serialization the check's parser gives
+        // (`https://allowed.example\@other.example/` is allowed.example to
+        // the check, which reads a backslash as a slash, and could be
+        // other.example to a parser that does not; tabs and newlines the
+        // check ignores are gone too).
+        let Ok(parsed) = url::Url::parse(url) else {
+            self.refused("destination");
+            return Err(ServiceError::invalid("url"));
+        };
+        let url = parsed.as_str();
         let callback = CallbackOverride::new(url, verify_token);
         if callback.validate().is_err() {
             self.refused("shape");

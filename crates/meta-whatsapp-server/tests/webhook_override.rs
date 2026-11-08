@@ -200,6 +200,92 @@ async fn a_wabas_health_status_withholds_other_tenants_entities() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// A kept node's own texts may name another tenant's number or WABA ("number
+/// 1065… is blocked"): such an id never leaves, in an error's description or
+/// solution or in `additional_info`; the tenant's own ids and short numbers
+/// (error codes) stay.
+#[tokio::test]
+async fn ids_inside_a_kept_entitys_texts_are_withheld_unless_the_tenants() {
+    let h = harness(false, false).await;
+    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    h.graph.push_json(
+        200,
+        json!({
+            "health_status": {
+                "can_send_message": "BLOCKED",
+                "entities": [
+                    {"entity_type": "WABA", "id": WABA, "can_send_message": "BLOCKED",
+                     "additional_info": [format!("shares a review with {OTHER_WABA}")],
+                     "errors": [{"error_code": 141_000,
+                                 "error_description": format!("{OTHER_PN} and {PN} blocked"),
+                                 "possible_solution": format!("see {OTHER_WABA}")}]},
+                    {"entity_type": "PHONE_NUMBER", "id": PN, "can_send_message": "AVAILABLE"}
+                ]
+            },
+            "id": WABA
+        }),
+    );
+    let reply = h
+        .call(Call::get(format!("/v1/wabas/{WABA}/health-status")).key(&key))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let entity = &reply.json()["entities"][0];
+    assert_eq!(
+        entity["additional_info"],
+        json!(["shares a review with [id]"])
+    );
+    assert_eq!(entity["errors"][0]["error_code"], 141_000);
+    assert_eq!(
+        entity["errors"][0]["error_description"],
+        format!("[id] and {PN} blocked")
+    );
+    assert_eq!(entity["errors"][0]["possible_solution"], "see [id]");
+    for withheld in [OTHER_WABA, OTHER_PN] {
+        assert!(!reply.text.contains(withheld), "{withheld}: {}", reply.text);
+    }
+}
+
+/// The URL Meta is given is the one the destination check read, in the one
+/// serialization its parser gives: a URL the check reads as `hooks.example.com`
+/// (a backslash is a slash to it) and a parser that does not could read as
+/// another host is sent as `hooks.example.com`'s, never as written; tabs and
+/// newlines the check ignores are not sent.
+#[tokio::test]
+async fn what_is_checked_is_what_is_sent() {
+    let h = harness(true, true).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
+    for (given, sent) in [
+        (
+            "https://hooks.example.com\\@evil.example.net/x",
+            "https://hooks.example.com/@evil.example.net/x",
+        ),
+        (
+            "https://hooks.example.com/a\tb\nc",
+            "https://hooks.example.com/abc",
+        ),
+        ("https://HOOKS.example.com", "https://hooks.example.com/"),
+    ] {
+        h.graph.push_json(200, json!({"success": true}));
+        let reply = h.call(put(PN, &key, given)).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NO_CONTENT,
+            "{given}: {}",
+            reply.text
+        );
+        let requests = h.graph.requests();
+        let asked = requests.last().unwrap();
+        assert_eq!(
+            asked.json().unwrap()["webhook_configuration"]["override_callback_uri"],
+            sent,
+            "{given}"
+        );
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// M5.1 and M5.2, the roadmap's decisive test for M5c6: another tenant's
 /// WABA's health status is `404`, nothing asked of Meta, the vault never
 /// read; a platform key limited to the other tenant, and a tenant key
@@ -305,7 +391,10 @@ const REFUSED: &[&str] = &[
 async fn the_overrides_destination_is_refused_as_a_webhook_endpoints_is() {
     let h = harness(true, true).await;
     let key = h
-        .tenant_key(TENANT, &[Scope::Numbers, Scope::Webhooks])
+        .tenant_key(
+            TENANT,
+            &[Scope::Numbers, Scope::Webhooks, Scope::WebhookOverride],
+        )
         .await;
     for hook in REFUSED {
         let endpoint = h
@@ -363,7 +452,9 @@ async fn the_overrides_destination_is_refused_as_a_webhook_endpoints_is() {
 #[tokio::test]
 async fn a_url_too_long_or_a_token_missing_is_refused_before_anything_is_sent() {
     let h = harness(true, true).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     let long = format!("https://hooks.example.com/{}", "a".repeat(200));
     let reply = h.call(put(PN, &key, &long)).await;
     assert_eq!(reply.json()["error"]["field"], "url", "{}", reply.text);
@@ -404,11 +495,13 @@ async fn a_url_too_long_or_a_token_missing_is_refused_before_anything_is_sent() 
 #[tokio::test]
 async fn with_the_setting_off_a_set_is_refused_and_nothing_is_sent() {
     let h = harness(false, true).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     let platform = h
         .platform_key(
             AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]),
-            &[Scope::Numbers],
+            &[Scope::Numbers, Scope::WebhookOverride],
         )
         .await;
     let reads = h.kv.vault_reads();
@@ -434,13 +527,63 @@ async fn with_the_setting_off_a_set_is_refused_and_nothing_is_sent() {
     assert_eq!(h.graph.requests().len(), 2);
 }
 
+/// Decisive (D441): setting an override takes the scope `webhook_override`,
+/// which `numbers` does not imply and every other scope does not grant: a
+/// key holding every scope but it is `403 forbidden` on the set, with the
+/// setting on and a good URL, nothing sent and the vault unread; the scope
+/// alone does not read or clear (those are `numbers`'); with both, the
+/// destination check applies.
+#[tokio::test]
+async fn setting_takes_its_own_scope_that_numbers_does_not_imply() {
+    let h = harness(true, true).await;
+    let others: Vec<Scope> = Scope::ALL
+        .into_iter()
+        .filter(|scope| *scope != Scope::WebhookOverride)
+        .collect();
+    let without = h.tenant_key(TENANT, &others).await;
+    let platform = h
+        .platform_key(
+            AllowedTenants::Only(vec![TenantId::parse(TENANT).unwrap()]),
+            &others,
+        )
+        .await;
+    let only = h.tenant_key(TENANT, &[Scope::WebhookOverride]).await;
+    let both = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
+    let reads = h.kv.vault_reads();
+    for call in [
+        put(PN, &without, HOOK),
+        put(PN, &platform, HOOK).tenant(TENANT),
+    ] {
+        let reply = h.call(call).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
+        assert_eq!(reply.json()["error"]["code"], "forbidden");
+    }
+    for call in [Call::get(url(PN)).key(&only), delete(PN, &only)] {
+        assert_eq!(h.call(call).await.status, StatusCode::FORBIDDEN);
+    }
+    assert!(h.graph.requests().is_empty(), "{:?}", h.graph.requests());
+    assert_eq!(h.kv.vault_reads(), reads, "the vault was read");
+    // With both scopes, the destination check applies, then the set.
+    let refused = h.call(put(PN, &both, "https://10.0.0.5/x")).await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(h.graph.requests().is_empty());
+    h.graph.push_json(200, json!({"success": true}));
+    let set = h.call(put(PN, &both, HOOK)).await;
+    assert_eq!(set.status, StatusCode::NO_CONTENT, "{}", set.text);
+    assert_eq!(h.graph.requests().len(), 1);
+}
+
 /// With the setting on and no webhooks out (no allow-list to check the URL
 /// against), a set is `409 webhooks_not_configured` and nothing is sent: the
 /// destination is never trusted unchecked.
 #[tokio::test]
 async fn without_webhooks_out_a_set_is_not_configured_and_nothing_is_sent() {
     let h = harness(true, false).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     let reply = h.call(put(PN, &key, HOOK)).await;
     assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.text);
     assert_eq!(reply.json()["error"]["code"], "webhooks_not_configured");
@@ -454,7 +597,9 @@ async fn without_webhooks_out_a_set_is_not_configured_and_nothing_is_sent() {
 #[tokio::test]
 async fn the_set_and_the_clear_are_metas_documented_requests() {
     let h = harness(true, true).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     h.graph.push_json(200, json!({"success": true}));
     let reply = h.call(put(PN, &key, HOOK)).await;
     assert_eq!(reply.status, StatusCode::NO_CONTENT, "{}", reply.text);
@@ -567,7 +712,9 @@ async fn the_read_answers_the_numbers_own_url_only() {
 #[tokio::test]
 async fn a_failed_set_withholds_metas_texts_and_the_token() {
     let h = harness(true, true).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     h.graph
         .push_json(400, graph_error(&format!("{VERIFY} {SENTINEL}")));
     let reply = h.call(put(PN, &key, HOOK)).await;
@@ -588,7 +735,9 @@ async fn a_failed_set_withholds_metas_texts_and_the_token() {
 #[tokio::test]
 async fn another_tenants_number_is_not_found_on_every_override_route() {
     let h = harness(true, true).await;
-    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let key = h
+        .tenant_key(TENANT, &[Scope::Numbers, Scope::WebhookOverride])
+        .await;
     let reads = h.kv.vault_reads();
     for call in [
         Call::get(url(OTHER_PN)).key(&key),

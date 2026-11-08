@@ -257,7 +257,6 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(numbers::get_waba_health_status))
         .routes(routes!(
             number_settings::get_webhook_override,
-            number_settings::set_webhook_override,
             number_settings::clear_webhook_override
         ))
         .routes(routes!(
@@ -321,6 +320,13 @@ fn calls_routes() -> OpenApiRouter<Grant> {
 /// Roadmap M5e2: the SIP password, behind a scope of its own.
 fn call_credentials_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new().routes(routes!(calls::get_call_sip_credentials))
+}
+
+/// Roadmap M5c6: setting a number's webhook override, behind a scope of
+/// its own (reading and clearing one are `numbers`' routes, on the same
+/// path).
+fn webhook_override_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new().routes(routes!(number_settings::set_webhook_override))
 }
 
 fn groups_routes() -> OpenApiRouter<Grant> {
@@ -599,6 +605,7 @@ fn api_routes(
         .merge(tenant(broadcasts_routes(), Scope::Broadcasts))
         .merge(tenant(calls_routes(), Scope::Calls))
         .merge(tenant(call_credentials_routes(), Scope::CallCredentials))
+        .merge(tenant(webhook_override_routes(), Scope::WebhookOverride))
         .merge(tenant(partners_routes(), Scope::Partners))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))

@@ -421,6 +421,35 @@ impl std::fmt::Debug for Waba<'_> {
     }
 }
 
+/// The shortest run of digits taken for an id (a phone number id, a WABA
+/// id, a business id are 15 or 16; error codes and counts are shorter).
+const ID_DIGITS: usize = 8;
+
+/// `text` with every run of [`ID_DIGITS`] or more digits that is not in
+/// `known` replaced by `[id]`.
+fn withhold_unknown_ids(text: &str, known: &std::collections::HashSet<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() >= ID_DIGITS && !known.contains(run.as_str()) {
+            out.push_str("[id]");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
 impl<'a> Waba<'a> {
     /// The operations on `waba`, once `authz` admits it
     /// ([`Authorizer::admit_waba`]). Failed Graph calls are reported to
@@ -524,6 +553,25 @@ impl<'a> Waba<'a> {
                 kept.push(entity);
             }
         }
+        // A kept node's texts may name another node ("number 1055… is
+        // blocked"): an id they carry that is not a kept node's is
+        // withheld, so no other tenant's number or WABA id leaves in a
+        // description either.
+        let known: std::collections::HashSet<String> =
+            kept.iter().map(|entity| entity.id.clone()).collect();
+        for entity in &mut kept {
+            for text in &mut entity.additional_info {
+                *text = withhold_unknown_ids(text, &known);
+            }
+            for error in &mut entity.errors {
+                for text in [&mut error.error_description, &mut error.possible_solution]
+                    .into_iter()
+                    .flatten()
+                {
+                    *text = withhold_unknown_ids(text, &known);
+                }
+            }
+        }
         status.entities = kept;
         Ok(status)
     }
@@ -601,6 +649,24 @@ impl<'a> Waba<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    #[test]
+    fn unknown_ids_in_a_health_text_are_withheld() {
+        let known: HashSet<String> = ["102290129340398".to_owned()].into();
+        assert_eq!(
+            withhold_unknown_ids(
+                "WABA 102290129340398 and 102290129340399; number 106540352242923 (code 141002).",
+                &known
+            ),
+            "WABA 102290129340398 and [id]; number [id] (code 141002)."
+        );
+        assert_eq!(withhold_unknown_ids("", &known), "");
+        assert_eq!(withhold_unknown_ids("1234567", &known), "1234567");
+        assert_eq!(withhold_unknown_ids("12345678", &known), "[id]");
+        assert_eq!(withhold_unknown_ids("x99999999", &known), "x[id]");
+    }
+
     use super::*;
 
     /// A website is an `http` or `https` URL with a host and no

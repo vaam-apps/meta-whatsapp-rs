@@ -196,6 +196,15 @@ pub enum Scope {
     /// off by default) (a stored name, pending the owner's confirmation
     /// before the first release).
     CallCredentials,
+    /// Setting a number's webhook override (roadmap M5c6, design D441):
+    /// the one write that makes Meta deliver a number's webhooks to a URL
+    /// of the tenant's instead of the service. A scope of its own, which
+    /// `numbers` does not grant and no key holds until an operator gives
+    /// it, and the set answers only when the deployment enables it
+    /// (`WA_SERVER_NUMBER_WEBHOOK_OVERRIDE`, off by default). Reading and
+    /// clearing an override stay under `numbers` (a stored name, pending
+    /// the owner's confirmation before the first release).
+    WebhookOverride,
     /// Partner acts on a tenant's own WABA (roadmap M5j): the read of its
     /// business verification status, a migration intent to a
     /// Multi-Partner Solution, and a billing currency or payment method
@@ -207,7 +216,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 23] = [
+    pub const ALL: [Scope; 24] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -229,6 +238,7 @@ impl Scope {
         Self::Routing,
         Self::Calls,
         Self::CallCredentials,
+        Self::WebhookOverride,
         Self::Partners,
         Self::Broadcasts,
     ];
@@ -257,6 +267,7 @@ impl Scope {
             Self::Routing => "routing",
             Self::Calls => "calls",
             Self::CallCredentials => "call_credentials",
+            Self::WebhookOverride => "webhook_override",
             Self::Partners => "partners",
             Self::Broadcasts => "broadcasts",
         }
