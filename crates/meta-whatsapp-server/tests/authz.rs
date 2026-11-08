@@ -268,6 +268,14 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users/unblock"),
+        // Roadmap M5k, slice 2 (the design's M5.1): a number's bot.
+        (Method::GET, "/v1/numbers/{pn}/bot"),
+        (Method::PUT, "/v1/numbers/{pn}/bot"),
+        (Method::GET, "/v1/numbers/{pn}/bot/rules"),
+        (Method::POST, "/v1/numbers/{pn}/bot/rules"),
+        (Method::GET, "/v1/numbers/{pn}/bot/rules/{rule_id}"),
+        (Method::PUT, "/v1/numbers/{pn}/bot/rules/{rule_id}"),
+        (Method::DELETE, "/v1/numbers/{pn}/bot/rules/{rule_id}"),
         // Roadmap M5k (the design's M5.1): a number's broadcasts.
         (Method::POST, "/v1/numbers/{pn}/broadcasts"),
         (Method::GET, "/v1/numbers/{pn}/broadcasts/{broadcast_id}"),
@@ -800,6 +808,23 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             let reply = h.call(call(&operation, &a_key, None)).await;
             assert_eq!(reply.status, StatusCode::OK, "{label}: {}", reply.text);
             assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            continue;
+        }
+        // The bot (roadmap M5k, slice 2) is the service's own records: the
+        // number is the tenant's (step 4), and no token or Meta is
+        // involved. A rule the sample never made is `404`.
+        if operation.template.starts_with("/v1/numbers/{pn}/bot") {
+            let before = h.kv.vault_reads();
+            let asked = h.graph.requests().len();
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            let expected = match (operation.method.as_str(), operation.template.as_str()) {
+                ("POST", "/v1/numbers/{pn}/bot/rules") => StatusCode::CREATED,
+                (_, "/v1/numbers/{pn}/bot/rules/{rule_id}") => StatusCode::NOT_FOUND,
+                _ => StatusCode::OK,
+            };
+            assert_eq!(reply.status, expected, "{label}: {}", reply.text);
+            assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            assert_eq!(h.graph.requests().len(), asked, "{label} asked Meta");
             continue;
         }
         // A broadcast's read and cancel (roadmap M5k) are the service's

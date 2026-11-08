@@ -412,11 +412,25 @@ pub enum Operation {
     GetBroadcast,
     /// `cancel_broadcast`: a broadcast stopped before its next send (roadmap M5k).
     CancelBroadcast,
+    /// `get_bot_settings`: a number's bot, on or off, and its allow and deny lists (roadmap M5k, slice 2).
+    GetBotSettings,
+    /// `update_bot_settings`: turn a number's bot on or off, set its lists (roadmap M5k, slice 2).
+    UpdateBotSettings,
+    /// `list_bot_rules`: a number's bot rules, in the order they are tried (roadmap M5k, slice 2).
+    ListBotRules,
+    /// `create_bot_rule`: a rule added to a number's bot (roadmap M5k, slice 2).
+    CreateBotRule,
+    /// `get_bot_rule`: one rule (roadmap M5k, slice 2).
+    GetBotRule,
+    /// `replace_bot_rule`: one rule replaced (roadmap M5k, slice 2).
+    ReplaceBotRule,
+    /// `delete_bot_rule`: one rule removed (roadmap M5k, slice 2).
+    DeleteBotRule,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 181] = [
+    pub const ALL: [Self; 188] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -598,6 +612,13 @@ impl Operation {
         Self::CreateBroadcast,
         Self::GetBroadcast,
         Self::CancelBroadcast,
+        Self::GetBotSettings,
+        Self::UpdateBotSettings,
+        Self::ListBotRules,
+        Self::CreateBotRule,
+        Self::GetBotRule,
+        Self::ReplaceBotRule,
+        Self::DeleteBotRule,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -785,6 +806,13 @@ impl Operation {
             Self::CreateBroadcast => "create_broadcast",
             Self::GetBroadcast => "get_broadcast",
             Self::CancelBroadcast => "cancel_broadcast",
+            Self::GetBotSettings => "get_bot_settings",
+            Self::UpdateBotSettings => "update_bot_settings",
+            Self::ListBotRules => "list_bot_rules",
+            Self::CreateBotRule => "create_bot_rule",
+            Self::GetBotRule => "get_bot_rule",
+            Self::ReplaceBotRule => "replace_bot_rule",
+            Self::DeleteBotRule => "delete_bot_rule",
         }
     }
 
@@ -958,6 +986,13 @@ impl Operation {
                 Scope::Routing
             }
             Self::CreateBroadcast | Self::GetBroadcast | Self::CancelBroadcast => Scope::Broadcasts,
+            Self::GetBotSettings
+            | Self::UpdateBotSettings
+            | Self::ListBotRules
+            | Self::CreateBotRule
+            | Self::GetBotRule
+            | Self::ReplaceBotRule
+            | Self::DeleteBotRule => Scope::Bot,
             Self::GetCallSettings
             | Self::UpdateCallSettings
             | Self::GetCallPermissions

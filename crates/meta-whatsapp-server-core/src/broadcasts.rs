@@ -498,6 +498,13 @@ impl BroadcastRecords {
         &self.settings
     }
 
+    /// The pacer every send of a number waits for a slot of: the broadcasts'
+    /// own, and the bot's replies (roadmap M5k, slice 2), one budget per
+    /// number in the shared store.
+    pub fn pacer(&self) -> &Pacer {
+        &self.pacer
+    }
+
     /// A worker: claims the broadcasts due, sends them as their tenants'
     /// numbers (each send finds its token by the broadcast's record, steps
     /// 4 and 5), and records each person. `id` names it among the

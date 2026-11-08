@@ -5878,6 +5878,863 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/bot": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/bot`: the bot's switch and lists.",
+        "operationId": "get_bot_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bot (off, with no rules, for a number never configured)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/bot`: switch the bot and set its lists.",
+        "operationId": "update_bot_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The bot as it now stands; audited `bot_settings_updated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body`, `owners` or `banned`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/bot/rules": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/bot/rules`: the rules, in the order they are\ntried.",
+        "operationId": "list_bot_rules",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rules by priority, then age",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRuleList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/bot/rules`: add a rule.",
+        "operationId": "create_bot_rule",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never add two rules",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The rule, normalised; audited `bot_rule_created`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`idempotency_in_progress`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body`, `rules` (the number has as many as allowed) or the rule's field at fault; `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/bot/rules/{rule_id}": {
+      "get": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/bot/rules/{rule_id}`: one rule.",
+        "operationId": "get_bot_rule",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number or rule for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/bot/rules/{rule_id}`: replace a rule.",
+        "operationId": "replace_bot_rule",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The rule as it now stands (its id and date stay); audited `bot_rule_updated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number or rule for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body` or the rule's field at fault",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "bot"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/bot/rules/{rule_id}`: remove a rule.",
+        "operationId": "delete_bot_rule",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule_id",
+            "in": "path",
+            "description": "The rule's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed; audited `bot_rule_deleted`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number or rule for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/broadcasts": {
       "post": {
         "tags": [
@@ -32267,6 +33124,426 @@
           }
         }
       },
+      "BotAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Answer with a text.",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "outside_window_template": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Meta's template object (`name`, `language`, `components`) sent\ninstead when the 24-hour window is closed; none: nothing is\nsent outside the window.",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "text": {
+                "type": "string",
+                "description": "The text, at most 4,096 characters."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reply"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Answer with a template (a template needs no open window).",
+            "required": [
+              "template",
+              "type"
+            ],
+            "properties": {
+              "template": {
+                "type": "object",
+                "description": "Meta's template object.",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "template"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Answer with the list of the number's command rules that have a\n`description`, generated. Only for a `command` or `keyword`\ntrigger.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "help"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a rule does when it fires."
+      },
+      "BotChat": {
+        "type": "string",
+        "description": "Which chats a rule answers in.",
+        "enum": [
+          "private",
+          "group",
+          "any"
+        ]
+      },
+      "BotKeywordMode": {
+        "type": "string",
+        "description": "How a keyword trigger compares.",
+        "enum": [
+          "exact",
+          "contains"
+        ]
+      },
+      "BotRule": {
+        "type": "object",
+        "description": "A rule of a number's bot.",
+        "required": [
+          "id",
+          "created_at",
+          "enabled",
+          "priority",
+          "trigger",
+          "chat",
+          "owners_only",
+          "action",
+          "continue_after"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/BotAction",
+            "description": "What it does."
+          },
+          "chat": {
+            "$ref": "#/components/schemas/BotChat",
+            "description": "Which chats."
+          },
+          "continue_after": {
+            "type": "boolean",
+            "description": "Whether the rules after it are tried when it answered."
+          },
+          "cooldown_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The cooldown, in seconds.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When it was made (RFC 3339)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is for."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether it is tried."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The label."
+          },
+          "owners_only": {
+            "type": "boolean",
+            "description": "Owners only."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The order it is tried in.",
+            "minimum": 0
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/BotTrigger",
+            "description": "What it listens for, normalised (words in lower case)."
+          }
+        }
+      },
+      "BotRuleList": {
+        "type": "object",
+        "description": "The rules of a number, in the order they are tried.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BotRule"
+            },
+            "description": "The rules."
+          }
+        }
+      },
+      "BotRuleRequest": {
+        "type": "object",
+        "description": "A rule.",
+        "required": [
+          "trigger",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/BotAction",
+            "description": "What it does."
+          },
+          "chat": {
+            "$ref": "#/components/schemas/BotChat",
+            "description": "Which chats it answers in (default `private`)."
+          },
+          "continue_after": {
+            "type": "boolean",
+            "description": "Let the rules after it be tried when it answered (default\n`false`: the first that answers decides)."
+          },
+          "cooldown_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Seconds (1 to 86,400) before the same person can fire it again.",
+            "minimum": 0
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the rule is for (up to 200 characters); a command rule's is\nits line in the generated help."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "A rule switched off is kept and never tried. Default `true`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A label for your own use (up to 64 characters)."
+          },
+          "owners_only": {
+            "type": "boolean",
+            "description": "Only the number's owners may fire it (default `false`)."
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The order rules are tried in, from 0 to 10,000 (default 100); equal\npriorities go by age.",
+            "minimum": 0
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/BotTrigger",
+            "description": "What it listens for."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotSettings": {
+        "type": "object",
+        "description": "A number's bot.",
+        "required": [
+          "enabled",
+          "owners",
+          "banned",
+          "rules",
+          "max_rules"
+        ],
+        "properties": {
+          "banned": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The banned, without a `+`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the bot answers."
+          },
+          "max_rules": {
+            "type": "integer",
+            "description": "The most rules a number may have.",
+            "minimum": 0
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The owners, without a `+`."
+          },
+          "rules": {
+            "type": "integer",
+            "description": "How many rules it has.",
+            "minimum": 0
+          }
+        }
+      },
+      "BotSettingsRequest": {
+        "type": "object",
+        "description": "The switch, the owners and the banned of a number's bot.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "banned": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who gets no answer at all (up to 200), named the same way."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the bot answers. A bot is off until a tenant turns it on."
+          },
+          "owners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Phone numbers (`+16505551234`, or without the `+`) and business-\nscoped user ids who pass `owners_only` rules (up to 200)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotTrigger": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A text that starts with a prefix and then a name, ignoring case:\n`/help`.",
+            "required": [
+              "names",
+              "type"
+            ],
+            "properties": {
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The command's name and aliases (1 to 20, up to 64 characters\neach, no space, no prefix)."
+              },
+              "prefixes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The prefixes (up to 5 of 1 or 2 symbols; `[\"/\"]` when none)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "command"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A text that is, or contains, one of the words, ignoring case.",
+            "required": [
+              "words",
+              "mode",
+              "type"
+            ],
+            "properties": {
+              "mode": {
+                "$ref": "#/components/schemas/BotKeywordMode",
+                "description": "Whole message or contained."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "keyword"
+                ]
+              },
+              "words": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The words (1 to 20, up to 64 characters each)."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A tapped reply button or list row, or a template quick-reply\nbutton, by the id (or payload) it was sent with. Case matters.",
+            "required": [
+              "ids",
+              "type"
+            ],
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The ids (1 to 20, up to 64 characters each)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "payload"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Any message with something to answer: a text, a tap or a media.\nNever a reaction, an edit, a deletion or a system message.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "any"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a rule listens for. Every word is literal text: nothing a tenant\nwrites is a pattern."
+      },
       "Broadcast": {
         "type": "object",
         "description": "A broadcast: where it stands and how many people are in each outcome.\nNo person, no parameter, no message.",
@@ -40808,7 +42085,8 @@
           "call_credentials",
           "webhook_override",
           "partners",
-          "broadcasts"
+          "broadcasts",
+          "bot"
         ]
       },
       "SendMarketingMessage": {
@@ -43699,6 +44977,10 @@
     {
       "name": "broadcasts",
       "description": "Broadcasts (scope `broadcasts`; roadmap M5k): a template queued for many people from a number, paced at the deployment's rate shared by every replica, each person sent at most once, read (counts, never messages) and cancelled by id"
+    },
+    {
+      "name": "bot",
+      "description": "The bot (scope `bot`; roadmap M5k, slice 2): the rules a tenant keeps for a number, which the service evaluates on its inbound messages and answers from (commands, keywords, button ids; a text, a template or a generated help), with a switch, owners and a ban list; every word literal, never a pattern"
     },
     {
       "name": "routing",

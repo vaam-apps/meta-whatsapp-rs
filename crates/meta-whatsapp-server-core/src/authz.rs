@@ -1018,6 +1018,20 @@ impl Authorizer {
         self.number_of(tenant, pn).await
     }
 
+    /// Steps 4 and 5 for the number a bot answers from (roadmap M5k, slice 2;
+    /// design D460), for the `tenant` the webhook pipeline found holding the
+    /// number, whose rules the number's record names: the number no longer
+    /// `tenant`'s (unbound, or attached by another) is `404 not_found`, and
+    /// nothing is sent. Crate-private: only the bot's replies call it
+    /// ([`crate::bot`]).
+    pub(crate) async fn bot_sender(
+        &self,
+        tenant: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
+        self.number_of(tenant, pn).await
+    }
+
     /// Steps 4 and 5 for the number `pn`, bound to `tenant`.
     async fn number_of(
         &self,

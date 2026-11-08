@@ -7661,7 +7661,7 @@ or WABA fails the family's own cross-tenant test).
     `a_claim_that_failed_after_meta_onboarded_keeps_its_key`,
     `two_admin_keys_do_not_share_a_key_string`,
     and the core's `the_pool_and_hosted_fingerprints_are_per_route_body_and_number`.
-- [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
+- [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–87, 89–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its
     tenant's configured rate under a fake clock.
@@ -7704,14 +7704,65 @@ or WABA fails the family's own cross-tenant test).
     first release: the scope `broadcasts`, the operation ids, the audit
     actions, the paths, the schema names, the four `WA_SERVER_BROADCAST_*`
     variables and the three `wa.server.broadcast*` namespaces; no legal act.
-  - **Not done here:** the bot API (commands, middleware and plugins are
-    compiled in; retention over HTTP); scheduling a broadcast for a time
+  - **Not done here:** (the bot API: slice 2, below); scheduling a broadcast for a time
     (the jobs carry one; row 90); a list of a tenant's broadcasts; a rate
     per tenant (a place to keep it, a migration); following a throughput
     upgrade; feeding the per-user marketing limit (`131049`) from the status
     webhooks to the jobs (`JobStore::observe`); templates naming a catalog;
     cancelling a deleted tenant's broadcasts (they stop for want of a
     token); no call of these routes was run against Meta live.
+  - **Slice 2 landed: the bot API** (*PR number to be added when it
+    lands*; the access lists, done, and rows 85, 86 and 92's budget, 17 and
+    91 in part; ticks nothing: rows 87 and 90 stay open, 17, 85, 86, 91 and
+    92 partial). A new
+    scope, `bot`, and seven routes under `/v1/numbers/{pn}`
+    (`server_core::bot`, `server_api_axum::api::bot`): `GET`, `PUT …/bot`
+    (off until switched on; the owners and the banned) and `GET`, `POST
+    …/bot/rules`, `GET`, `PUT`, `DELETE …/bot/rules/{rule_id}`: declarative
+    rules the service evaluates on the number's inbound messages (a
+    command by prefix and name, a keyword whole or contained, a tapped
+    button's id, anything; a text, a template, or the generated help; a
+    chat kind, owners only, a per-user cooldown) and answers from, ordered
+    by priority, the first answer deciding. Every word is literal: no
+    pattern of a tenant's is compiled. No new port, table or migration: one
+    record per number on the bundle's `KvStore`. The pipeline hands each
+    recorded inbound message of a tenant's number to `BotReplies`
+    (`inbound::MessageActions`), which claims each answer with a marker
+    before sending it (a redelivery, a second replica or a retry never
+    answers twice), paces it in the broadcasts' budget, and sends it as the
+    inbox sends a reply (24-hour window, thread owner and binding epoch
+    checked; an `outside_window_template` when the window is closed).
+    **M5.1 and M5.2 here:** the number's binding is asked before a body is
+    read (`404`), a rule is its tenant's or does not exist, and a number
+    rebound to another tenant answers from none of the first's rules.
+    Decisive tests (`tests/bot.rs`, mutation-checked):
+    `a_matching_message_is_answered_once_under_redelivery` (the marker),
+    `a_cooldown_is_respected_under_a_fake_clock`,
+    `outside_the_window_there_is_no_free_form_answer`,
+    `another_tenants_bot_is_not_found` and
+    `a_rebound_number_never_answers_from_the_first_tenants_rules`, with
+    `tests/bot_logs.rs` and the capture's `bot` section (no word, text,
+    message or person in any line), `live_bot.rs` on Postgres, M5.1 by
+    construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`).
+  - **Decided** (the coordinator, 2026-11-07, under the owner's delegation, swappable): D460 to D467 in
+    the design's section 10: the rules' place, literal
+    matching, the answer inline with its marker, the limits, the scope and
+    audit, who is answered, what stays open, the routes' shape. Pending the
+    owner's confirmation before the first release: the scope `bot`, the
+    seven operation ids, the four audit actions, the paths, the schema
+    names, `WA_SERVER_BOT_MAX_RULES` and
+    `WA_SERVER_BOT_MAX_MESSAGE_AGE_SECONDS`, the namespaces `wa.server.bot`
+    and `wa.server.bot.reply`, and the callback prefix `wa-bot:`; no legal
+    act.
+  - **Not done in slice 2:** a broadcast for a time (row 90); plugins and
+    middleware over HTTP (row 87, by design; row 86 in part); arguments,
+    flags, subcommands and the unknown-command hook (row 85); Markdown
+    rendering, images, suggestions and carousels in an answer (row 17); a
+    cap per chat and a tenant-set retention (row 91); typing indicators
+    and group operations paced over HTTP (row 92); answers sent by workers
+    instead of inline (the bot step holds one of the pipeline's four
+    recording turns); a list of a tenant's broadcasts; a rate per tenant;
+    no call of these routes was run against Meta live.
 - [x] **M5l. Conversation routing** (row 139): the thread control API.
   - **After:** S7, L15.
   - **Decisive:** M5.1, M5.2.
