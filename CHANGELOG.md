@@ -12,6 +12,30 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5k, slice 2)
+
+- **The bot over HTTP** (roadmap M5k; D460 to D467, the implementer's
+  proposals, awaiting the coordinator's decision): a new scope `bot` and
+  seven routes under `/v1/numbers/{pn}`: `GET` and `PUT …/bot` (the bot is
+  off until switched on; its owners and banned senders) and `GET`, `POST
+  …/bot/rules` (an `Idempotency-Key`), `GET`, `PUT`, `DELETE
+  …/bot/rules/{rule_id}`. A rule is declarative, evaluated by the service
+  on the number's inbound messages: a command by prefix and name, a keyword
+  (whole or contained), a tapped button or list row by id, or anything; a
+  text, a template (or, outside the 24-hour window, the rule's own
+  template) or a generated help; a chat kind, owners only, a per-user
+  cooldown; ordered by priority. Every word is literal text, never a
+  pattern. Each answer is claimed with a marker before it is sent, so a
+  redelivered webhook, a second replica or a retry never answers twice; it
+  is paced in the broadcasts' budget and sent as the inbox sends a reply.
+  No new port, table or migration. New variables `WA_SERVER_BOT_MAX_RULES`
+  (50) and `WA_SERVER_BOT_MAX_MESSAGE_AGE_SECONDS` (3600), and store
+  namespaces `wa.server.bot` and `wa.server.bot.reply`, pending the owner's
+  confirmation before the first release. The OpenAPI document gains 7
+  operations, 9 schemas, the scope and the tag (additive). The library:
+  nothing changes; `meta_whatsapp_server_core::inbound::MessageActions` is
+  the pipeline's new hook.
+
 ### Added (roadmap M5k, slice 1)
 
 - **The broadcast API over HTTP** (roadmap M5k; D420 to D427, the coordinator's decisions of 2026-11-07, swappable): a new scope `broadcasts` and

@@ -146,6 +146,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
+| `WA_SERVER_BOT_MAX_RULES`, `WA_SERVER_BOT_MAX_MESSAGE_AGE_SECONDS` | `50`, `3600` | the [bot](#the-bot)'s settings, each a positive whole number: the most rules one number's bot may have, and how old a message may be (in seconds, when the service records it) and still be answered. Its answers draw on `WA_SERVER_BROADCAST_RATE`'s budget. Pending the owner's confirmation before the first release |
 | `WA_SERVER_BROADCAST_RATE`, `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`, `WA_SERVER_BROADCAST_WORKERS` | `10`, `1000`, `3`, `2` | the [broadcast API](#broadcasts)'s settings, each a positive whole number: messages a second for each number, shared by every replica; the most people in one broadcast; the most broadcasts a tenant has queued or running; the broadcasts a replica sends at once. Pending the owner's confirmation before the first release |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on`: a key holding the scope `call_credentials` (no key holds it unless an operator gives it) may read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`); `off`: that route is `403 feature_not_available` and Meta is not asked (roadmap M5e2; a proposal, design D410) |
@@ -1571,11 +1572,83 @@ There is no new table: the jobs and the pacer are the bot crate's, in the
 backend's key/value store (`wa.bot.jobs*`, `wa.bot.pacer`) beside the
 service's three (`wa.server.broadcast*`).
 
-Not offered yet: the bot API, a time to send at, a list of a tenant's
+Not offered yet: a time to send at, a list of a tenant's
 broadcasts, a rate per tenant (the setting is the deployment's, for each
 number), following a throughput upgrade, and the per-user marketing limit
 (`131049`) arriving as a status event (one in a send's own answer is
 marked). A deleted tenant's queued broadcasts stop for want of a token.
+
+## The bot
+
+One scope, `bot` (roadmap M5k, slice 2; design D460 to D467, the
+implementer's proposals awaiting the coordinator's decision, so the names
+below can change before the first release). The service cannot run a
+tenant's code, so the bot over HTTP is **rules a tenant configures** for a
+number, which the service evaluates on that number's inbound messages and
+answers from. A tenant that wants to decide for itself reads the message
+events and replies.
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/numbers/{pn}/bot`, `PUT …` | the switch (**off** until turned on), the owners and the banned |
+| `GET /v1/numbers/{pn}/bot/rules`, `POST …` | the rules in the order they are tried; add one (`Idempotency-Key`) |
+| `GET /v1/numbers/{pn}/bot/rules/{rule_id}`, `PUT …`, `DELETE …` | read, replace, remove |
+
+A rule is `{trigger, action, chat?, owners_only?, cooldown_seconds?,
+priority?, continue_after?, enabled?, name?, description?}`. **Every word
+is literal text, never a pattern**: a `command` trigger is a prefix (`/`)
+and a name (ignoring case, with aliases), a `keyword` is the whole message
+or part of it (ignoring case), a `payload` is the id of a tapped reply
+button or list row, and `any` takes any text, tap or media. An action is a
+`reply` (a text, with an optional `outside_window_template`), a `template`,
+or `help` (the command rules that have a `description`, generated). Rules
+are tried by `priority` then age; the first that answers decides, a guard
+that refuses (the chat kind, `owners_only`) ends the message too, and
+`continue_after` lets the next rules answer as well, up to three answers
+to a message. A banned sender gets no answer at all.
+
+**How an answer is made.** After the webhook pipeline recorded an inbound
+message for the tenant holding the number, the bot reads the number's
+record, and answers inline. Each answer is **claimed before it is sent**
+(a marker per number, message and rule, 8 days), so a redelivered webhook,
+a second replica and a retry never answer twice; the residual is an answer
+never sent, never a second one. A failed answer is not retried. A rule's
+cooldown (`wa.bot.cooldown`, per number, rule and user) holds the same
+person back silently. The reply goes through the inbox's, with the number's
+own checks (`WA_SERVER_INBOX_REPLY_CHECKS`): the 24-hour window, the
+thread's owner and the binding epoch, with the token of the number's
+*current* tenant, so **a number moved to another tenant never answers from
+the first's rules** (the new holder reads an empty, switched-off bot). A
+free-form text outside the window is not sent; a rule's
+`outside_window_template` is, instead. An answer waits for a slot of the
+number's budget, the one broadcasts share (`WA_SERVER_BROADCAST_RATE`),
+at most 5 seconds, and is dropped past it. A message older than
+`WA_SERVER_BOT_MAX_MESSAGE_AGE_SECONDS` (an hour) is not answered.
+
+**Limits.** 50 rules a number (`WA_SERVER_BOT_MAX_RULES`), up to 20 words of
+64 characters in a trigger, 200 owners and 200 banned, a cooldown of a day
+at most, a text of 4,096 characters. The answer is sent while the delivery
+holds one of the pipeline's four recording turns, so a replica answers a
+few messages a second per round trip to Meta; moving the sending to
+workers is a swap (`MessageActions`).
+
+**Audit and logs.** Each change is an audit event (`bot_settings_updated`,
+`bot_rule_created`, `bot_rule_updated`, `bot_rule_deleted`: the key,
+tenant, WABA, number, the rule's id and how many rules). The bot logs, under
+`meta_whatsapp_server::api::bot`, a rule's id and the outcome of an answer
+(`sent`, `duplicate`, `cooling_down`, `limited`, `window_closed`,
+`thread_owned_elsewhere`, `number_unusable`, `failed` with the error code);
+never a trigger word, a text, a customer's message, a phone number, a
+BSUID or Meta's text. Each answer carries `wa-bot:` and its rule's id as its
+`biz_opaque_callback_data`, which Meta echoes in the status events. No new
+table: the rules and markers are two namespaces of the backend's key/value
+store (`wa.server.bot`, `wa.server.bot.reply`).
+
+Not offered over HTTP yet: arguments, flags and subcommands, middleware and
+plugins (by design: the service loads no tenant code), Markdown, images,
+suggestions and carousels in an answer, a rule that forwards a message (the
+events already carry it), a time to send a broadcast at, and a cap per
+chat.
 
 ## The inbox
 
