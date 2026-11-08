@@ -120,11 +120,11 @@ where
         .handshake(TokioIo::new(io))
         .await
         .map_err(|_| FetchError::Protocol)?;
-    // Driven here, not spawned: when this future is dropped (the time
-    // limit, the caller going away) the connection goes with it.
-    let driver = tokio::spawn(async move {
+    // Spawned, and aborted when this future ends or is dropped (the time
+    // limit, the caller going away): the connection goes with it.
+    let _driver = AbortOnDrop(tokio::spawn(async move {
         let _ = connection.await;
-    });
+    }));
     let result = async {
         let request = Request::get(target.destination.path_and_query.as_str())
             .header(header::HOST, target.destination.authority.as_str())
@@ -170,8 +170,18 @@ where
         Ok(file)
     }
     .await;
-    driver.abort();
     result
+}
+
+/// Aborts the connection's task when dropped: on the way out, and when the
+/// time limit drops the whole fetch half way (a silent CDN must not keep
+/// its socket for as long as it likes).
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 #[async_trait]
@@ -359,6 +369,198 @@ mod tests {
         )
         .await;
         assert_eq!(got.unwrap_err(), FetchError::Protocol);
+    }
+
+    /// **The bound is enforced while streaming**, not after the body is in
+    /// memory: a CDN that never stops (no length, an endless body) is cut
+    /// at the bound with `TooLarge`, long before the time limit, and its
+    /// connection is closed. Move the check after the loop and this fails
+    /// with `Timeout` (the body never ends) having buffered all it got.
+    #[tokio::test]
+    async fn an_endless_body_is_cut_at_the_bound_while_it_streams() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+            let _ = tcp.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await;
+            let chunk = vec![b'z'; 16 * 1024];
+            let mut sent = 0usize;
+            // Until the fetcher hangs up (bounded, so a failure is a
+            // failure and not a hang).
+            while sent < 256 * 1024 * 1024 && tcp.write_all(&chunk).await.is_ok() {
+                sent += chunk.len();
+            }
+            let _ = done_tx.send(sent);
+        });
+        let got = HyperFetcher::new()
+            .unwrap()
+            .get(&pinned("/v/f", addr), 1024 * 1024, Duration::from_secs(20))
+            .await;
+        assert_eq!(got.unwrap_err(), FetchError::TooLarge);
+        let sent = tokio::time::timeout(Duration::from_secs(10), done_rx)
+            .await
+            .expect("the connection was left open")
+            .unwrap();
+        // The socket buffers hold some megabytes; far less than the cap.
+        assert!(sent < 128 * 1024 * 1024, "{sent}");
+    }
+
+    /// **No decompression.** The request asks for `identity`; a CDN that
+    /// answers `Content-Encoding: gzip` anyway gets its bytes returned as
+    /// they came (they then fail the file hash), never expanded: a
+    /// gzip bomb costs the bound, not its expansion.
+    #[tokio::test]
+    async fn a_content_encoding_is_never_expanded() {
+        let gz = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xcb, 0x48, 0x2d, 0, 0];
+        let mut answer =
+            b"HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: 15\r\n\r\n".to_vec();
+        answer.extend_from_slice(&gz);
+        let (got, seen) = get(answer, 1024).await;
+        assert_eq!(got.unwrap(), gz);
+        let head = seen.lock().unwrap()[0].to_ascii_lowercase();
+        assert!(head.contains("\r\naccept-encoding: identity\r\n"), "{head}");
+    }
+
+    /// An answer's head past the buffer is a failure, not an allocation.
+    #[tokio::test]
+    async fn an_oversized_head_is_refused() {
+        let mut answer = b"HTTP/1.1 200 OK\r\nx-pad: ".to_vec();
+        answer.extend(std::iter::repeat_n(b'a', 64 * 1024));
+        answer.extend_from_slice(b"\r\ncontent-length: 0\r\n\r\n");
+        let (got, _) = get(answer, 1024).await;
+        assert_eq!(got.unwrap_err(), FetchError::Protocol);
+    }
+
+    /// The time limit is for the whole fetch: a CDN that sends one byte at
+    /// a time (a slow loris) is cut at the limit, and its connection is
+    /// closed by the fetcher, not held until the CDN gives up.
+    #[tokio::test]
+    async fn a_trickling_cdn_is_cut_at_the_limit_and_its_connection_closed() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+            let _ = tcp
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n")
+                .await;
+            // One byte at a time until the peer is gone.
+            loop {
+                if tcp.write_all(b"x").await.is_err() || tcp.flush().await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let _ = closed_tx.send(());
+        });
+        let started = std::time::Instant::now();
+        let got = HyperFetcher::new()
+            .unwrap()
+            .get(&pinned("/v/f", addr), 1024, Duration::from_millis(300))
+            .await;
+        assert_eq!(got.unwrap_err(), FetchError::Timeout);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        tokio::time::timeout(Duration::from_secs(5), closed_rx)
+            .await
+            .expect("the connection was left open")
+            .unwrap();
+    }
+
+    /// TLS is by the host's name at the pinned address: the certificate
+    /// must be for the name (SNI is the name), a certificate for another
+    /// name or of an untrusted issuer is `Tls` and no request is sent.
+    #[tokio::test]
+    async fn tls_checks_the_certificate_against_the_name_at_the_pinned_address() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        let make = |name: &str| {
+            let key = rcgen::KeyPair::generate().unwrap();
+            let cert = rcgen::CertificateParams::new(vec![name.to_owned()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
+            (cert.der().clone(), key.serialize_der())
+        };
+        let serve = |cert: CertificateDer<'static>, key: Vec<u8>| async move {
+            let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![cert],
+                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+            )
+            .unwrap();
+            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let seen: Seen = Arc::default();
+            let s = seen.clone();
+            tokio::spawn(async move {
+                while let Ok((tcp, _)) = listener.accept().await {
+                    let (acceptor, s) = (acceptor.clone(), s.clone());
+                    tokio::spawn(async move {
+                        let Ok(mut tls) = acceptor.accept(tcp).await else {
+                            return;
+                        };
+                        let sni = tls.get_ref().1.server_name().map(str::to_owned);
+                        let mut buf = vec![0u8; 4096];
+                        let n = tls.read(&mut buf).await.unwrap_or(0);
+                        s.lock()
+                            .unwrap()
+                            .push(format!("{sni:?} {}", String::from_utf8_lossy(&buf[..n])));
+                        let _ = tls
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                            .await;
+                        let _ = tls.shutdown().await;
+                    });
+                }
+            });
+            (addr, seen)
+        };
+        let tls_pinned = |address: SocketAddr| {
+            let policy = DestinationPolicy::parse("media.test", false).unwrap();
+            Pinned {
+                destination: policy.check_url("https://media.test/v/f").unwrap(),
+                address,
+            }
+        };
+        let (good, good_key) = make("media.test");
+        let (other, other_key) = make("other.test");
+        let mut roots = RootCertStore::empty();
+        roots.add(good.clone()).unwrap();
+        roots.add(other.clone()).unwrap();
+        let fetcher = HyperFetcher::with_roots(roots).unwrap();
+        let timeout = Duration::from_secs(5);
+        let (addr, seen) = serve(good, good_key).await;
+        assert_eq!(
+            fetcher.get(&tls_pinned(addr), 1024, timeout).await.unwrap(),
+            b"ok"
+        );
+        let head = seen.lock().unwrap()[0].clone();
+        assert!(
+            head.starts_with("Some(\"media.test\") GET /v/f HTTP/1.1"),
+            "{head}"
+        );
+        let (wrong, wrong_seen) = serve(other, other_key).await;
+        assert_eq!(
+            fetcher.get(&tls_pinned(wrong), 1024, timeout).await,
+            Err(FetchError::Tls),
+            "a certificate for another name"
+        );
+        assert!(wrong_seen.lock().unwrap().is_empty());
+        let untrusting = HyperFetcher::with_roots(RootCertStore::empty()).unwrap();
+        assert_eq!(
+            untrusting.get(&tls_pinned(addr), 1024, timeout).await,
+            Err(FetchError::Tls),
+            "an untrusted issuer"
+        );
     }
 
     #[tokio::test]

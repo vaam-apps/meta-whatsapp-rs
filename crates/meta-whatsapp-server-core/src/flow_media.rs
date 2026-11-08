@@ -472,6 +472,13 @@ mod tests {
             "https://MMG.WhatsApp.net./v/x",
             "https://a.b.whatsapp.net/v/x",
             "https://mmg.whatsapp.net:443/v/x",
+            // Spellings of the same name, judged as what they parse to.
+            "https://mmg%2ewhatsapp.net/v/x",
+            "https://mmg\u{3002}whatsapp.net/v/x",
+            "https://\u{ff4d}mg.whatsapp.net/v/x",
+            "https://mmg.whatsapp.net:/v/x:444",
+            // Userinfo-looking text in the path or query is only that.
+            "https://mmg.whatsapp.net/@evil.example/x?u=a@b",
         ] {
             assert!(d.admits_url(ok).is_ok(), "{ok}");
         }
@@ -495,9 +502,23 @@ mod tests {
             "https://localhost/v/x",
             "//mmg.whatsapp.net/v/x",
             "mmg.whatsapp.net/v/x",
+            // The apex has no label before it; nor does an empty one.
+            "https://.whatsapp.net/v/x",
+            // Where the host ends, as the URL parser reads it.
+            "https://evil.example%2f.whatsapp.net/v/x",
+            "https://evil.example\\.whatsapp.net/v/x",
+            "https://evil.example#.whatsapp.net/v/x",
+            "https://evil.example?.whatsapp.net/v/x",
+            "https://mmg.whatsapp.net%2eevil.example/v/x",
+            "https://mmg.whatsapp.net%00.evil.example/v/x",
+            "https://mmg.whatsapp.net.:8443/v/x",
+            "https://xn--whatsapp-.net/v/x",
+            "https://mmg.whatsapp.net\u{a0}.evil.example/v/x",
             "",
         ] {
-            let error = d.admits_url(bad).unwrap_err();
+            let Err(error) = d.admits_url(bad) else {
+                panic!("admitted: {bad}")
+            };
             assert_eq!(error.code(), "invalid_request", "{bad}");
             assert_eq!(error.field(), Some("cdn_url"), "{bad}");
         }
