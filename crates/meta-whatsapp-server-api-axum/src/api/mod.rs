@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; calling `calls`; partner acts on a WABA `partners`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`; routing roles and thread control `routing`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; calling `calls`; partner acts on a WABA `partners`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`; broadcasts `broadcasts`; routing roles and thread control `routing`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -21,6 +21,7 @@
 pub mod admin;
 pub mod analytics;
 pub mod blocked_users;
+pub mod broadcasts;
 pub mod calls;
 pub mod commerce;
 pub mod display_name;
@@ -119,6 +120,7 @@ impl Modify for Security {
         (name = "qr_codes", description = "QR codes and short links that open a chat with a prefilled message, each checked to be the number's own (scope `qr_codes`)"),
         (name = "analytics", description = "A WABA's messaging, conversation, pricing and template analytics, their ranges bounded (scope `analytics`)"),
         (name = "contacts", description = "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"),
+        (name = "broadcasts", description = "Broadcasts (scope `broadcasts`; roadmap M5k): a template queued for many people from a number, paced at the deployment's rate shared by every replica, each person sent at most once, read (counts, never messages) and cancelled by id"),
         (name = "routing", description = "Conversation routing (scope `routing`; roadmap M5l): the routing roles a number's business holds, and passing, taking and releasing a user's thread; each action audited without the user, never replayed"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "erasure", description = "Erasing a customer on a number, from the inbox and the event outbox, journaled and audited: irreversible, only when called (scope `erasure`)"),
@@ -487,6 +489,13 @@ fn marketing_routes() -> OpenApiRouter<Grant> {
         ))
 }
 
+fn broadcasts_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(broadcasts::create_broadcast))
+        .routes(routes!(broadcasts::get_broadcast))
+        .routes(routes!(broadcasts::cancel_broadcast))
+}
+
 fn routing_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(routing::get_routing_roles))
@@ -580,6 +589,7 @@ fn api_routes(
         .merge(tenant(groups_routes(), Scope::Groups))
         .merge(tenant(marketing_routes(), Scope::Marketing))
         .merge(tenant(routing_routes(), Scope::Routing))
+        .merge(tenant(broadcasts_routes(), Scope::Broadcasts))
         .merge(tenant(calls_routes(), Scope::Calls))
         .merge(tenant(call_credentials_routes(), Scope::CallCredentials))
         .merge(tenant(partners_routes(), Scope::Partners))
@@ -757,6 +767,7 @@ mod tests {
             ("analytics.rs", include_str!("analytics.rs")),
             ("blocked_users.rs", include_str!("blocked_users.rs")),
             ("routing.rs", include_str!("routing.rs")),
+            ("broadcasts.rs", include_str!("broadcasts.rs")),
             ("listing.rs", include_str!("listing.rs")),
             ("templates.rs", include_str!("templates.rs")),
             (

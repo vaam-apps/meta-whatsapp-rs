@@ -5878,6 +5878,393 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/broadcasts": {
+      "post": {
+        "tags": [
+          "broadcasts"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/broadcasts`: queue a broadcast.",
+        "operationId": "create_broadcast",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never queue twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBroadcastRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued: nothing is sent yet, at the number's rate it will be",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Broadcast"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `recipients`, `recipients[i]`, `template` or its fields, or `body`; `idempotency_key_reused`: nothing queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget, or too many broadcasts at once (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: nothing queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/broadcasts/{broadcast_id}": {
+      "get": {
+        "tags": [
+          "broadcasts"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/broadcasts/{broadcast_id}`: a broadcast's state\nand counts.",
+        "operationId": "get_broadcast",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "broadcast_id",
+            "in": "path",
+            "description": "The broadcast's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The broadcast",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Broadcast"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number or broadcast for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/broadcasts/{broadcast_id}/cancel": {
+      "post": {
+        "tags": [
+          "broadcasts"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/broadcasts/{broadcast_id}/cancel`: stop a\nbroadcast.",
+        "operationId": "cancel_broadcast",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "broadcast_id",
+            "in": "path",
+            "description": "The broadcast's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The broadcast as it stands: `cancelled` if it was queued or running (a send past its last check still goes out), else as it had settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Broadcast"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number or broadcast for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/call-permissions": {
       "get": {
         "tags": [
@@ -30907,6 +31294,118 @@
           }
         }
       },
+      "Broadcast": {
+        "type": "object",
+        "description": "A broadcast: where it stands and how many people are in each outcome.\nNo person, no parameter, no message.",
+        "required": [
+          "id",
+          "phone_number_id",
+          "state",
+          "created_at",
+          "recipients",
+          "queued",
+          "sent",
+          "failed",
+          "unknown",
+          "limited",
+          "failures"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "description": "When it was made (RFC 3339)."
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Refused by Meta.",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "object",
+            "description": "The failures by the error code of Meta's refusal (`marketing_opted_out`,\n`template_paused`, `reconnect_required`, …), never Meta's text.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "limited": {
+            "type": "integer",
+            "description": "Skipped for Meta's per-user marketing limit.",
+            "minimum": 0
+          },
+          "phone_number_id": {
+            "type": "string",
+            "description": "The number it sends from."
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Not sent yet.",
+            "minimum": 0
+          },
+          "recipients": {
+            "type": "integer",
+            "description": "How many people it is for (each once).",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "description": "Accepted by Meta.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "`queued`, `running`, `completed`, `cancelled` or `stopped` (given\nup after its retries: the people left are in `queued`)."
+          },
+          "unknown": {
+            "type": "integer",
+            "description": "Sent or not, nobody knows (a replica died mid-send, a timeout):\nnever sent again.",
+            "minimum": 0
+          }
+        }
+      },
+      "BroadcastRecipient": {
+        "type": "object",
+        "description": "One person of a broadcast: a phone number, a business-scoped user id\n(BSUID), or both (Meta then uses the phone number).",
+        "properties": {
+          "components": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "description": "This person's own `components`, replacing the template's: their\nparameters (Meta's template components, as a send takes them)."
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E.164 **with** its `+` (`+16505551234`)."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business-scoped user id (`US.13491208655302741918`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "BusinessUsername": {
         "type": "object",
         "description": "A number's business username.",
@@ -33083,6 +33582,32 @@
               "null"
             ],
             "description": "The Line of Credit to attach to the new WABA; only when moving to\nLine of Credit billing."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateBroadcastRequest": {
+        "type": "object",
+        "description": "A template for many people.",
+        "required": [
+          "template",
+          "recipients"
+        ],
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BroadcastRecipient"
+            },
+            "description": "The people: each named by `phone`, `user_id` or both; each once."
+          },
+          "template": {
+            "type": "object",
+            "description": "Meta's template object: `name`, `language` and, for parameters\nevery person shares, `components`. A template naming a catalog is\nnot offered in a broadcast.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -39143,7 +39668,8 @@
           "routing",
           "calls",
           "call_credentials",
-          "partners"
+          "partners",
+          "broadcasts"
         ]
       },
       "SendMarketingMessage": {
@@ -41970,6 +42496,10 @@
     {
       "name": "contacts",
       "description": "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"
+    },
+    {
+      "name": "broadcasts",
+      "description": "Broadcasts (scope `broadcasts`; roadmap M5k): a template queued for many people from a number, paced at the deployment's rate shared by every replica, each person sent at most once, read (counts, never messages) and cancelled by id"
     },
     {
       "name": "routing",

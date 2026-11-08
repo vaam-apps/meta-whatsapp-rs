@@ -174,6 +174,13 @@ pub enum Scope {
     /// scope of its own, which `send` and `inbox` do not grant (a stored
     /// name, pending the owner's confirmation before the first release).
     Routing,
+    /// Broadcasts (roadmap M5k): a template sent to many people from a
+    /// number, paced under the deployment's rate, durable across restarts,
+    /// read and cancelled by id. A broadcast sends to up to a thousand
+    /// people on one call, so a scope of its own, which `send` does not
+    /// grant (a stored name, pending the owner's confirmation before the
+    /// first release).
+    Broadcasts,
     /// Calling (roadmap M5e): a number's calling settings, a user's call
     /// permission, the call a business places and the actions on a call
     /// (pre-accept, accept, reject, terminate). Calls carry SDP and may be
@@ -200,7 +207,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 22] = [
+    pub const ALL: [Scope; 23] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -223,6 +230,7 @@ impl Scope {
         Self::Calls,
         Self::CallCredentials,
         Self::Partners,
+        Self::Broadcasts,
     ];
 
     /// Stored and API name.
@@ -250,6 +258,7 @@ impl Scope {
             Self::Calls => "calls",
             Self::CallCredentials => "call_credentials",
             Self::Partners => "partners",
+            Self::Broadcasts => "broadcasts",
         }
     }
 

@@ -7582,6 +7582,53 @@ or WABA fails the family's own cross-tenant test).
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its
     tenant's configured rate under a fake clock.
+  - **Slice 1 landed: the broadcast API** (*PR number to be added when it
+    lands*; rows 89 and, for sending now, 92's budget; the bot API and
+    scheduling stay open). A new scope, `broadcasts`, and three routes under
+    `/v1/numbers/{pn}` over the bot crate's durable jobs and shared pacer
+    (`server_core::broadcasts`, `server_api_axum::api::broadcasts`): `POST
+    …/broadcasts` (a template for up to 1,000 people, each named by phone
+    and/or BSUID with parameters of their own, checked as a send is; `202`;
+    `Idempotency-Key` for the whole broadcast), `GET …/broadcasts/{id}` (the
+    state and counts: queued, sent, failed by Meta's error code, unknown,
+    limited; never a person or a message) and `POST …/broadcasts/{id}/cancel`.
+    No new port, table or migration: `KvJobs` and `KvRateLimiter` on
+    `Backend::kv()`, three small typed stores of the service's own
+    (`wa.server.broadcast*`), and workers every replica runs
+    (`WA_SERVER_BROADCAST_WORKERS`). The rate is the deployment's for each
+    number (`WA_SERVER_BROADCAST_RATE`, 10 a second), booked in the shared
+    store, so replicas together never pass it; each person is sent at most
+    once across restarts (the jobs' marker before the request; a person in
+    flight at a crash is `unknown`, never repeated). **M5.2 here:** a
+    broadcast is its tenant's or it does not exist, by its own record's
+    tenant and number (a number rebound to another tenant brings none of the
+    first's, and the first's queued sends find no token); the read and the
+    cancel take no token, so a tenant whose token expired can still cancel.
+    Decisive tests: `a_broadcast_never_exceeds_its_rate` and
+    `two_replicas_share_one_budget` (a fake clock, the second on Tokio's
+    paused time), `a_restart_resumes_without_resending` and its live twin
+    `live_postgres_a_broadcast_survives_a_replica_and_keeps_its_rate`,
+    `cancel_stops_further_sends`, `another_tenants_broadcast_is_not_found`
+    and `a_number_rebound_to_another_tenant_keeps_nothing_of_the_first`,
+    M5.1 by construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`),
+    `tests/broadcasts_logs.rs` (no person, parameter or Meta text in any
+    line, the bot crate's included).
+  - **Decided** (coordinator, 2026-11-07, under the owner's delegation, swappable): D420 to D427 in the design's
+    section 10: where the sends are kept (the bot crate's jobs on the
+    bundle's `KvStore`), the rate, the at-most-once windows, the scope and
+    audit, what is stored and echoed, the bounds and workers, the marketing
+    rules, the routes' shape. Pending the owner's confirmation before the
+    first release: the scope `broadcasts`, the operation ids, the audit
+    actions, the paths, the schema names, the four `WA_SERVER_BROADCAST_*`
+    variables and the three `wa.server.broadcast*` namespaces; no legal act.
+  - **Not done here:** the bot API (commands, middleware and plugins are
+    compiled in; retention over HTTP); scheduling a broadcast for a time
+    (the jobs carry one; row 90); a list of a tenant's broadcasts; a rate
+    per tenant (a place to keep it, a migration); following a throughput
+    upgrade; feeding the per-user marketing limit (`131049`) from the status
+    webhooks to the jobs (`JobStore::observe`); templates naming a catalog;
+    cancelling a deleted tenant's broadcasts (they stop for want of a
+    token); no call of these routes was run against Meta live.
 - [x] **M5l. Conversation routing** (row 139): the thread control API.
   - **After:** S7, L15.
   - **Decisive:** M5.1, M5.2.

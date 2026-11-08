@@ -92,6 +92,7 @@ use crate::uploads::NewUpload;
 /// | `send_marketing_message` ([`Self::send_marketing_message`]; roadmap M5h) | the number's id; the JSON body, canonical as above |
 /// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
+/// | `create_broadcast` ([`Self::create_broadcast`]; roadmap M5k) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 /// | `set_flow_key` ([`Self::set_flow_key`]; roadmap M5d2) | the WABA's id; the SHA-256 of the key's **public** half: **never the private key** (nor anything derived from it), so no record holds any |
 /// | `submit_business_verification`, `create_partner_solution` ([`Self::submit_business_verification`], [`Self::create_partner_solution`]; roadmap M5j2) | the JSON body, canonical as above; the operator's, so under [`run_admin`]: the admin key's id is the records' scope, not an input |
@@ -389,6 +390,12 @@ impl Fingerprint {
     /// (roadmap M5l; no legacy fingerprint).
     pub fn release_thread(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::ReleaseThread, &[("pn", number.as_str())], body)
+    }
+
+    /// `create_broadcast` on `number`, with the JSON body the request
+    /// carried (roadmap M5k; no legacy fingerprint).
+    pub fn create_broadcast(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::CreateBroadcast, &[("pn", number.as_str())], body)
     }
 
     /// `create_group` on `number`, with the JSON body the request carried

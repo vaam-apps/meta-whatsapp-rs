@@ -265,6 +265,9 @@ fn only_the_known_files_reach_the_librarys_send() {
         // The calling actions: `Calls::client`, the one place that names
         // the account (D310).
         "meta-whatsapp-server-core/src/calls.rs",
+        // A broadcast's sender, which names it through the same function
+        // (`billed_to_binding`; roadmap M5k, D426).
+        "meta-whatsapp-server-core/src/broadcasts.rs",
     ]);
     let root = std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
     let prefix = format!("{}/", root.display());

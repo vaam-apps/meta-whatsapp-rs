@@ -145,6 +145,38 @@ pub struct RoutingFacts<'a> {
     pub target_role: Option<&'a str>,
 }
 
+/// A tenant's broadcast, created or cancelled (roadmap M5k; D423), logged
+/// like [`tenant_audit`] (target `audit`, message `tenant change`) with the
+/// broadcast's id and a count. Never who: no recipient (a phone number, a
+/// BSUID), template parameter or message text is in any log of the service.
+pub fn broadcast_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    broadcast: &BroadcastFacts<'_>,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        broadcast_id = broadcast.broadcast_id,
+        recipients = broadcast.recipients,
+        "tenant change"
+    );
+}
+
+/// What a [`broadcast_audit`] event names besides its [`Subject`].
+#[derive(Debug, Clone, Copy)]
+pub struct BroadcastFacts<'a> {
+    /// The broadcast's id.
+    pub broadcast_id: &'a str,
+    /// How many people it was for (a count, never who).
+    pub recipients: usize,
+}
+
 /// A customer erased on a number (roadmap M2f: `crate::erasure`), logged
 /// like [`tenant_audit`] (target `audit`, message `tenant change`, action
 /// `customer_erased`) with the erasure's id (its journal entry's) and

@@ -31,7 +31,7 @@ conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
 # needs beyond it, it brings itself.
 # The Flows data endpoint's crypto (RSA-OAEP, AES-GCM; roadmap M5d) is the
 # library's `flows-endpoint` feature.
-meta-whatsapp-rs = { workspace = true, features = ["flows-endpoint"] }
+meta-whatsapp-rs = { workspace = true, features = ["flows-endpoint", "bot"] }
 
 # The library's `SinkError::Delivery` carries an `anyhow::Error`: the webhook
 # pipeline's sink wraps a storage failure in one (src/inbound.rs). Already

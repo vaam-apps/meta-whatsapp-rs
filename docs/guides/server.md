@@ -146,6 +146,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
+| `WA_SERVER_BROADCAST_RATE`, `WA_SERVER_BROADCAST_MAX_RECIPIENTS`, `WA_SERVER_BROADCAST_MAX_CONCURRENT`, `WA_SERVER_BROADCAST_WORKERS` | `10`, `1000`, `3`, `2` | the [broadcast API](#broadcasts)'s settings, each a positive whole number: messages a second for each number, shared by every replica; the most people in one broadcast; the most broadcasts a tenant has queued or running; the broadcasts a replica sends at once. Pending the owner's confirmation before the first release |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_CALL_SIP_CREDENTIALS` | `off` | `on`: a key holding the scope `call_credentials` (no key holds it unless an operator gives it) may read a number's SIP server password (`GET /v1/numbers/{pn}/call-settings/sip-credentials`); `off`: that route is `403 feature_not_available` and Meta is not asked (roadmap M5e2; a proposal, design D410) |
 | `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) and every [calling](#calling) action on it names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
@@ -1482,6 +1483,100 @@ same second or later wins over it. A record the store cannot take does not
 fail the action (it went through); the service logs it at `warn` without
 the user. Standby copies and handovers reach you as events either way.
 
+## Broadcasts
+
+One scope, `broadcasts` (roadmap M5k, slice 1; design D420–D427, the coordinator's
+decisions of 2026-11-07, each swappable; the name is **pending the owner's confirmation
+before the first release**). A key minted before it does not carry it, and
+`send` does not grant it: one call sends to up to a thousand people, so
+mint a key for these routes on purpose. A broadcast is a **template** sent
+to many people from one of the tenant's numbers, queued by the call and
+sent by the service's workers at the number's rate.
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/numbers/{pn}/broadcasts` | queue a broadcast: `{"template": {"name": "spring_sale", "language": {"code": "en_US"}, "components": […]}, "recipients": [{"phone": "+16505551234"}, {"user_id": "US.13491208655302741918", "components": […]}]}`; `202` with the broadcast (below); an `Idempotency-Key` makes the whole call one broadcast |
+| `GET /v1/numbers/{pn}/broadcasts/{broadcast_id}` | its state and counts |
+| `POST /v1/numbers/{pn}/broadcasts/{broadcast_id}/cancel` | stop it before its next send |
+
+```json
+{"id": "bc_6dba47524aaa6ad894ab2cb887c0243a", "phone_number_id": "106540352242922",
+ "state": "running", "created_at": "2026-11-07T18:00:00Z", "recipients": 300,
+ "queued": 120, "sent": 170, "failed": 8, "unknown": 2, "limited": 0,
+ "failures": {"marketing_opted_out": 7, "template_paused": 1}}
+```
+
+**Who.** A person is named by `phone` (E.164 with its `+`), by `user_id` (a
+business-scoped user id) or by both (Meta then uses the phone number);
+prefer the BSUID and never key a person by phone number alone. A person's
+own `components` replace the template's for them (their parameters); a
+repeated phone number or BSUID is one person (the first entry wins).
+Every message is checked as `POST …/messages` checks a template send,
+before anything is queued: a refusal is `422` on `recipients`,
+`recipients[i]` (the person) or the template's own fields, and nothing is
+queued. A template naming a catalog is refused (`422 template`).
+
+**The state.** `queued` (waiting for a worker, or for its retry),
+`running`, `completed` (every person was sent to, refused or is
+`unknown`), `cancelled` and `stopped` (given up after five retries, for a
+number whose token cannot be used or a store that keeps failing: the people
+left are in `queued`). `failed` counts Meta's refusals and `failures` says
+which, by the service's error code of the refusal (`marketing_opted_out`
+for a person who stopped marketing messages, `template_paused`,
+`reconnect_required`, …), never by Meta's text. The service keeps no
+opt-out or block list of its own: Meta's refusals are the rules, and the
+rest of the broadcast goes on past one (an account-level refusal, an
+authentication or payment error, stops the pass instead).
+
+**The rate** (D421). Each number is held to `WA_SERVER_BROADCAST_RATE`
+messages a second (10 by default; Meta's own default throughput is 80),
+booked in the shared store before every send: several replicas, several
+workers and several broadcasts on one number together never pass it, as
+long as the replicas' clocks agree (NTP). It does not count the sends of
+`POST …/messages`. A tenant has at most `WA_SERVER_BROADCAST_MAX_CONCURRENT`
+broadcasts queued or running (`429 too_many_requests` with `Retry-After`
+past it; a settled or cancelled broadcast frees its place), and one of at
+most `WA_SERVER_BROADCAST_MAX_RECIPIENTS` people.
+
+**At most once** (D422). Each person has a marker written before the
+request and read by whoever takes the broadcast over after a restart or a
+crash. A send that timed out, and one a replica died in the middle of, is
+`unknown`: it is **never sent again**, here or by the client. Reconcile the
+`unknown` ones with the message status events: every message of a
+broadcast carries `wa-broadcast:<id>` as its `biz_opaque_callback_data`
+(tenant events, [Receiving Meta's webhooks](#receiving-metas-webhooks)), so
+a status finds its broadcast. The residual is a person who never got the
+message, never a second message. A number whose token cannot be used
+(disconnected, `reconnect_required`, unbound) fails the first person it
+reaches as `reconnect_required` and waits with the others for the retries;
+reconnect it and a later retry sends them.
+
+**Cancel** stops the sends not yet past their last check (a send already
+in flight goes out), answers the broadcast as it stands, and a repeat is
+harmless. It needs no token: a tenant whose token expired can still cancel.
+
+**A broadcast is its tenant's or it does not exist** (the design's M5.2):
+another tenant's id, another number's, one never made and one that is not
+an id are the same `404`. A number handed to another tenant brings none of
+the first tenant's broadcasts with it, and their queued sends find no token.
+
+**What is stored and what is logged.** The people and the parameters are
+kept as the call gave them, in the service's key/value store, until the
+broadcast settles and 30 days after; no answer, log line, audit event or
+error holds a person, a parameter or a message (Meta's texts are withheld
+from the workers' logs: a refusal may quote the person). Each create and
+each cancel is an audit event (`broadcast_created`, `broadcast_cancelled`:
+the key, tenant, WABA, number, the broadcast's id and how many people).
+There is no new table: the jobs and the pacer are the bot crate's, in the
+backend's key/value store (`wa.bot.jobs*`, `wa.bot.pacer`) beside the
+service's three (`wa.server.broadcast*`).
+
+Not offered yet: the bot API, a time to send at, a list of a tenant's
+broadcasts, a rate per tenant (the setting is the deployment's, for each
+number), following a throughput upgrade, and the per-user marketing limit
+(`131049`) arriving as a status event (one in a send's own answer is
+marked). A deleted tenant's queued broadcasts stop for want of a token.
+
 ## The inbox
 
 What the service received for a tenant's number, read and answered over
@@ -2267,7 +2362,7 @@ Change them with `WA_SERVER_RATE_*` (the same for every tenant: per-tenant
 limits are not settable yet). A number's registration attempts have
 budgets of their own, per number ([above](#registration-and-the-two-step-pin)). Meta's own limits (80 messages a second per
 number, pair and portfolio limits) still apply and answer their own codes
-(`rate_limited`, `pair_rate_limited`, …); pacing campaigns is yours.
+(`rate_limited`, `pair_rate_limited`, …); pacing a campaign is the [broadcast API](#broadcasts)'s, at its own rate for each number.
 
 ## The contract
 

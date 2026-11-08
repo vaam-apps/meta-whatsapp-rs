@@ -392,11 +392,17 @@ pub enum Operation {
     TakeThread,
     /// `release_thread`: a user's thread released to idle (roadmap M5l).
     ReleaseThread,
+    /// `create_broadcast`: a template queued for many people from a number (roadmap M5k).
+    CreateBroadcast,
+    /// `get_broadcast`: a broadcast's counts (roadmap M5k).
+    GetBroadcast,
+    /// `cancel_broadcast`: a broadcast stopped before its next send (roadmap M5k).
+    CancelBroadcast,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 171] = [
+    pub const ALL: [Self; 174] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -568,6 +574,9 @@ impl Operation {
         Self::PassThread,
         Self::TakeThread,
         Self::ReleaseThread,
+        Self::CreateBroadcast,
+        Self::GetBroadcast,
+        Self::CancelBroadcast,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -745,6 +754,9 @@ impl Operation {
             Self::PassThread => "pass_thread",
             Self::TakeThread => "take_thread",
             Self::ReleaseThread => "release_thread",
+            Self::CreateBroadcast => "create_broadcast",
+            Self::GetBroadcast => "get_broadcast",
+            Self::CancelBroadcast => "cancel_broadcast",
         }
     }
 
@@ -911,6 +923,7 @@ impl Operation {
             Self::GetRoutingRoles | Self::PassThread | Self::TakeThread | Self::ReleaseThread => {
                 Scope::Routing
             }
+            Self::CreateBroadcast | Self::GetBroadcast | Self::CancelBroadcast => Scope::Broadcasts,
             Self::GetCallSettings
             | Self::UpdateCallSettings
             | Self::GetCallPermissions

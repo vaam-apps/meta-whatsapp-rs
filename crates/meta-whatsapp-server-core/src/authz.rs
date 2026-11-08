@@ -1003,6 +1003,21 @@ impl Authorizer {
         self.number_of(holder, pn).await
     }
 
+    /// Steps 4 and 5 for the number a queued broadcast sends from (roadmap
+    /// M5k, design D420), for the `tenant` its record names: the tenant of
+    /// the broadcast's own record, written when a caller of that tenant
+    /// created it on a number it owned, never a request's value. The
+    /// number no longer `tenant`'s (unbound, or attached by another) is
+    /// `404 not_found`, and nothing is sent. Crate-private: only the
+    /// broadcasts' sender calls it ([`crate::broadcasts`]).
+    pub(crate) async fn broadcast_sender(
+        &self,
+        tenant: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
+        self.number_of(tenant, pn).await
+    }
+
     /// Steps 4 and 5 for the number `pn`, bound to `tenant`.
     async fn number_of(
         &self,
