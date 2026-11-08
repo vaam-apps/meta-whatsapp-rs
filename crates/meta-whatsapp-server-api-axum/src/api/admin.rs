@@ -513,6 +513,9 @@ pub enum ScopeName {
     CallCredentials,
     /// Partner acts on a WABA (roadmap M5j).
     Partners,
+    /// A number's broadcasts: a template queued for many people, read and
+    /// cancelled by id (roadmap M5k).
+    Broadcasts,
 }
 
 impl From<ScopeName> for Scope {
@@ -540,6 +543,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Calls => Scope::Calls,
             ScopeName::CallCredentials => Scope::CallCredentials,
             ScopeName::Partners => Scope::Partners,
+            ScopeName::Broadcasts => Scope::Broadcasts,
         }
     }
 }
@@ -569,6 +573,7 @@ impl From<Scope> for ScopeName {
             Scope::Calls => ScopeName::Calls,
             Scope::CallCredentials => ScopeName::CallCredentials,
             Scope::Partners => ScopeName::Partners,
+            Scope::Broadcasts => ScopeName::Broadcasts,
         }
     }
 }

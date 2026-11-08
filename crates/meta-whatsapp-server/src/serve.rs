@@ -559,6 +559,7 @@ async fn run<S: Future<Output = ()>>(
         stop_signal(stopped.clone()),
     ));
     let token_expiry = spawn_token_expiry(&state, &backend, token_expiry_lead, stopped.clone());
+    let broadcasts = spawn_broadcasts(&state, &stopped)?;
     let public_task = tokio::spawn(listen::serve(
         public,
         public_router(&state),
@@ -584,6 +585,7 @@ async fn run<S: Future<Output = ()>>(
     if let Some(token_expiry) = token_expiry {
         token_expiry.abort();
     }
+    end_broadcasts(broadcasts).await;
     end_dispatcher(dispatcher).await;
     backend.close().await;
     served
@@ -641,6 +643,44 @@ fn spawn_token_expiry(
             .run_token_expiry(backend, lead, TOKEN_EXPIRY_INTERVAL, stop_signal(stopped))
             .await;
     }))
+}
+
+/// The broadcast workers (roadmap M5k): each replica runs
+/// `WA_SERVER_BROADCAST_WORKERS` of them, claiming the broadcasts due under
+/// a lease until `stopped` says so. One cut by the shutdown is claimed
+/// again by another replica once its lease ends; the people it had marked
+/// are never sent again (the jobs' markers).
+fn spawn_broadcasts(
+    state: &AppState,
+    stopped: &watch::Receiver<bool>,
+) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
+    let workers = state
+        .broadcast_workers()
+        .context("building the broadcast workers")?;
+    Ok(workers
+        .into_iter()
+        .map(|worker| {
+            let stop = stop_signal(stopped.clone());
+            tokio::spawn(async move {
+                worker
+                    .run_until(meta_whatsapp_server_core::broadcasts::POLL_INTERVAL, stop)
+                    .await;
+            })
+        })
+        .collect())
+}
+
+/// How long a worker may take to end once the service stops.
+const BROADCAST_GRACE: Duration = Duration::from_secs(10);
+
+/// Wait for the broadcast workers to end: a send in flight ends within the
+/// client's time limit.
+async fn end_broadcasts(workers: Vec<tokio::task::JoinHandle<()>>) {
+    for worker in workers {
+        if tokio::time::timeout(BROADCAST_GRACE, worker).await.is_err() {
+            tracing::warn!("a broadcast worker was cut by the shutdown");
+        }
+    }
 }
 
 /// Wait for the dispatcher to end: its attempts in flight end within their

@@ -79,6 +79,7 @@ One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
 - [meta-whatsapp-rs-server-groups](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-groups/SKILL.md): a number's WhatsApp groups through the service: creation, invite links, participants, join requests, analytics
 - [meta-whatsapp-rs-server-partners](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-partners/SKILL.md): partner APIs through the service: business verification status, solution migration intents, billing currency migrations, the operator's solutions and verification submissions, legal acts
 - [meta-whatsapp-rs-server-calling](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-calling/SKILL.md): a number's WhatsApp Calling through the service: settings, call permissions, placing and answering calls, recording and transcription, call analytics
+- [meta-whatsapp-rs-server-broadcast](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-broadcast/SKILL.md): broadcasts through the service: one template queued for many people, paced, durable, read and cancelled
 - [meta-whatsapp-rs-server-routing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-routing/SKILL.md): conversation routing through the service: routing roles, passing, taking and releasing a user's thread
 
 ## Optional

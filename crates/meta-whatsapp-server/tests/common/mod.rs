@@ -3,6 +3,7 @@
 //! `ScriptedTransport`.
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod broadcasts;
 pub mod capture;
 pub mod erasure;
 pub mod failing_conversations;
@@ -789,12 +790,69 @@ impl Harness {
         Self::build_with_retry(stores, settings, app_secrets, wrap, RetryPolicy::NONE)
     }
 
+    /// On `stores` with `settings`, the service's one clock being `clock`
+    /// (roadmap M5k: two replicas sharing a fake clock, a broadcast's
+    /// pacer on it), Meta reached through what `wrap` makes of the
+    /// scripted transport.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_clock(
+        stores: Stores,
+        settings: Settings,
+        clock: ManualClock,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        Self::build_full(
+            stores,
+            settings,
+            DEFAULT_APP_SECRETS,
+            wrap,
+            RetryPolicy::NONE,
+            clock,
+            None,
+        )
+    }
+
+    /// As [`Self::with_clock`], the service's clock being `state_clock`
+    /// (a virtual clock over Tokio's paused time, say) and the harness's
+    /// own `clock` a handle that moves nothing.
+    #[allow(dead_code)] // not every test binary of the service uses it
+    pub fn with_state_clock(
+        stores: Stores,
+        settings: Settings,
+        state_clock: Arc<dyn meta_whatsapp_rs::core::clock::Clock>,
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+    ) -> Self {
+        let clock = ManualClock::new(state_clock.now());
+        Self::build_full(
+            stores,
+            settings,
+            DEFAULT_APP_SECRETS,
+            wrap,
+            RetryPolicy::NONE,
+            clock,
+            Some(state_clock),
+        )
+    }
+
     fn build_with_retry(
         stores: Stores,
         settings: Settings,
         app_secrets: &[&str],
         wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
         retry: RetryPolicy,
+    ) -> Self {
+        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
+        Self::build_full(stores, settings, app_secrets, wrap, retry, clock, None)
+    }
+
+    fn build_full(
+        stores: Stores,
+        settings: Settings,
+        app_secrets: &[&str],
+        wrap: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+        retry: RetryPolicy,
+        clock: ManualClock,
+        state_clock: Option<Arc<dyn meta_whatsapp_rs::core::clock::Clock>>,
     ) -> Self {
         let Stores {
             store,
@@ -815,13 +873,12 @@ impl Harness {
             .retry(retry)
             .build()
             .unwrap();
-        let clock = ManualClock::new(time::OffsetDateTime::now_utc());
         let inbound = Inbound::new(
             app_secrets.iter().copied().map(AppSecret::new).collect(),
             VerifyToken::new(VERIFY_TOKEN),
         )
         .unwrap()
-        .with_clock(Arc::new(clock.clone()));
+        .with_clock(state_clock.unwrap_or_else(|| Arc::new(clock.clone())));
         let backend: Arc<dyn Backend> = Arc::new(HarnessBackend {
             store: store.clone(),
             kv: kv.clone(),
@@ -985,7 +1042,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 22] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 23] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1073,6 +1130,7 @@ impl Sample {
                 "business_id" => SAMPLE_BUSINESS_ID,
                 "code" => SAMPLE_QR_CODE,
                 "call_id" => SAMPLE_CALL_ID,
+                "broadcast_id" => SAMPLE_BROADCAST_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -1081,6 +1139,9 @@ impl Sample {
         out
     }
 }
+
+/// A broadcast's id (roadmap M5k): the shape of one, never made.
+pub const SAMPLE_BROADCAST_ID: &str = "bc_00000000000000000000000000000001";
 
 /// A Multi-Partner Solution, and a migration intent (roadmap M5j).
 pub const SAMPLE_SOLUTION_ID: &str = "795033096057724";
@@ -1434,6 +1495,11 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             | "/v1/numbers/{pn}/thread-control/take"
             | "/v1/numbers/{pn}/thread-control/release",
         ) => serde_json::json!({"user": {"phone": SAMPLE_TO}}),
+        // Roadmap M5k: a broadcast of a template to one person.
+        ("POST", "/v1/numbers/{pn}/broadcasts") => serde_json::json!({
+            "template": {"name": "spring_sale", "language": {"code": "en_US"}},
+            "recipients": [{"phone": SAMPLE_TO}],
+        }),
         // Roadmap M5f: a group's creation, a change and the participants
         // and join requests of one (`groups/reference`).
         ("POST", "/v1/numbers/{pn}/groups") => {

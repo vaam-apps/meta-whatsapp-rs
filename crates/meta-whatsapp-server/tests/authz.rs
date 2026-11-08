@@ -263,6 +263,13 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users/unblock"),
+        // Roadmap M5k (the design's M5.1): a number's broadcasts.
+        (Method::POST, "/v1/numbers/{pn}/broadcasts"),
+        (Method::GET, "/v1/numbers/{pn}/broadcasts/{broadcast_id}"),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/broadcasts/{broadcast_id}/cancel",
+        ),
         // Roadmap M5l (the design's M5.1): conversation routing.
         (Method::GET, "/v1/numbers/{pn}/routing-roles"),
         (Method::POST, "/v1/numbers/{pn}/thread-control/pass"),
@@ -645,7 +652,15 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 17] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 18] = [
+    // Roadmap M5k: a broadcast is queued in the service's own records;
+    // the vault is read for the capability, Meta is asked when a worker
+    // sends.
+    (
+        Method::POST,
+        "/v1/numbers/{pn}/broadcasts",
+        StatusCode::ACCEPTED,
+    ),
     // A WABA's Flow key (roadmap M5d2) is the service's own: the vault
     // is read for the capability, Meta is never asked.
     (Method::PUT, "/v1/wabas/{waba_id}/flow-key", StatusCode::OK),
@@ -772,6 +787,27 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             let reply = h.call(call(&operation, &a_key, None)).await;
             assert_eq!(reply.status, StatusCode::OK, "{label}: {}", reply.text);
             assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            continue;
+        }
+        // A broadcast's read and cancel (roadmap M5k) are the service's
+        // own records': the number is the tenant's (step 4) and the
+        // broadcast is its tenant's, with no token and no Meta. The
+        // sample's id was never made: `404`.
+        if operation
+            .template
+            .starts_with("/v1/numbers/{pn}/broadcasts/")
+        {
+            let before = h.kv.vault_reads();
+            let asked = h.graph.requests().len();
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{label}: {}",
+                reply.text
+            );
+            assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            assert_eq!(h.graph.requests().len(), asked, "{label} asked Meta");
             continue;
         }
         let before = h.kv.vault_reads();
