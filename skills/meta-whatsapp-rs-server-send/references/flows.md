@@ -44,8 +44,21 @@ export async function createFlow(api: WhatsApp, wabaId: string, flow: FlowCreate
   (terminal). Nothing here undoes either.
 - **A preview link is a secret**: its token opens the Flow for 30 days or
   until `invalidate`; keep it out of logs.
-- **Not offered**: connecting a Meta app to a Flow with an endpoint (do it
-  in the Flow Builder), a Flow's health status and its assets.
+- Connect a Meta app to a Flow with an endpoint with `application_id`
+  (digits) on the `PATCH`. **Not offered yet**: a Flow's health status
+  and its assets.
+- **A number's business public key**: `PUT /v1/numbers/{pn}/business-public-key`
+  with `{business_public_key: <PEM>}` (a 2048-bit RSA public key; scope
+  `flows`). If you set a Flow key for the WABA it must be that key's public
+  half (`422` on `flow_key` otherwise; `allow_flow_key_mismatch: true`
+  overrides). `GET` reads what Meta holds and its signature status.
+- **Files users upload** (`PhotoPicker`, `DocumentPicker`): post the
+  object your endpoint received (`cdn_url`, `encryption_metadata`) to
+  `POST /v1/wabas/{waba_id}/flow-media`; the answer is the decrypted bytes
+  (untrusted input), only if every hash and the HMAC matched (`502
+  integrity` otherwise). Only `https` URLs of `WA_SERVER_FLOWS_MEDIA_HOSTS`
+  (default `*.whatsapp.net`) are fetched, no redirect followed; 25 MiB at
+  most.
 - **The data endpoint** (`POST /webhooks/flows/{waba_id}` on the public
   listener) is Meta's, not yours: with a Flow key (your own, set with
   `PUT /v1/wabas/{waba_id}/flow-key`; or the deployment's

@@ -133,6 +133,27 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added
 
+- **A number's business public key, and a Flow's uploaded media** (roadmap
+  M5d2, second slice; decisions D450 to D458, implementer's proposals,
+  not decided, 2026-11-08): the library's `UpdateFlow::application_id`,
+  `Flow::health_status` (and `FlowDetails::health_status`, typed with the
+  common `HealthStatus`) and `Rsa2048PublicKey` (a 2048-bit RSA public
+  key in PEM, parsed without a crypto library, for validating and
+  comparing); `PUT` and `GET /v1/numbers/{pn}/business-public-key` (scope
+  `flows`; the key validated before any request, `422` on `flow_key` when
+  the tenant's Flow key exists and the key is not its public half unless
+  `allow_flow_key_mismatch`; audited as `business_public_key_set` with
+  the key's SHA-256); `POST /v1/wabas/{waba_id}/flow-media` (a user's
+  uploaded file downloaded from the CDN, verified and decrypted; the URL
+  must be `https` on a listed host **name**, `*.whatsapp.net` unless the
+  new `WA_SERVER_FLOWS_MEDIA_HOSTS` lists others, resolving to public
+  addresses only; no credential, no redirect followed, 25 MiB, four at
+  once; nothing returned unless every hash and the HMAC matched; audited
+  as `flow_media_downloaded`, size only); and `application_id` on `PATCH
+  /v1/wabas/{waba_id}/flows/{flow_id}`. Additive to the OpenAPI document.
+  The routes, operation ids, the setting and the three audit actions are
+  pending the owner's confirmation before the first release. No
+  migration.
 - **A Flow key per tenant** (roadmap M5d2, first slice; decisions D370 to
   D374, 2026-11-07): the library's
   `TokenVault::store_flow_key`, `flow_key`, `delete_flow_key` and

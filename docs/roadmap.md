@@ -6960,11 +6960,49 @@ or WABA fails the family's own cross-tenant test).
     `tests/flow_key_logs.rs`. Names pending the owner's confirmation:
     the store key `flow-key/<WABA_ID>`, the setting, the route, the
     operation ids and the two audit actions. No migration.
-    **Still open in M5d2:** the integrating app over HTTP, the business
-    public key of a number, an uploaded media's download and
-    decryption, the `427` answer, the library's `application_id`,
-    `health_status` and assets, the request-IV replay guard and the
-    limits as settings.
+  - **Second slice, the business public key, the media and the
+    library's gaps (decisions D450 to D458, implementer's proposals,
+    not decided, 2026-11-08):** the library's
+    `UpdateFlow::application_id`, `Flow::health_status` (alone, or for a
+    number: `health_status.phone_number(ID)`; typed with the existing
+    `HealthStatus`), `FlowDetails::health_status` and
+    `Rsa2048PublicKey` (a 2048-bit RSA public key in PEM, parsed without
+    a crypto library); `Flow::assets` was already complete (the page's
+    example is a test). The service: `PUT`, `GET
+    /v1/numbers/{pn}/business-public-key` (scope `flows`; the key
+    validated before any request, refused with `422` on `flow_key` when
+    the tenant's Flow key exists and it is not that key's public half,
+    unless `allow_flow_key_mismatch`; audited as
+    `business_public_key_set` with the key's SHA-256); `POST
+    /v1/wabas/{waba_id}/flow-media` (an uploaded media downloaded from
+    the CDN and decrypted: the URL checked by its text, the host a listed
+    name (`WA_SERVER_FLOWS_MEDIA_HOSTS`, default `*.whatsapp.net`), every
+    address it resolves to public, no credential, no redirect followed,
+    25 MiB, 4 at once, 60 s; nothing returned unless the file's hash, the
+    HMAC and the plaintext's hash all matched; audited as
+    `flow_media_downloaded`, size only); and `application_id` on `PATCH
+    …/flows/{flow_id}`. Decisive: `tests/business_key.rs`
+    (`a_key_that_is_not_the_flow_keys_public_half_is_refused_before_any_request`,
+    `a_key_that_is_not_a_2048_bit_rsa_public_key_is_refused_before_any_request`,
+    `another_tenants_number_is_not_found_and_nothing_is_sent`),
+    `tests/flow_media.rs`
+    (`a_url_that_is_not_a_listed_https_host_name_is_refused_before_any_lookup`,
+    `a_listed_name_that_resolves_to_a_non_public_address_is_not_fetched`,
+    `a_file_that_fails_a_check_is_refused_and_nothing_is_returned`,
+    `a_file_past_the_cap_is_refused`,
+    `another_tenants_waba_is_not_found_and_nothing_is_looked_up`,
+    `at_most_four_downloads_run_at_once`), the fetcher's own tests against
+    real receivers (`a_redirect_is_a_failure_and_its_target_is_never_asked`,
+    in `meta-whatsapp-server-http`), `tests/business_key_logs.rs` and
+    `tests/flow_media_logs.rs` (no key, URL, hash or byte in any log,
+    error or audit event), M5.1 and M5.2 by `tests/authz.rs` and
+    `tests/errors.rs` iterating the new routes. Names pending the owner's
+    confirmation: the routes, the operation ids, the setting, the three
+    audit actions. No migration.
+    **Still open in M5d2:** the integrating app over HTTP, a route for a
+    Flow's health status and its assets (the library has both), the
+    `427` answer, the request-IV replay guard and the limits (the
+    data endpoint's, and the download's) as settings.
 - [x] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.

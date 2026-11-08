@@ -128,6 +128,7 @@ read yet: set, it stops the start.
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
 | `WA_SERVER_ERASURE_KEY` | unset: erasure off | at least 32 bytes from your secret manager, kept out of the database and for as long as your backups: the key the erasure journal's HMACs are made with (roadmap M2f). Unset, `POST /v1/numbers/{pn}/erasures` answers `409 erasure_not_configured` (memory storage in development: a throwaway one) |
 | `WA_SERVER_FLOWS_DEPLOYMENT_KEY_FALLBACK` | `allow` | `allow`: a tenant that set no Flow key of its own (`PUT /v1/wabas/{waba_id}/flow-key`) is decrypted with the deployment's; `deny`: it is answered `404`, so that no tenant's Flow traffic is decrypted with a key shared with others. Set `deny` on a multi-tenant deployment once every tenant has its own key (roadmap M5d2) |
+| `WA_SERVER_FLOWS_MEDIA_HOSTS` | `*.whatsapp.net` | the host **names** a Flow's uploaded media may be downloaded from by `POST /v1/wabas/{waba_id}/flow-media` (comma-separated, `*.`-prefixed ones allowed; an address or a CIDR refuses the start). Meta publishes no list of its CDN's hosts: widen this when you see another in real requests (roadmap M5d2) |
 | `WA_SERVER_FLOWS_PRIVATE_KEY` | unset: no deployment key | the deployment's Flow private key (roadmap M5d): an unencrypted 2048-bit RSA key in PEM, from your secret manager (`_FILE` works too). Unset, a tenant with no key of its own is answered `404` at `POST /webhooks/flows/{waba_id}`. A password-protected PEM (what Meta's `openssl genrsa -des3` writes) or a key of another size refuses the start; [Flows](#flows) says how to remove the password |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
@@ -852,9 +853,9 @@ messages](#send-messages)).
   `details`) while any is left or a publishing check fails
   (`flows/guides/healthmonitoring`: a number with a business public key,
   the endpoint set and healthy, a connected Meta app).
-- **Not offered**, the library lacking them: connecting a Meta app to a
-  Flow with an endpoint (`application_id` on an update; do it in the
-  Flow Builder), a Flow's `health_status`, and its assets.
+- **Connecting a Meta app** to a Flow with an endpoint is
+  `application_id` (digits) on the `PATCH`. **Not offered yet**: a
+  Flow's `health_status` and its assets (the library has both).
 - Each change that succeeded is an `audit` event (`flow_updated`,
   `flow_json_uploaded`, `flow_published`, `flow_deprecated`,
   `flow_deleted`; never a Flow's JSON); the rate class is `templates`.
@@ -886,6 +887,49 @@ is `allow`, else `404`. Replacing the key has no overlap: requests
 encrypted to the old public key are `421` until each number's public key is
 updated at Meta. Disconnecting the WABA deletes its key.
 
+**A number's business public key** (roadmap M5d2). Each number a Flow is
+sent from needs the public half of the Flow key set at Meta:
+
+```sh
+curl -X PUT "$API/v1/numbers/$PN/business-public-key" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --rawfile k public.pem '{business_public_key: $k}')"
+# {"public_key_sha256": "…", "matches_flow_key": true}
+```
+
+The key must be one `PUBLIC KEY` PEM block holding a 2048-bit RSA key,
+else `422 invalid_request` on `business_public_key` (a private key is
+refused and never quoted), and nothing is sent to Meta. If you set a Flow
+key for the number's WABA, the key must be that key's public half, else
+`422` on `flow_key`: every Flow of the number would be encrypted to a key
+the data endpoint cannot open. If your own endpoint holds another key,
+send `"allow_flow_key_mismatch": true`. `GET` reads what Meta holds, its
+signature status (`VALID`, `MISMATCH`: upload the key again) and whether
+it is the Flow key's public half. Scope `flows`; audited as
+`business_public_key_set` with the key's SHA-256, never the key.
+
+**Files users upload** (roadmap M5d2). A Flow with a `PhotoPicker` or
+`DocumentPicker` sends your endpoint, for each file, an object with a
+`cdn_url` and `encryption_metadata`. Post that object to get the file,
+downloaded, verified and decrypted:
+
+```sh
+curl -X POST "$API/v1/wabas/$WABA_ID/flow-media" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -d "$MEDIA_OBJECT" -o photo.jpg
+```
+
+The answer is the file's bytes (`application/octet-stream`, an
+`attachment`), and only when the file's SHA-256, its HMAC and the
+decrypted file's SHA-256 all matched (`502 integrity` otherwise, with
+nothing in the body). Treat the bytes as untrusted input: Meta warns that a
+file may be malicious. The service fetches only an `https` URL of a host
+**name** in `WA_SERVER_FLOWS_MEDIA_HOSTS` (default `*.whatsapp.net`) that
+resolves to public addresses, follows no redirect and sends no credential;
+anything else is `422` on `cdn_url` with nothing fetched. At most 25 MiB
+(`413 media_too_large`), four at once per replica (`429`), 60 seconds
+(`502 media_download_failed`, retryable). The URL, the keys and the bytes
+are in no log or audit event.
+
 **The data endpoint.** A Flow with an endpoint is called by Meta at its
 `endpoint_uri` on every screen that exchanges data. Either host your own
 endpoint and set its URL, or let the service decrypt and answer for
@@ -893,9 +937,8 @@ you: set your Flow key (above, or `WA_SERVER_FLOWS_PRIVATE_KEY` for the
 deployment), give the Flow
 `https://<your public host>/webhooks/flows/{waba_id}` as its
 `endpoint_uri`, and set the key's **public half** as the business public
-key of the number the Flow is sent from (Meta signs it on upload; the
-service has no route for that yet, use `POST /{phone_number_id}/
-whatsapp_business_encryption` with the WABA's token):
+key of the number the Flow is sent from (Meta signs it on upload;
+`PUT /v1/numbers/{pn}/business-public-key`, below):
 
 ```sh
 openssl genrsa -out private.pem 2048          # no -des3: no password
