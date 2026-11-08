@@ -906,7 +906,9 @@ the data endpoint cannot open. If your own endpoint holds another key,
 send `"allow_flow_key_mismatch": true`. `GET` reads what Meta holds, its
 signature status (`VALID`, `MISMATCH`: upload the key again) and whether
 it is the Flow key's public half. Scope `flows`; audited as
-`business_public_key_set` with the key's SHA-256, never the key.
+`business_public_key_set` with the key's SHA-256, never the key, and
+`flow_key_override: true` when `allow_flow_key_mismatch` let a key through
+that is not the Flow key's public half.
 
 **Files users upload** (roadmap M5d2). A Flow with a `PhotoPicker` or
 `DocumentPicker` sends your endpoint, for each file, an object with a

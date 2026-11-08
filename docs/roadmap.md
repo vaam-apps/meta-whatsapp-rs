@@ -6973,7 +6973,7 @@ or WABA fails the family's own cross-tenant test).
     validated before any request, refused with `422` on `flow_key` when
     the tenant's Flow key exists and it is not that key's public half,
     unless `allow_flow_key_mismatch`; audited as
-    `business_public_key_set` with the key's SHA-256); `POST
+    `business_public_key_set` with the key's SHA-256 and `flow_key_override`); `POST
     /v1/wabas/{waba_id}/flow-media` (an uploaded media downloaded from
     the CDN and decrypted: the URL checked by its text, the host a listed
     name (`WA_SERVER_FLOWS_MEDIA_HOSTS`, default `*.whatsapp.net`), every

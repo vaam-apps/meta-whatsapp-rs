@@ -97,6 +97,18 @@ async fn a_business_key_is_in_no_log_line_and_its_change_is_audited() {
         200
     );
 
+    // Set against the Flow key, on purpose: the override is audited.
+    h.graph.push_json(200, json!({"success": true}));
+    assert_eq!(
+        h.call(put(
+            json!({"business_public_key": other, "allow_flow_key_mismatch": true})
+        ))
+        .await
+        .status
+        .as_u16(),
+        200
+    );
+
     let logs = captured.text();
     for pem in [KEY_PEM, public.as_str(), other.as_str()] {
         for line in pem.lines().filter(|l| !l.starts_with("-----")) {
@@ -120,7 +132,11 @@ async fn a_business_key_is_in_no_log_line_and_its_change_is_audited() {
     // calls and Meta's refusal (which cannot have gone through) are not.
     assert_eq!(
         actions,
-        ["flow_key_set", "business_public_key_set"],
+        [
+            "flow_key_set",
+            "business_public_key_set",
+            "business_public_key_set"
+        ],
         "{audited:?}"
     );
     let key_id = key.split('_').nth(1).unwrap();
@@ -137,7 +153,16 @@ async fn a_business_key_is_in_no_log_line_and_its_change_is_audited() {
     );
     assert_eq!(
         fields.as_object().unwrap().len(),
-        8,
+        9,
         "no other field: {fields}"
+    );
+    assert_eq!(fields["flow_key_override"], false, "{fields}");
+    // The override is its own, distinct fact; the digest is the other key's.
+    let overridden = &audited[2];
+    assert_eq!(overridden["flow_key_override"], true, "{overridden}");
+    assert_eq!(
+        overridden["public_key_sha256"],
+        hex::encode(Sha256::digest(other.as_bytes())).as_str(),
+        "{overridden}"
     );
 }

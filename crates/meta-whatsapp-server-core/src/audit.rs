@@ -401,11 +401,15 @@ pub fn number_setting_audit(
 /// (hex) of the key's canonical PEM, `public_key_sha256`: a name for a
 /// public key, so a change can be reconciled with the key
 /// ([`crate::flow_key`] answers the same digest). Never the key.
+/// `flow_key_override` is `true` when the key is not the public half of the
+/// tenant's Flow key and the caller allowed that: a deliberate act, named in
+/// its own field.
 pub fn business_key_audit(
     action: &'static str,
     key_id: &str,
     subject: &Subject<'_>,
     public_key_sha256: &str,
+    flow_key_override: bool,
     outcome: Outcome,
 ) {
     tracing::info!(
@@ -416,6 +420,7 @@ pub fn business_key_audit(
         waba_id = subject.waba_id,
         phone_number_id = subject.phone_number_id,
         public_key_sha256,
+        flow_key_override,
         outcome = outcome.as_str(),
         "tenant change"
     );

@@ -26,7 +26,9 @@
 //! the key is sent, and the answer says so (`matches_flow_key: null`).
 //!
 //! **Audit.** `business_public_key_set`, with the tenant, the WABA, the
-//! number and the key's SHA-256 ([`crate::audit::business_key_audit`]);
+//! number and the key's SHA-256 ([`crate::audit::business_key_audit`]),
+//! and `flow_key_override` (`true` when `allow_mismatch` let a key through
+//! that is not the Flow key's public half);
 //! when Meta answered, or when it may have gone through unanswered. Never
 //! the key. The names are pending the owner's confirmation before the
 //! first release.
@@ -163,7 +165,7 @@ impl<'a> BusinessKey<'a> {
         api.with_details(error)
     }
 
-    fn audit(&self, public_key_sha256: &str, outcome: Outcome) {
+    fn audit(&self, public_key_sha256: &str, flow_key_override: bool, outcome: Outcome) {
         business_key_audit(
             BUSINESS_PUBLIC_KEY_SET,
             self.caller.key_id(),
@@ -174,6 +176,7 @@ impl<'a> BusinessKey<'a> {
                 ..Subject::default()
             },
             public_key_sha256,
+            flow_key_override,
             outcome,
         );
     }
@@ -253,9 +256,12 @@ impl<'a> BusinessKey<'a> {
             return Err(ServiceError::invalid("flow_key"));
         }
         let digest = key.sha256();
+        // The caller let a key through that is not the Flow key's public
+        // half: a deliberate act, audited as such.
+        let overridden = matches_flow_key == Some(false);
         match self.encryption().set_public_key(&key.to_pem()).await {
             Ok(()) => {
-                self.audit(&digest, Outcome::Answered);
+                self.audit(&digest, overridden, Outcome::Answered);
                 Ok(BusinessKeySet {
                     public_key_sha256: digest,
                     matches_flow_key,
@@ -264,7 +270,7 @@ impl<'a> BusinessKey<'a> {
             Err(error) => {
                 let failed = self.failed(&error).await;
                 if failed.may_have_been_sent() {
-                    self.audit(&digest, Outcome::Unanswered);
+                    self.audit(&digest, overridden, Outcome::Unanswered);
                 }
                 Err(failed)
             }
