@@ -395,6 +395,48 @@ pub fn number_setting_audit(
     );
 }
 
+/// A tenant's change of a number's Flows business public key (roadmap
+/// M5d2; docs/design/server.md, D453), logged like [`tenant_audit`]
+/// (target `audit`, message `tenant change`) with `outcome` and the SHA-256
+/// (hex) of the key's canonical PEM, `public_key_sha256`: a name for a
+/// public key, so a change can be reconciled with the key
+/// ([`crate::flow_key`] answers the same digest). Never the key.
+pub fn business_key_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    public_key_sha256: &str,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        public_key_sha256,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// A tenant's download of a Flow's uploaded media (roadmap M5d2; D456),
+/// logged like [`tenant_audit`] (target `audit`, message `tenant change`)
+/// with the WABA and the size of what was returned: never a key, a URL, a
+/// name, a hash of the file or a byte of it.
+pub fn flow_media_audit(action: &'static str, key_id: &str, subject: &Subject<'_>, bytes: usize) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        bytes,
+        "tenant change"
+    );
+}
+
 /// A tenant's marketing change (roadmap M5h; docs/design/server.md, D232):
 /// a template duplicated at another max price or its max price set or
 /// cleared, the Cloud API marketing switch, a welcome message sequence

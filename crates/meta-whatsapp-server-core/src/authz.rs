@@ -1310,6 +1310,33 @@ impl Authorizer {
             .map_err(|error| ServiceError::from_library(&error))
     }
 
+    /// The Flow key `caller`'s tenant set for the WABA of `number`, if any:
+    /// what a number's business public key is compared with (roadmap
+    /// M5d2, [`crate::business_key`]). Only that tenant's: another's
+    /// record, or the deployment's key, is `None`. Crate-private.
+    ///
+    /// # Errors
+    ///
+    /// A capability another [`Authorizer`] made: `403 forbidden`; a number
+    /// of another tenant: `404 not_found`. A record that cannot be opened.
+    pub(crate) async fn read_flow_key_for_number(
+        &self,
+        caller: &Caller,
+        number: &OwnedNumber,
+    ) -> Result<Option<FlowEndpointKey>, ServiceError> {
+        self.check(&caller.issuer, "flow_key")?;
+        self.check(&number.issuer, "flow_key")?;
+        if number.tenant() != &caller.tenant {
+            tracing::warn!("refused a Flow key read for another tenant's number");
+            return Err(ServiceError::not_found());
+        }
+        self.tokens
+            .vault
+            .flow_key(&number.waba_id, caller.tenant.as_str())
+            .await
+            .map_err(|error| ServiceError::from_library(&error))
+    }
+
     fn check_flow_key_access(&self, caller: &Caller, waba: &OwnedWaba) -> Result<(), ServiceError> {
         self.check(&caller.issuer, "flow_key")?;
         self.check(&waba.issuer, "flow_key")?;

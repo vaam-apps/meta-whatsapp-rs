@@ -82,6 +82,7 @@ pub mod authz;
 pub mod backend;
 pub mod blocked_users;
 pub mod broadcasts;
+pub mod business_key;
 pub mod calls;
 pub mod commerce;
 #[cfg(feature = "conformance")]
@@ -91,6 +92,7 @@ pub mod erasure;
 pub mod error;
 pub mod events;
 pub mod flow_key;
+pub mod flow_media;
 pub mod flows;
 pub mod flows_endpoint;
 pub mod groups;
