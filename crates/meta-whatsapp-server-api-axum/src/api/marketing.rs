@@ -14,6 +14,7 @@
 //! | `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences` | `POST`, `GET /{waba_id}/welcome_message_sequences` | yes (the creation) |
 //! | `GET`, `PATCH`, `DELETE /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}` | the sequence's lookup (`sequence_id` filter), then `POST`, `DELETE /{waba_id}/welcome_message_sequences` | no |
 //! | `POST /v1/admin/businesses/{business_id}/max-price-agreement` | `POST /{business_id}/max_price_agreements` | no; **a legal act** |
+//! | `POST /v1/admin/businesses/{business_id}/max-price-agreement/state` | `GET /{business_id}/max_price_agreements` | yes (a read; the answer keeps the signer out) |
 //!
 //! The rules are the core's ([`meta_whatsapp_server_core::marketing`]):
 //! a template or a sequence is the WABA's or it does not exist (`404`,
@@ -1187,6 +1188,66 @@ pub(crate) async fn sign_max_price_agreement(
         .await?;
     Ok(Json(AgreementSignedView {
         status: signed.status,
+    }))
+}
+
+/// The token to read an agreement's state with.
+// No `Debug`: the token is a secret.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = ReadMaxPriceAgreement)]
+pub struct ReadMaxPriceAgreementBody {
+    /// A system token or a business token of the business. Used for this
+    /// call only; never stored. It travels in the body so that no URL,
+    /// header log or access log holds it.
+    pub token: String,
+}
+
+/// Where the business is with the agreement. **The signer is not in it**:
+/// Meta's answer names the signer, and the service keeps that out.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = MaxPriceAgreementState)]
+pub struct AgreementStateView {
+    /// `none`, `pending` or `accepted`, as Meta writes it.
+    #[schema(required = true)]
+    pub status: Option<String>,
+}
+
+/// `POST /v1/admin/businesses/{business_id}/max-price-agreement/state`:
+/// read the state of Meta's max price beta agreement for a business
+/// portfolio. A read made with `POST` because the operator's `token`
+/// travels in the body. Meta's answer names the signer (name and email);
+/// the answer here, the logs and the errors never do. It signs nothing, so
+/// `WA_SERVER_LEGAL_ACTS` does not gate it; admin key only; an answered read is audited (`max_price_agreement_read`).
+#[utoipa::path(
+    post,
+    path = "/v1/admin/businesses/{business_id}/max-price-agreement/state",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("business_id" = String, Path, description = "Business portfolio id")),
+    request_body = ReadMaxPriceAgreementBody,
+    responses(
+        (status = 200, description = "The agreement's state, without the signer; audited `max_price_agreement_read`", body = AgreementStateView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden` (not an admin key), or Meta's refusal (the token's holder has no access to the business)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `business_id`, `token` or `body`; Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn read_max_price_agreement(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(business_id): Path<String>,
+    ApiJson(body): ApiJson<ReadMaxPriceAgreementBody>,
+) -> Result<Json<AgreementStateView>, ApiError> {
+    let read = MaxPriceAgreements::new(state.authz(), &admin)?
+        .observed_by(state.metrics())
+        .state(&business_id, AccessToken::new(body.token))
+        .await?;
+    Ok(Json(AgreementStateView {
+        status: read.status,
     }))
 }
 

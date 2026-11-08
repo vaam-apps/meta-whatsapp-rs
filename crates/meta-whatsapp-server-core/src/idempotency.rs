@@ -96,6 +96,7 @@ use crate::uploads::NewUpload;
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 /// | `set_flow_key` ([`Self::set_flow_key`]; roadmap M5d2) | the WABA's id; the SHA-256 of the key's **public** half: **never the private key** (nor anything derived from it), so no record holds any |
 /// | `submit_business_verification`, `create_partner_solution` ([`Self::submit_business_verification`], [`Self::create_partner_solution`]; roadmap M5j2) | the JSON body, canonical as above; the operator's, so under [`run_admin`]: the admin key's id is the records' scope, not an input |
+/// | `request_marketing_onboarding` ([`Self::request_marketing_onboarding`]; roadmap M5h2) | the end business's id; the JSON body (the optional solution id), canonical as above, an absent body as `{}`; the operator's, under [`run_admin`] |
 /// | `add_pre_verified_number`, `request_pre_verified_code`, `complete_hosted_signup` ([`Self::add_pre_verified_number`], [`Self::request_pre_verified_code`], [`Self::complete_hosted_signup`]; roadmap M5j3) | the JSON body, canonical as above (the hosted claim's `pin` only as present); the pool number's id for the code request; the operator's, as above |
 ///
 /// The same request always has the same fingerprint; another operation,
@@ -540,6 +541,21 @@ impl Fingerprint {
     /// [`AdminOperation`]: the id is the route's `operationId`.
     pub fn create_partner_solution(body: &serde_json::Value) -> Self {
         Self::admin_json("create_partner_solution", body)
+    }
+
+    /// `request_marketing_onboarding` for the end business `business` (as
+    /// the path spelled it, decoded) with the JSON body the request carried
+    /// (roadmap M5h2, design D432; no legacy fingerprint). The body is the
+    /// optional solution id, no secret: the deployment's token is not an
+    /// input. An absent body and `{}` are the same request.
+    pub fn request_marketing_onboarding(business: &str, body: &serde_json::Value) -> Self {
+        let empty = serde_json::json!({});
+        let body = if body.is_null() { &empty } else { body };
+        Self::admin_json_for(
+            AdminOperation::RequestMarketingOnboarding.id(),
+            business,
+            body,
+        )
     }
 
     /// `add_pre_verified_number` with the JSON body the request carried

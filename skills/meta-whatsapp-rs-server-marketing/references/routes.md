@@ -1,6 +1,6 @@
 # The marketing routes
 
-> **Verified against meta-whatsapp-rs 6ec0b6a3b857837c58481d371d4537004966484f (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs d3b92bdeda5cd1e1e9565ca936bd060ffa86f726 (2026-11-07).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 | Route | Does |
 | --- | --- |
@@ -12,3 +12,6 @@
 | `GET`, `PUT`, `DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price` | a template's max price read, set, or cleared |
 | `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences`, `GET`, `PATCH`, `DELETE …/{sequence_id}` | welcome message sequences |
 | `POST /v1/admin/businesses/{business_id}/max-price-agreement` | the operator's signing of the max price agreement (admin key) |
+| `POST /v1/admin/businesses/{business_id}/max-price-agreement/state` | the agreement's state, read with the operator's `token` in the body; the answer is `{status}`, never the signer (admin key; not a legal act) |
+| `POST /v1/admin/partners/businesses/{business_id}/marketing-onboarding` | the partner Intent API: an invitation to a business's admins to accept the terms; a legal act, takes an `Idempotency-Key` (admin key) |
+| `GET /v1/admin/partners/client-wabas` | the client WABAs by onboarding status (admin key) |
