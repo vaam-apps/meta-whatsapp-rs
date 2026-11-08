@@ -1243,17 +1243,15 @@ impl BotReplies {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn answer(
+    /// The claim, the sender's floor and the rule's cooldown, in that
+    /// order: `Some(outcome)` when the answer is not to be sent.
+    async fn gate(
         &self,
-        tenant: &TenantId,
-        config: &Config,
-        rule: &Rule,
         pn: &PhoneNumberId,
         message_id: &str,
-        contact: &str,
-        ids: &[String],
-    ) -> Result<Outcome, Error> {
+        rule: &Rule,
+        user: &str,
+    ) -> Result<Option<Outcome>, Error> {
         // The claim, before anything else is spent: a message is answered
         // by a rule once (D462).
         let claimed = self
@@ -1267,13 +1265,12 @@ impl BotReplies {
             .await?
             .is_some();
         if !claimed {
-            return Ok(Outcome::Duplicate);
+            return Ok(Some(Outcome::Duplicate));
         }
-        let user = ids.first().map_or(contact, String::as_str);
         match self.within_floor(pn, user).await {
             Ok(true) => {}
-            Ok(false) => return Ok(Outcome::SenderLimited),
-            Err(error) => return Ok(Outcome::Failed(kind_code(Error::from(error).kind()))),
+            Ok(false) => return Ok(Some(Outcome::SenderLimited)),
+            Err(error) => return Ok(Some(Outcome::Failed(kind_code(Error::from(error).kind())))),
         }
         if let Some(seconds) = rule.spec.cooldown_seconds {
             let key = CooldownKey::new(pn, &rule.id, user);
@@ -1283,11 +1280,29 @@ impl BotReplies {
                 .await
             {
                 Ok(CooldownOutcome::Started) => {}
-                Ok(_) => return Ok(Outcome::CoolingDown),
+                Ok(_) => return Ok(Some(Outcome::CoolingDown)),
                 // Past the claim nothing is retried: the answer is lost, and
                 // the delivery goes on.
-                Err(error) => return Ok(Outcome::Failed(kind_code(error.kind()))),
+                Err(error) => return Ok(Some(Outcome::Failed(kind_code(error.kind())))),
             }
+        }
+        Ok(None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn answer(
+        &self,
+        tenant: &TenantId,
+        config: &Config,
+        rule: &Rule,
+        pn: &PhoneNumberId,
+        message_id: &str,
+        contact: &str,
+        ids: &[String],
+    ) -> Result<Outcome, Error> {
+        let user = ids.first().map_or(contact, String::as_str);
+        if let Some(stopped) = self.gate(pn, message_id, rule, user).await? {
+            return Ok(stopped);
         }
         let (text, template, fallback) = match &rule.spec.action {
             Action::Reply {
