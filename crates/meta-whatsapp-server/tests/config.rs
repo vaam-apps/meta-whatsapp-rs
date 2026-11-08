@@ -1193,7 +1193,12 @@ fn reads_the_hosts_a_flows_media_may_come_from() {
         hosts(Some("*.whatsapp.net, cdn.example")),
         Some("*.whatsapp.net, cdn.example".to_owned())
     );
-    for bad in ["10.0.0.0/8", "*.whatsapp.net, 169.254.169.254", "::1", "not a host"] {
+    for bad in [
+        "10.0.0.0/8",
+        "*.whatsapp.net, 169.254.169.254",
+        "::1",
+        "not a host",
+    ] {
         match refused(&production().set("WA_SERVER_FLOWS_MEDIA_HOSTS", bad)) {
             ConfigError::Invalid { name, reason } => {
                 assert_eq!(name, "WA_SERVER_FLOWS_MEDIA_HOSTS");
