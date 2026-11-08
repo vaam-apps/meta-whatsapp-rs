@@ -1240,7 +1240,9 @@ impl BotReplies {
         ) else {
             return Ok(Outcome::Unusable);
         };
-        let conversations = conversations.naming_the_account(self.names_account);
+        let conversations = conversations
+            .naming_the_account(self.names_account)
+            .withholding_texts();
         let callback = format!("{CALLBACK_PREFIX}{}", rule.id);
         let with_callback = |mut request: ReplyMessage| {
             request.callback_data = Some(callback.clone());
