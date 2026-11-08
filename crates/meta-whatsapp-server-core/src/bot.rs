@@ -126,8 +126,9 @@ pub const RULE_DELETED: &str = "bot_rule_deleted";
 /// The audit action of a number's bot switched or its lists set.
 pub const SETTINGS_UPDATED: &str = "bot_settings_updated";
 
-/// A message older than this when the pipeline records it is not answered:
-/// an outage's backlog, or a replay, is not a conversation (D462).
+/// The default of [`BotSettings::max_message_age`]: a message older than
+/// this when the pipeline records it is not answered, for an outage's
+/// backlog, or a replay, is not a conversation (D462).
 pub const MAX_MESSAGE_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// How long an answer's marker lives: past Meta's seven days of webhook
@@ -180,6 +181,10 @@ const CAS_ATTEMPTS: usize = 8;
 pub struct BotSettings {
     /// The most rules one number's bot may have.
     pub max_rules: usize,
+    /// A message older than this when the pipeline records it is not
+    /// answered ([`MAX_MESSAGE_AGE`] by default): an outage's backlog is
+    /// not a conversation.
+    pub max_message_age: Duration,
 }
 
 impl BotSettings {
@@ -191,6 +196,7 @@ impl Default for BotSettings {
     fn default() -> Self {
         Self {
             max_rules: Self::DEFAULT_MAX_RULES,
+            max_message_age: MAX_MESSAGE_AGE,
         }
     }
 }
@@ -1085,7 +1091,8 @@ impl BotReplies {
             return Ok(());
         };
         if self.records.clock.now() - message.timestamp
-            > time::Duration::try_from(MAX_MESSAGE_AGE).unwrap_or(time::Duration::HOUR)
+            > time::Duration::try_from(self.records.settings.max_message_age)
+                .unwrap_or(time::Duration::HOUR)
         {
             return Ok(());
         }

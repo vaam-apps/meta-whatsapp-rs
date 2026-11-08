@@ -248,6 +248,7 @@ struct Inner {
     call_records: CallRecords,
     broadcasts: BroadcastRecords,
     bot: BotRecords,
+    bot_replies: Arc<BotReplies>,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -336,20 +337,20 @@ impl AppState {
         // broadcasts' budget, sent through the inbox's reply with the
         // number's own checks (roadmap M5k, slice 2).
         let bot = BotRecords::new(backend.kv(), clock.clone(), settings.bot.clone());
-        let bot_replies = BotReplies::new(
+        let bot_replies = Arc::new(BotReplies::new(
             bot.clone(),
             authz.clone(),
             backend.conversations(),
             settings.inbox_reply_checks.clone(),
             settings.send_messaging_account_id,
             broadcasts.pacer().clone(),
-        );
+        ));
         let events = Events::new(
             inbound,
             backend.as_ref(),
             metrics.clone(),
             signups.account_actions(authz.clone()),
-            Arc::new(bot_replies),
+            bot_replies.clone(),
         );
         // The codes in the bundle's key/value store, as the vault, on the
         // service's one clock.
@@ -396,6 +397,7 @@ impl AppState {
                 call_records,
                 broadcasts,
                 bot,
+                bot_replies,
                 otp,
                 signups,
                 streams,
@@ -695,6 +697,12 @@ impl Grant {
     /// The bots' rules (roadmap M5k, slice 2).
     pub fn bot(&self) -> &BotRecords {
         &self.0.inner.bot
+    }
+
+    /// The bot's replies, which the webhook pipeline hands each recorded
+    /// inbound message to (roadmap M5k, slice 2).
+    pub fn bot_replies(&self) -> &Arc<BotReplies> {
+        &self.0.inner.bot_replies
     }
 
     /// The OTP services (roadmap M3c): codes in the backend's key/value

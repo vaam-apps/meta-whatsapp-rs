@@ -3,6 +3,7 @@
 //! `ScriptedTransport`.
 #![allow(dead_code)] // each test binary uses a different subset
 
+pub mod bot;
 pub mod broadcasts;
 pub mod capture;
 pub mod erasure;
@@ -1042,7 +1043,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 23] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 24] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
