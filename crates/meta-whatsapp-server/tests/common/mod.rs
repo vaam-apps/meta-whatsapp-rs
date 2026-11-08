@@ -1132,6 +1132,7 @@ impl Sample {
                 "code" => SAMPLE_QR_CODE,
                 "call_id" => SAMPLE_CALL_ID,
                 "broadcast_id" => SAMPLE_BROADCAST_ID,
+                "rule_id" => SAMPLE_RULE_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -1140,6 +1141,9 @@ impl Sample {
         out
     }
 }
+
+/// A bot rule's id (roadmap M5k, slice 2): the shape of one, never made.
+pub const SAMPLE_RULE_ID: &str = "br_00000000000000000000000000000001";
 
 /// A broadcast's id (roadmap M5k): the shape of one, never made.
 pub const SAMPLE_BROADCAST_ID: &str = "bc_00000000000000000000000000000001";
@@ -1491,6 +1495,14 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             | "/v1/numbers/{pn}/thread-control/take"
             | "/v1/numbers/{pn}/thread-control/release",
         ) => serde_json::json!({"user": {"phone": SAMPLE_TO}}),
+        // Roadmap M5k, slice 2: the bot's switch, and a rule.
+        ("PUT", "/v1/numbers/{pn}/bot") => serde_json::json!({"enabled": false}),
+        ("POST", "/v1/numbers/{pn}/bot/rules") | ("PUT", "/v1/numbers/{pn}/bot/rules/{rule_id}") => {
+            serde_json::json!({
+                "trigger": {"type": "command", "names": ["help"]},
+                "action": {"type": "reply", "text": "hello"},
+            })
+        }
         // Roadmap M5k: a broadcast of a template to one person.
         ("POST", "/v1/numbers/{pn}/broadcasts") => serde_json::json!({
             "template": {"name": "spring_sale", "language": {"code": "en_US"}},

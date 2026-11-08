@@ -764,6 +764,17 @@ impl<'a> Bot<'a> {
         self.authz.tenant_number(self.caller, pn).await
     }
 
+    /// Step 4 alone: an adapter asks it before it reads a request's body,
+    /// so that another tenant's number is `404` whatever the body holds.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` for a number that is not the caller's tenant's;
+    /// `503 storage_unavailable`.
+    pub async fn admits(&self, pn: &PhoneNumberId) -> Result<(), ServiceError> {
+        self.number(pn).await
+    }
+
     fn view(&self, config: &Config) -> BotView {
         BotView {
             enabled: config.enabled,

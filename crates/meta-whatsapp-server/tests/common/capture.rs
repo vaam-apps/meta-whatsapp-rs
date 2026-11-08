@@ -364,6 +364,11 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // logged, nor Meta's refusal quoting them.
     secrets.section("broadcasts");
     secrets.extend(broadcasts(h, &admin).await);
+    // The bot (roadmap M5k, slice 2): the trigger words, the reply texts,
+    // the customers who wrote and the owners and banned it lists are not
+    // logged.
+    secrets.section("bot");
+    secrets.extend(bot(h, &admin).await);
     secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -2681,6 +2686,116 @@ async fn broadcasts(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+pub const BOT_TRIGGER: &str = "CAPTURE-BOT-TRIGGER-saffron-latte";
+pub const BOT_REPLY: &str = "CAPTURE-BOT-REPLY-secret-discount";
+pub const BOT_HEARD: &str = "CAPTURE-BOT-HEARD-the-customers-words";
+pub const BOT_CUSTOMER: &str = "16505557422";
+pub const BOT_OWNER: &str = "16505557433";
+pub const BOT_BANNED: &str = "16505557444";
+
+/// Roadmap M5k's (slice 2) routes on merchant-42's first number: the bot
+/// switched on with an owner and a banned sender, a rule made, read,
+/// replaced and deleted, and messages answered (one by the rule, one from
+/// the banned, one refused by Meta with a text quoting the customer);
+/// returns what the logs must not hold. The audit events are
+/// `check_audit`'s.
+async fn bot(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    const WABA: &str = "102290129340398";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["bot"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let on = h
+        .call(
+            Call::new(Method::PUT, format!("/v1/numbers/{PN}/bot"))
+                .key(&key)
+                .json(&json!({"enabled": true, "owners": [format!("+{BOT_OWNER}")],
+                              "banned": [BOT_BANNED]})),
+        )
+        .await;
+    assert_eq!(on.status.as_u16(), 200, "{}", on.text);
+    let rule = json!({
+        "trigger": {"type": "keyword", "words": [BOT_TRIGGER], "mode": "contains"},
+        "action": {"type": "reply", "text": BOT_REPLY},
+    });
+    let made = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/bot/rules"))
+                .key(&key)
+                .json(&rule),
+        )
+        .await;
+    assert_eq!(made.status.as_u16(), 201, "{}", made.text);
+    let id = made.json()["id"].as_str().unwrap().to_owned();
+    for path in [
+        format!("/v1/numbers/{PN}/bot"),
+        format!("/v1/numbers/{PN}/bot/rules"),
+        format!("/v1/numbers/{PN}/bot/rules/{id}"),
+    ] {
+        let read = h.call(Call::get(&path).key(&key)).await;
+        assert_eq!(read.status.as_u16(), 200, "{path}: {}", read.text);
+    }
+    let replaced = h
+        .call(
+            Call::new(Method::PUT, format!("/v1/numbers/{PN}/bot/rules/{id}"))
+                .key(&key)
+                .json(&rule),
+        )
+        .await;
+    assert_eq!(replaced.status.as_u16(), 200, "{}", replaced.text);
+    // A customer's message the rule answers, one from the banned (nothing
+    // goes out), one whose answer Meta refuses with a text quoting them.
+    let write = |from: &str, wamid: &str| {
+        let mut payload = super::meta::text(WABA, PN, wamid);
+        let value = &mut payload["entry"][0]["changes"][0]["value"];
+        value["messages"][0]["text"]["body"] = json!(format!("{BOT_TRIGGER} {BOT_HEARD}"));
+        value["messages"][0]["from"] = json!(from);
+        value["contacts"][0]["wa_id"] = json!(from);
+        super::meta::bytes(&payload)
+    };
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "contacts": [{"input": format!("+{BOT_CUSTOMER}"), "wa_id": BOT_CUSTOMER}],
+               "messages": [{"id": "wamid.CAPTURE-BOT"}]}),
+    );
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#131026) +{BOT_OWNER} {BOT_HEARD} cannot receive"),
+                         "type": "OAuthException", "code": 131_026,
+                         "error_data": {"details": BOT_OWNER},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    for (from, wamid) in [
+        (BOT_CUSTOMER, "wamid.CAPTURE-BOT-IN1"),
+        (BOT_BANNED, "wamid.CAPTURE-BOT-IN2"),
+        (BOT_OWNER, "wamid.CAPTURE-BOT-IN3"),
+    ] {
+        let delivered = h.webhook(&write(from, wamid)).await;
+        assert_eq!(delivered.status.as_u16(), 200, "{}", delivered.text);
+    }
+    let gone = h
+        .call(Call::new(Method::DELETE, format!("/v1/numbers/{PN}/bot/rules/{id}")).key(&key))
+        .await;
+    assert_eq!(gone.status.as_u16(), 204, "{}", gone.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        BOT_TRIGGER.to_owned(),
+        BOT_REPLY.to_owned(),
+        BOT_HEARD.to_owned(),
+        BOT_CUSTOMER.to_owned(),
+        BOT_OWNER.to_owned(),
+        BOT_BANNED.to_owned(),
+    ]
+}
+
 /// A group's id (`groups/webhooks`: it embeds the business number) is in no
 /// line of the service's own, and in the library's `graph request` debug
 /// line only (it names the path it calls: [`check`] says so); a group's
@@ -4562,7 +4677,13 @@ fn check_audit(logs: &str) {
             // Roadmap M5k: two broadcasts created, the second cancelled.
             "broadcast_created",
             "broadcast_created",
-            "broadcast_cancelled"
+            "broadcast_cancelled",
+            // Roadmap M5k, slice 2: the bot switched on, a rule made,
+            // replaced and deleted.
+            "bot_settings_updated",
+            "bot_rule_created",
+            "bot_rule_updated",
+            "bot_rule_deleted"
         ],
         "the template changes', the PIN change's, the deregistration's, the payment changes', the QR code deletion's and the block list changes' audit events"
     );

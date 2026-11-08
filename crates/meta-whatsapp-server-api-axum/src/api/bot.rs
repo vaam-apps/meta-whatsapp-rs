@@ -442,9 +442,13 @@ pub(crate) async fn update_bot_settings(
     Path(pn): Path<String>,
     ApiJson(body): ApiJson<Value>,
 ) -> Result<Json<SettingsView>, ApiError> {
+    let pn = number(pn)?;
+    let bot = operations(&state, &caller)?;
+    // The number is the caller's tenant's before the body is read.
+    bot.admits(&pn).await?;
     let body = parse::<SettingsBody>(body)?;
-    let view = operations(&state, &caller)?
-        .update_settings(&number(pn)?, body.enabled, &body.owners, &body.banned)
+    let view = bot
+        .update_settings(&pn, body.enabled, &body.owners, &body.banned)
         .await?;
     Ok(Json(view.into()))
 }
@@ -516,6 +520,11 @@ pub(crate) async fn create_bot_rule(
         Ok(pn) => pn,
         Err(error) => return error.into_response(),
     };
+    // The number is the caller's tenant's before the body is read.
+    let admitted = async { operations(&state, &caller)?.admits(&pn).await.map_err(ApiError::from) };
+    if let Err(error) = admitted.await {
+        return error.into_response();
+    }
     let fingerprint = Fingerprint::create_bot_rule(&pn, &body);
     let spec = match parse::<RuleBody>(body) {
         Ok(body) => RuleSpec::from(body),
@@ -587,10 +596,11 @@ pub(crate) async fn replace_bot_rule(
     Path((pn, id)): Path<(String, String)>,
     ApiJson(body): ApiJson<Value>,
 ) -> Result<Json<RuleView>, ApiError> {
+    let pn = number(pn)?;
+    let bot = operations(&state, &caller)?;
+    bot.admits(&pn).await?;
     let spec = RuleSpec::from(parse::<RuleBody>(body)?);
-    let rule = operations(&state, &caller)?
-        .replace_rule(&number(pn)?, &id, spec)
-        .await?;
+    let rule = bot.replace_rule(&pn, &id, spec).await?;
     Ok(Json(rule.into()))
 }
 
