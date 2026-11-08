@@ -97,6 +97,10 @@ pub struct FlowUpdateBody {
     pub categories: Option<Vec<String>>,
     /// A new data endpoint URL (`https`, no credentials).
     pub endpoint_uri: Option<String>,
+    /// The Meta app to connect to the Flow (digits): every Flow with an
+    /// endpoint needs one, or its health status is `BLOCKED`
+    /// (`app_check`).
+    pub application_id: Option<String>,
 }
 
 /// Whether to revoke the Flow's current preview link first.
@@ -477,7 +481,7 @@ pub(crate) async fn get_flow(
 // ─── Changes ─────────────────────────────────────────────────────────────
 
 /// `PATCH /v1/wabas/{waba_id}/flows/{flow_id}`: change a Flow's name,
-/// categories or endpoint.
+/// categories, endpoint or connected Meta app.
 #[utoipa::path(
     patch,
     path = "/v1/wabas/{waba_id}/flows/{flow_id}",
@@ -496,7 +500,7 @@ pub(crate) async fn get_flow(
         (status = 404, description = "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing changed", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 413, description = "`payload_too_large`: over 2 MiB", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `flow_id`, `body` (not Meta's object, a key the service does not send, or nothing to change), `name`, `categories`, `categories[i]` or `endpoint_uri`; `invalid_parameter`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `flow_id`, `body` (not Meta's object, a key the service does not send, or nothing to change), `name`, `categories`, `categories[i]`, `endpoint_uri` or `application_id`; `invalid_parameter`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the Flow may have been changed", body = ErrorBody),

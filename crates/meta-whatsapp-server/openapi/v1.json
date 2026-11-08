@@ -23665,7 +23665,7 @@
         "tags": [
           "flows"
         ],
-        "summary": "`PATCH /v1/wabas/{waba_id}/flows/{flow_id}`: change a Flow's name,\ncategories or endpoint.",
+        "summary": "`PATCH /v1/wabas/{waba_id}/flows/{flow_id}`: change a Flow's name,\ncategories, endpoint or connected Meta app.",
         "operationId": "update_flow",
         "parameters": [
           {
@@ -23764,7 +23764,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `flow_id`, `body` (not Meta's object, a key the service does not send, or nothing to change), `name`, `categories`, `categories[i]` or `endpoint_uri`; `invalid_parameter`",
+            "description": "`invalid_request` on `flow_id`, `body` (not Meta's object, a key the service does not send, or nothing to change), `name`, `categories`, `categories[i]`, `endpoint_uri` or `application_id`; `invalid_parameter`",
             "content": {
               "application/json": {
                 "schema": {
@@ -35317,6 +35317,13 @@
         "type": "object",
         "description": "What to change in a Flow, in Meta's JSON: every field optional, at\nleast one set. Only a draft's metadata is editable (a published Flow\nreturns to `DRAFT` when edited, `flows/guides/lifecycle`).",
         "properties": {
+          "application_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Meta app to connect to the Flow (digits): every Flow with an\nendpoint needs one, or its health status is `BLOCKED`\n(`app_check`)."
+          },
           "categories": {
             "type": [
               "array",

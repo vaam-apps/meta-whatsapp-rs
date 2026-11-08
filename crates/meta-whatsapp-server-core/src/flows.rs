@@ -32,10 +32,12 @@
 //! audited, as a template's is not). A creation runs under
 //! [`crate::idempotency::run`].
 //!
-//! **What is not here**, because the library does not carry it: the
-//! `application_id` of a Flow's update (the Meta app connected to a Flow
-//! with an endpoint), the `health_status` of a Flow's details, and the
-//! Flow's assets. The Flow JSON itself is Meta's to validate: its
+//! **Since roadmap M5d2** a change may carry `application_id` (the Meta
+//! app connected to a Flow with an endpoint; the library's
+//! `UpdateFlow::application_id`). **What is not here yet**: the
+//! `health_status` of a Flow's details and the Flow's assets (the
+//! library has both: `Flow::health_status`, `Flow::assets`; a route for
+//! each is the last step of roadmap M5d2). The Flow JSON itself is Meta's to validate: its
 //! validation errors come back in the answer of a creation and of an
 //! upload, never as an error.
 
@@ -281,6 +283,7 @@ struct FlowChangeBody {
     name: Option<String>,
     categories: Option<Vec<String>>,
     endpoint_uri: Option<String>,
+    application_id: Option<String>,
 }
 
 /// A Flow's metadata change checked.
@@ -458,20 +461,21 @@ pub fn new_flow(body: &Value) -> Result<NewFlow, ServiceError> {
 }
 
 /// A Flow's metadata change in Meta's JSON (`name`, `categories`,
-/// `endpoint_uri`), checked before any request.
+/// `endpoint_uri`, `application_id`), checked before any request.
 ///
 /// # Errors
 ///
 /// `422 invalid_request` on `body` (not that object, a key the library
 /// does not send, or nothing to change), `name`, `categories` /
-/// `categories[i]` or `endpoint_uri`.
+/// `categories[i]`, `endpoint_uri` or `application_id` (digits).
 pub fn flow_change(body: &Value) -> Result<FlowChange, ServiceError> {
     let FlowChangeBody {
         name: flow_name,
         categories: flow_categories,
         endpoint_uri: uri,
+        application_id: app,
     } = FlowChangeBody::deserialize(body).map_err(|_| ServiceError::invalid("body"))?;
-    if flow_name.is_none() && flow_categories.is_none() && uri.is_none() {
+    if flow_name.is_none() && flow_categories.is_none() && uri.is_none() && app.is_none() {
         return Err(ServiceError::invalid("body"));
     }
     let mut update = UpdateFlow::new();
@@ -485,6 +489,12 @@ pub fn flow_change(body: &Value) -> Result<FlowChange, ServiceError> {
     if let Some(uri) = &uri {
         endpoint_uri(uri)?;
         update = update.endpoint_uri(uri.clone());
+    }
+    if let Some(app) = app {
+        // The Meta app to connect: an id is digits, a Graph path segment
+        // nowhere, but a body value Meta would otherwise read as it likes.
+        graph_id("application_id", &app)?;
+        update = update.application_id(app);
     }
     Ok(FlowChange {
         update,
@@ -947,9 +957,12 @@ mod tests {
     fn a_change_is_read_then_checked() {
         assert!(flow_change(&json!({"name": "New flow name"})).is_ok());
         assert!(flow_change(&json!({"categories": ["SURVEY"]})).is_ok());
+        assert!(flow_change(&json!({"application_id": "1234567890"})).is_ok());
         for (body, at) in [
             (json!({}), "body"),
-            (json!({"name": "x", "application_id": "1"}), "body"),
+            (json!({"name": "x", "application_ref": "1"}), "body"),
+            (json!({"application_id": "app one"}), "application_id"),
+            (json!({"application_id": ""}), "application_id"),
             (json!({"name": ""}), "name"),
             (json!({"categories": []}), "categories"),
             (json!({"categories": ["survey"]}), "categories[0]"),
